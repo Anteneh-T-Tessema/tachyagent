@@ -75,15 +75,30 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
         });
     }
 
-    let runtime = Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(execute_bash_async(input))
+    // Use separate thread if already inside a tokio runtime (e.g., daemon)
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let rt = Builder::new_current_thread().enable_all().build()?;
+                rt.block_on(execute_bash_async(input))
+            })
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "bash thread panicked"))?
+        })
+    } else {
+        let runtime = Builder::new_current_thread().enable_all().build()?;
+        runtime.block_on(execute_bash_async(input))
+    }
 }
 
 async fn execute_bash_async(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     let mut command = TokioCommand::new("sh");
     command.arg("-lc").arg(&input.command);
 
-    let output_result = if let Some(timeout_ms) = input.timeout {
+    // Enforce minimum 5 second timeout — local models often send tiny values
+    let effective_timeout = input.timeout.map(|t| t.max(5_000));
+
+    let output_result = if let Some(timeout_ms) = effective_timeout {
         match timeout(Duration::from_millis(timeout_ms), command.output()).await {
             Ok(result) => (result?, false),
             Err(_) => {

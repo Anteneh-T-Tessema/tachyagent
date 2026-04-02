@@ -34,7 +34,7 @@ impl From<ConfigError> for PromptBuildError {
 }
 
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
-pub const FRONTIER_MODEL_NAME: &str = "Claude Opus 4.6";
+pub const FRONTIER_MODEL_NAME: &str = "Tachy Agent";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFile {
@@ -195,9 +195,9 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     for dir in directories {
         for candidate in [
-            dir.join("CLAUDE.md"),
-            dir.join("CLAUDE.local.md"),
-            dir.join(".claude").join("CLAUDE.md"),
+            dir.join("TACHY.md"),
+            dir.join("TACHY.local.md"),
+            dir.join(".tachy").join("TACHY.md"),
         ] {
             push_context_file(&mut files, candidate)?;
         }
@@ -250,7 +250,7 @@ fn render_project_context(project_context: &ProjectContext) -> String {
 }
 
 fn render_instruction_files(files: &[ContextFile]) -> String {
-    let mut sections = vec!["# Claude instructions".to_string()];
+    let mut sections = vec!["# Project instructions".to_string()];
     for file in files {
         sections.push(format!("## {}", file.path.display()));
         sections.push(file.content.trim().to_string());
@@ -278,7 +278,7 @@ fn render_config_section(config: &RuntimeConfig) -> String {
     let mut lines = vec!["# Runtime config".to_string()];
     if config.loaded_entries().is_empty() {
         lines.extend(prepend_bullets(vec![
-            "No Claude Code settings files loaded.".to_string(),
+            "No settings files loaded.".to_string(),
         ]));
         return lines.join("\n");
     }
@@ -365,14 +365,14 @@ mod tests {
     fn discovers_instruction_files_from_ancestor_chain() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claude")).expect("nested claude dir");
-        fs::write(root.join("CLAUDE.md"), "root instructions").expect("write root instructions");
-        fs::write(root.join("CLAUDE.local.md"), "local instructions")
+        fs::create_dir_all(nested.join(".tachy")).expect("nested tachy dir");
+        fs::write(root.join("TACHY.md"), "root instructions").expect("write root instructions");
+        fs::write(root.join("TACHY.local.md"), "local instructions")
             .expect("write local instructions");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
-        fs::write(root.join("apps").join("CLAUDE.md"), "apps instructions")
+        fs::write(root.join("apps").join("TACHY.md"), "apps instructions")
             .expect("write apps instructions");
-        fs::write(nested.join(".claude").join("CLAUDE.md"), "nested rules")
+        fs::write(nested.join(".tachy").join("TACHY.md"), "nested rules")
             .expect("write nested rules");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
@@ -403,7 +403,7 @@ mod tests {
             .current_dir(&root)
             .status()
             .expect("git init should run");
-        fs::write(root.join("CLAUDE.md"), "rules").expect("write instructions");
+        fs::write(root.join("TACHY.md"), "rules").expect("write instructions");
         fs::write(root.join("tracked.txt"), "hello").expect("write tracked file");
 
         let context =
@@ -411,19 +411,19 @@ mod tests {
 
         let status = context.git_status.expect("git status should be present");
         assert!(status.contains("## No commits yet on") || status.contains("## "));
-        assert!(status.contains("?? CLAUDE.md"));
+        assert!(status.contains("?? TACHY.md"));
         assert!(status.contains("?? tracked.txt"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 
     #[test]
-    fn load_system_prompt_reads_claude_files_and_config() {
+    fn load_system_prompt_reads_tachy_files_and_config() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claude")).expect("claude dir");
-        fs::write(root.join("CLAUDE.md"), "Project rules").expect("write instructions");
+        fs::create_dir_all(root.join(".tachy")).expect("tachy dir");
+        fs::write(root.join("TACHY.md"), "Project rules").expect("write instructions");
         fs::write(
-            root.join(".claude").join("settings.json"),
+            root.join(".tachy").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -445,12 +445,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_claude_code_style_sections_with_project_context() {
+    fn renders_tachy_style_sections_with_project_context() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claude")).expect("claude dir");
-        fs::write(root.join("CLAUDE.md"), "Project rules").expect("write CLAUDE.md");
+        fs::create_dir_all(root.join(".tachy")).expect("tachy dir");
+        fs::write(root.join("TACHY.md"), "Project rules").expect("write TACHY.md");
         fs::write(
-            root.join(".claude").join("settings.json"),
+            root.join(".tachy").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -469,7 +469,7 @@ mod tests {
 
         assert!(prompt.contains("# System"));
         assert!(prompt.contains("# Project context"));
-        assert!(prompt.contains("# Claude instructions"));
+        assert!(prompt.contains("# Project instructions"));
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));

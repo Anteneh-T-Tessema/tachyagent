@@ -1,0 +1,19 @@
+[package]
+name = "platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Enterprise agent platform — agent lifecycle, scheduling, and deployment"
+
+[dependencies]
+audit = { path = "../audit" }
+backend = { path = "../backend" }
+intelligence = { path = "../intelligence" }
+runtime = { path = "../runtime" }
+tools = { path = "../tools" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

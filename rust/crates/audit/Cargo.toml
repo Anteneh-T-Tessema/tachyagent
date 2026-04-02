@@ -1,0 +1,15 @@
+[package]
+name = "audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Enterprise audit trail, compliance logging, and governance for agent actions"
+
+[dependencies]
+runtime = { path = "../runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

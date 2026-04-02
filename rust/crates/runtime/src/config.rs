@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::json::JsonValue;
 
-pub const CLAUDE_CODE_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
+pub const TACHY_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConfigSource {
@@ -67,10 +67,10 @@ impl ConfigLoader {
     #[must_use]
     pub fn default_for(cwd: impl Into<PathBuf>) -> Self {
         let cwd = cwd.into();
-        let config_home = std::env::var_os("CLAUDE_CONFIG_HOME")
+        let config_home = std::env::var_os("TACHY_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
-            .unwrap_or_else(|| PathBuf::from(".claude"));
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".tachy")))
+            .unwrap_or_else(|| PathBuf::from(".tachy"));
         Self { cwd, config_home }
     }
 
@@ -83,11 +83,11 @@ impl ConfigLoader {
             },
             ConfigEntry {
                 source: ConfigSource::Project,
-                path: self.cwd.join(".claude").join("settings.json"),
+                path: self.cwd.join(".tachy").join("settings.json"),
             },
             ConfigEntry {
                 source: ConfigSource::Local,
-                path: self.cwd.join(".claude").join("settings.local.json"),
+                path: self.cwd.join(".tachy").join("settings.local.json"),
             },
         ]
     }
@@ -183,7 +183,7 @@ fn deep_merge_objects(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigLoader, ConfigSource, CLAUDE_CODE_SETTINGS_SCHEMA_NAME};
+    use super::{ConfigLoader, ConfigSource, TACHY_SETTINGS_SCHEMA_NAME};
     use crate::json::JsonValue;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -200,7 +200,7 @@ mod tests {
     fn rejects_non_object_settings_files() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
+        let home = root.join("home").join(".tachy");
         fs::create_dir_all(&home).expect("home config dir");
         fs::create_dir_all(&cwd).expect("project dir");
         fs::write(home.join("settings.json"), "[]").expect("write bad settings");
@@ -216,11 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn loads_and_merges_claude_code_config_files_by_precedence() {
+    fn loads_and_merges_config_files_by_precedence() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
-        fs::create_dir_all(cwd.join(".claude")).expect("project config dir");
+        let home = root.join("home").join(".tachy");
+        fs::create_dir_all(cwd.join(".tachy")).expect("project config dir");
         fs::create_dir_all(&home).expect("home config dir");
 
         fs::write(
@@ -229,12 +229,12 @@ mod tests {
         )
         .expect("write user settings");
         fs::write(
-            cwd.join(".claude").join("settings.json"),
+            cwd.join(".tachy").join("settings.json"),
             r#"{"env":{"B":"2"},"hooks":{"PostToolUse":["project"]}}"#,
         )
         .expect("write project settings");
         fs::write(
-            cwd.join(".claude").join("settings.local.json"),
+            cwd.join(".tachy").join("settings.local.json"),
             r#"{"model":"opus","permissionMode":"acceptEdits"}"#,
         )
         .expect("write local settings");
@@ -243,7 +243,7 @@ mod tests {
             .load()
             .expect("config should load");
 
-        assert_eq!(CLAUDE_CODE_SETTINGS_SCHEMA_NAME, "SettingsSchema");
+        assert_eq!(TACHY_SETTINGS_SCHEMA_NAME, "SettingsSchema");
         assert_eq!(loaded.loaded_entries().len(), 3);
         assert_eq!(loaded.loaded_entries()[0].source, ConfigSource::User);
         assert_eq!(

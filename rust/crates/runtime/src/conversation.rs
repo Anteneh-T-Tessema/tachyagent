@@ -139,10 +139,16 @@ where
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
         let mut iterations = 0;
+        let mut consecutive_errors = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 2;
 
         loop {
             iterations += 1;
             if iterations > self.max_iterations {
+                // Return partial results instead of hard error
+                if !assistant_messages.is_empty() {
+                    break;
+                }
                 return Err(RuntimeError::new(
                     "conversation loop exceeded the maximum number of iterations",
                 ));
@@ -152,8 +158,41 @@ where
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
             };
-            let events = self.api_client.stream(request)?;
-            let (assistant_message, usage) = build_assistant_message(events)?;
+
+            // API call with error recovery
+            let events = match self.api_client.stream(request) {
+                Ok(events) => {
+                    consecutive_errors = 0;
+                    events
+                }
+                Err(error) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        // If we have partial results, return them
+                        if !assistant_messages.is_empty() {
+                            break;
+                        }
+                        return Err(error);
+                    }
+                    // On first error, inject an error message and let the model retry
+                    continue;
+                }
+            };
+
+            let (assistant_message, usage) = match build_assistant_message(events) {
+                Ok(result) => result,
+                Err(error) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        if !assistant_messages.is_empty() {
+                            break;
+                        }
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
             }
@@ -186,12 +225,16 @@ where
                 let result_message = match permission_outcome {
                     PermissionOutcome::Allow => {
                         match self.tool_executor.execute(&tool_name, &input) {
-                            Ok(output) => ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                output,
-                                false,
-                            ),
+                            Ok(output) => {
+                                // Truncate large tool outputs to prevent context overflow
+                                let truncated = truncate_output(&output, 16_000);
+                                ConversationMessage::tool_result(
+                                    tool_use_id,
+                                    tool_name,
+                                    truncated,
+                                    false,
+                                )
+                            }
                             Err(error) => ConversationMessage::tool_result(
                                 tool_use_id,
                                 tool_name,
@@ -288,6 +331,23 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
             text: std::mem::take(text),
         });
     }
+}
+
+/// Truncate tool output to prevent context window overflow.
+fn truncate_output(output: &str, max_chars: usize) -> String {
+    if output.len() <= max_chars {
+        return output.to_string();
+    }
+    // Keep the first portion and last portion for context
+    let head = max_chars * 3 / 4;
+    let tail = max_chars / 4;
+    let tail_start = output.len().saturating_sub(tail);
+    format!(
+        "{}\n\n[… truncated {} chars …]\n\n{}",
+        &output[..head],
+        output.len() - head - tail,
+        &output[tail_start..]
+    )
 }
 
 type ToolHandler = Box<dyn FnMut(&str) -> Result<String, ToolError>>;

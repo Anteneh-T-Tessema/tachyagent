@@ -303,12 +303,17 @@ struct AnthropicErrorBody {
 #[cfg(test)]
 mod tests {
     use super::{ALT_REQUEST_ID_HEADER, REQUEST_ID_HEADER};
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use crate::types::{ContentBlockDelta, MessageRequest};
 
+    /// Mutex to serialize tests that mutate environment variables.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn read_api_key_requires_presence() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let error = super::read_api_key().expect_err("missing key should error");
@@ -317,6 +322,7 @@ mod tests {
 
     #[test]
     fn read_api_key_requires_non_empty_value() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let error = super::read_api_key().expect_err("empty key should error");
@@ -325,6 +331,7 @@ mod tests {
 
     #[test]
     fn read_api_key_prefers_api_key_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
         std::env::set_var("ANTHROPIC_API_KEY", "legacy-key");
         assert_eq!(
@@ -337,6 +344,7 @@ mod tests {
 
     #[test]
     fn read_auth_token_reads_auth_token_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
         assert_eq!(super::read_auth_token().as_deref(), Some("auth-token"));
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");

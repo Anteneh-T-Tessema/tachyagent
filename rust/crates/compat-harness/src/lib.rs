@@ -271,6 +271,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires upstream TypeScript repo checkout"]
     fn extracts_non_empty_manifests_from_upstream_repo() {
         let manifest = extract_manifest(&fixture_paths()).expect("manifest should load");
         assert!(!manifest.commands.entries().is_empty());
@@ -279,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires upstream TypeScript repo checkout"]
     fn detects_known_upstream_command_symbols() {
         let commands = extract_commands(
             &fs::read_to_string(fixture_paths().commands_path()).expect("commands.ts"),
@@ -294,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires upstream TypeScript repo checkout"]
     fn detects_known_upstream_tool_symbols() {
         let tools =
             extract_tools(&fs::read_to_string(fixture_paths().tools_path()).expect("tools.ts"));

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 // Re-exports
 pub use context::{ContextConfig, ContextInjection, ContextSelector};
-pub use edit_test_fix::{CycleOutcome, CycleResult, EditTestFix, EditTestFixConfig, TestResult};
+pub use edit_test_fix::{CycleCheckResult, CycleOutcome, CycleResult, DiagnosticResult, EditTestFix, EditTestFixConfig, TestResult};
 pub use git::GitTools;
 pub use indexer::{CodebaseIndex, CodebaseIndexer, FileEntry, IndexError, IndexerConfig, ProjectMeta};
 pub use lsp::{LspManager, Diagnostic, DiagnosticSeverity, Location, HoverInfo, execute_get_diagnostics, execute_find_references};

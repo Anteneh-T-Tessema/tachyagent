@@ -1,103 +1,80 @@
-import * as vscode from 'vscode';
-import { TachyChatProvider } from './chatProvider';
-import { TachyClient } from './client';
+import * as vscode from "vscode";
+import { TachyCompletionProvider } from "./completionProvider";
+import { TachyClient } from "./client";
 
-let client: TachyClient;
+let completionProvider: vscode.Disposable | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-    const config = vscode.workspace.getConfiguration('tachy');
-    const daemonUrl = config.get<string>('daemonUrl', 'http://127.0.0.1:7777');
-    const defaultModel = config.get<string>('model', 'gemma4:26b');
+  const client = new TachyClient();
 
-    client = new TachyClient(daemonUrl);
+  // Register inline completion provider
+  registerProvider(context, client);
 
-    // Register the chat webview provider
-    const chatProvider = new TachyChatProvider(context.extensionUri, client, defaultModel);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('tachy.chat', chatProvider)
-    );
+  // Re-register when config changes
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("tachy")) {
+        client.reloadConfig();
+        if (completionProvider) {
+          completionProvider.dispose();
+        }
+        registerProvider(context, client);
+      }
+    })
+  );
 
-    // Register commands
-    context.subscriptions.push(
-        vscode.commands.registerCommand('tachy.newChat', () => {
-            chatProvider.newChat();
-        })
-    );
+  // Toggle command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.toggleAutocomplete", () => {
+      const config = vscode.workspace.getConfiguration("tachy");
+      const current = config.get<boolean>("enabled", true);
+      config.update("enabled", !current, vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(
+        `Tachy Autocomplete ${!current ? "enabled" : "disabled"}`
+      );
+    })
+  );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('tachy.reviewFile', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            const filePath = editor.document.uri.fsPath;
-            const content = editor.document.getText();
-            const prompt = `Review this file for bugs, security issues, and improvements:\n\nFile: ${filePath}\n\`\`\`\n${content.substring(0, 8000)}\n\`\`\``;
-            chatProvider.sendMessage(prompt);
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('tachy.explainSelection', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            const selection = editor.document.getText(editor.selection);
-            if (!selection) { return; }
-            chatProvider.sendMessage(`Explain this code:\n\`\`\`\n${selection}\n\`\`\``);
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('tachy.fixSelection', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            const selection = editor.document.getText(editor.selection);
-            if (!selection) { return; }
-            chatProvider.sendMessage(`Fix any issues in this code and explain what you changed:\n\`\`\`\n${selection}\n\`\`\``);
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('tachy.startDaemon', async () => {
-            const terminal = vscode.window.createTerminal('Tachy Daemon');
-            terminal.sendText('tachy serve');
-            terminal.show();
-        })
-    );
-
-    // Check daemon connection on startup
-    checkDaemonConnection(client);
-
-    // Status bar item
-    const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBar.text = '$(hubot) Tachy';
-    statusBar.tooltip = 'Tachy — Local AI Coding Agent';
-    statusBar.command = 'tachy.newChat';
-    statusBar.show();
-    context.subscriptions.push(statusBar);
-
-    // Update status bar with connection status
-    setInterval(async () => {
+  // Health check command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.checkHealth", async () => {
+      try {
         const health = await client.health();
-        if (health) {
-            statusBar.text = `$(hubot) Tachy ✓`;
-            statusBar.tooltip = `Connected — ${health.models} models`;
-        } else {
-            statusBar.text = `$(hubot) Tachy ✗`;
-            statusBar.tooltip = 'Disconnected — run: tachy serve';
-        }
-    }, 30000);
-}
-
-async function checkDaemonConnection(client: TachyClient) {
-    const health = await client.health();
-    if (!health) {
-        const action = await vscode.window.showWarningMessage(
-            'Tachy daemon is not running. Start it?',
-            'Start Daemon', 'Dismiss'
+        vscode.window.showInformationMessage(
+          `Tachy daemon: ${health.status} (${health.models} models)`
         );
-        if (action === 'Start Daemon') {
-            vscode.commands.executeCommand('tachy.startDaemon');
-        }
-    }
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          `Tachy daemon unreachable: ${e.message}`
+        );
+      }
+    })
+  );
+
+  // Status bar
+  const statusBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  statusBar.text = "$(sparkle) Tachy";
+  statusBar.tooltip = "Tachy AI Autocomplete";
+  statusBar.command = "tachy.toggleAutocomplete";
+  statusBar.show();
+  context.subscriptions.push(statusBar);
 }
 
-export function deactivate() {}
+function registerProvider(
+  context: vscode.ExtensionContext,
+  client: TachyClient
+) {
+  const provider = new TachyCompletionProvider(client);
+  completionProvider = vscode.languages.registerInlineCompletionItemProvider(
+    { pattern: "**" },
+    provider
+  );
+  context.subscriptions.push(completionProvider);
+}
+
+export function deactivate() {
+  completionProvider?.dispose();
+}

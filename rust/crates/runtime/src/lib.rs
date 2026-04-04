@@ -30,7 +30,8 @@ pub use conversation::{
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, list_directory, read_file, write_file,
-    DirEntry, EditFileOutput, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
+    preview_write_file, preview_edit_file,
+    DiffPreview, DirEntry, EditFileOutput, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
     ListDirectoryOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
 pub use permissions::{

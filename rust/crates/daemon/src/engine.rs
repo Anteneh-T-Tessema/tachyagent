@@ -38,6 +38,7 @@ impl AgentEngine {
         audit_logger: &AuditLogger,
         intelligence_config: &IntelligenceConfig,
         workspace_root: &Path,
+        file_locks: Option<runtime::FileLockManager>,
     ) -> AgentRunResult {
         let model = &config.template.model;
         let enable_tools = !config.template.allowed_tools.is_empty();
@@ -216,6 +217,9 @@ impl AgentEngine {
             governance: Some(governance.clone()),
             audit_logger: None,
             intelligence_config: Some(intelligence_config.clone()),
+            file_locks,
+            agent_id: agent_id.to_string(),
+            daemon_state: None,
         };
 
         let mut runtime = ConversationRuntime::new(
@@ -436,23 +440,82 @@ impl AgentEngine {
                     if intelligence_config.edit_test_fix_enabled && !step.expected_files.is_empty() {
                         if let Some(test_cmd) = intelligence::EditTestFix::detect_test_command(workspace_root, index.as_ref()) {
                             let targeted = intelligence::EditTestFix::targeted_test_command(&test_cmd, &step.expected_files);
-                            audit_logger.log(
-                                &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart, format!("running tests: {targeted}"))
-                                    .with_agent(agent_id),
+
+                            // Phase 1+2: Run diagnostics first, then tests
+                            let lsp_enabled = intelligence_config.edit_test_fix.lsp_diagnostics_enabled;
+                            let check = intelligence::EditTestFix::run_diagnostic_then_test(
+                                workspace_root,
+                                &step.expected_files,
+                                &targeted,
+                                intelligence_config.edit_test_fix.test_timeout_secs,
+                                lsp_enabled,
                             );
 
-                            match intelligence::EditTestFix::run_tests(&targeted, intelligence_config.edit_test_fix.test_timeout_secs) {
-                                Ok(test_result) if test_result.exit_code == 0 => {
+                            match check {
+                                intelligence::CycleCheckResult::Passed => {
                                     audit_logger.log(
-                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd, "tests passed")
+                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd, "diagnostics clean, tests passed")
                                             .with_agent(agent_id),
                                     );
                                 }
-                                Ok(test_result) => {
-                                    // Tests failed — try to fix
+                                intelligence::CycleCheckResult::DiagnosticErrors(diag_result) => {
+                                    // LSP found errors — fix without running tests
+                                    audit_logger.log(
+                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                                            format!("LSP diagnostics: {} errors, {} warnings — attempting fix",
+                                                diag_result.error_count, diag_result.warning_count))
+                                            .with_agent(agent_id),
+                                    );
+
+                                    let fix_prompt = intelligence::EditTestFix::build_diagnostic_fix_prompt(
+                                        &diag_result, &step.expected_files,
+                                    );
+
+                                    for retry in 0..intelligence_config.edit_test_fix.max_retries {
+                                        if let Ok(fix_summary) = runtime.run_turn(&fix_prompt, None) {
+                                            total_iterations += fix_summary.iterations;
+                                            total_tool_invocations += fix_summary.tool_results.len() as u32;
+                                        }
+                                        // Re-check: diagnostics then tests
+                                        let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
+                                            workspace_root,
+                                            &step.expected_files,
+                                            &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs,
+                                            lsp_enabled,
+                                        );
+                                        match recheck {
+                                            intelligence::CycleCheckResult::Passed => {
+                                                audit_logger.log(
+                                                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                                        format!("diagnostics + tests fixed after {} retries", retry + 1))
+                                                        .with_agent(agent_id),
+                                                );
+                                                break;
+                                            }
+                                            intelligence::CycleCheckResult::DiagnosticErrors(_) => {
+                                                // Still has diagnostic errors, loop continues
+                                            }
+                                            intelligence::CycleCheckResult::TestFailure(test_result) => {
+                                                // Diagnostics clean but tests fail — switch to test fix prompt
+                                                let test_fix = intelligence::EditTestFix::build_fix_prompt(
+                                                    &targeted, &test_result, &step.expected_files,
+                                                );
+                                                if let Ok(fix_summary) = runtime.run_turn(&test_fix, None) {
+                                                    total_iterations += fix_summary.iterations;
+                                                    total_tool_invocations += fix_summary.tool_results.len() as u32;
+                                                }
+                                                break;
+                                            }
+                                            intelligence::CycleCheckResult::TestExecutionError => break,
+                                        }
+                                    }
+                                }
+                                intelligence::CycleCheckResult::TestFailure(test_result) => {
+                                    // Diagnostics clean but tests failed — use original fix flow
                                     let fix_prompt = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files);
                                     audit_logger.log(
-                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart, "tests failed, attempting fix")
+                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart, "tests failed (diagnostics clean), attempting fix")
                                             .with_agent(agent_id),
                                     );
 
@@ -461,19 +524,25 @@ impl AgentEngine {
                                             total_iterations += fix_summary.iterations;
                                             total_tool_invocations += fix_summary.tool_results.len() as u32;
                                         }
-                                        // Re-run tests
-                                        if let Ok(retest) = intelligence::EditTestFix::run_tests(&targeted, intelligence_config.edit_test_fix.test_timeout_secs) {
-                                            if retest.exit_code == 0 {
-                                                audit_logger.log(
-                                                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd, format!("tests fixed after {} retries", retry + 1))
-                                                        .with_agent(agent_id),
-                                                );
-                                                break;
-                                            }
+                                        // Re-check with diagnostics + tests
+                                        let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
+                                            workspace_root,
+                                            &step.expected_files,
+                                            &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs,
+                                            lsp_enabled,
+                                        );
+                                        if matches!(recheck, intelligence::CycleCheckResult::Passed) {
+                                            audit_logger.log(
+                                                &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                                    format!("tests fixed after {} retries", retry + 1))
+                                                    .with_agent(agent_id),
+                                            );
+                                            break;
                                         }
                                     }
                                 }
-                                Err(_) => {
+                                intelligence::CycleCheckResult::TestExecutionError => {
                                     // Test execution failed, continue
                                 }
                             }
@@ -626,6 +695,12 @@ struct IntelligentToolExecutor {
     governance: Option<GovernancePolicy>,
     audit_logger: Option<std::sync::Arc<AuditLogger>>,
     intelligence_config: Option<IntelligenceConfig>,
+    /// File lock manager for parallel agent safety.
+    file_locks: Option<runtime::FileLockManager>,
+    /// Agent ID for lock ownership.
+    agent_id: String,
+    /// Shared daemon state for policy engine patch queuing.
+    daemon_state: Option<std::sync::Arc<std::sync::Mutex<super::DaemonState>>>,
 }
 
 impl ToolExecutor for IntelligentToolExecutor {
@@ -675,6 +750,7 @@ impl ToolExecutor for IntelligentToolExecutor {
 
                 let result = AgentEngine::run_agent(
                     &sub_agent_id, &agent_config, prompt, reg, gov, audit, intel, &self.workspace_root,
+                    self.file_locks.clone(),
                 );
 
                 return Ok(format!(
@@ -715,9 +791,170 @@ impl ToolExecutor for IntelligentToolExecutor {
             return self.custom_tools.execute(tool_name, &value).map_err(ToolError::new);
         }
 
-        // Standard built-in tools
-        let value = serde_json::from_str(input)
+        // Standard built-in tools — use diff-aware execution for write/edit
+        let value: serde_json::Value = serde_json::from_str(input)
             .map_err(|e| ToolError::new(format!("invalid tool input: {e}")))?;
+
+        // For write/edit tools: check approval_required_paths and log diff to audit
+        if tool_name == "write_file" || tool_name == "edit_file" {
+            // Extract file path from input
+            let file_path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Acquire file lock for parallel safety
+            if let Some(ref locks) = self.file_locks {
+                if let Err(lock_err) = locks.acquire_with_wait(
+                    file_path,
+                    &self.agent_id,
+                    std::time::Duration::from_secs(30),
+                ) {
+                    return Err(ToolError::new(format!(
+                        "file lock: {lock_err}"
+                    )));
+                }
+            }
+
+            // Check if governance requires approval for this path
+            if let Some(gov) = &self.governance {
+                if gov.requires_approval(file_path) {
+                    // Release lock before returning error
+                    if let Some(ref locks) = self.file_locks {
+                        locks.release(file_path, &self.agent_id);
+                    }
+                    // Log the approval requirement
+                    if let Some(audit) = &self.audit_logger {
+                        audit.log(
+                            &AuditEvent::new("", AuditEventKind::PermissionDenied,
+                                format!("write to '{}' requires approval (governance policy)", file_path))
+                                .with_tool(tool_name),
+                        );
+                    }
+                    return Err(ToolError::new(format!(
+                        "governance: write to '{}' requires human approval (matches approval_required_paths policy). \
+                         The change was NOT applied. An administrator must approve this change.",
+                        file_path
+                    )));
+                }
+            }
+
+            // Preview the diff first for policy evaluation
+            let diff_preview = if tool_name == "write_file" {
+                let content = value.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                runtime::preview_write_file(file_path, content).ok()
+            } else {
+                let old_s = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                let new_s = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+                let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                runtime::preview_edit_file(file_path, old_s, new_s, replace_all).ok()
+            };
+
+            // Policy engine evaluation — check patch before writing
+            if let Some(ref ds) = self.daemon_state {
+                if let Some(ref preview) = diff_preview {
+                    let new_content = if tool_name == "write_file" {
+                        value.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                    } else {
+                        // For edit_file, read the file and apply the edit to get new content
+                        std::fs::read_to_string(file_path).unwrap_or_default()
+                    };
+                    let patch = audit::FilePatch {
+                        file_path: file_path.to_string(),
+                        original_hash: String::new(),
+                        new_content,
+                        diff_summary: preview.summary.clone(),
+                        additions: preview.additions,
+                        deletions: preview.deletions,
+                        agent_id: self.agent_id.clone(),
+                        task_id: None,
+                    };
+
+                    let decision = {
+                        let s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                        s.policy_engine.evaluate(&patch)
+                    };
+
+                    match decision {
+                        audit::PolicyDecision::Reject { reason } => {
+                            if let Some(ref locks) = self.file_locks {
+                                locks.release(file_path, &self.agent_id);
+                            }
+                            return Err(ToolError::new(format!(
+                                "policy engine rejected: {reason}"
+                            )));
+                        }
+                        audit::PolicyDecision::RequiresApproval { reason } => {
+                            // Queue the patch for human approval instead of writing
+                            let patch_id = {
+                                let new_content = if tool_name == "write_file" {
+                                    value.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                                } else {
+                                    // Read original, apply edit to get what would be written
+                                    let original = std::fs::read_to_string(file_path).unwrap_or_default();
+                                    let old_s = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                                    let new_s = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+                                    let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    if replace_all { original.replace(old_s, new_s) }
+                                    else { original.replacen(old_s, new_s, 1) }
+                                };
+                                let queued_patch = audit::FilePatch {
+                                    file_path: file_path.to_string(),
+                                    original_hash: String::new(),
+                                    new_content,
+                                    diff_summary: preview.summary.clone(),
+                                    additions: preview.additions,
+                                    deletions: preview.deletions,
+                                    agent_id: self.agent_id.clone(),
+                                    task_id: None,
+                                };
+                                let mut s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                                s.queue_pending_patch(queued_patch, reason.clone())
+                            };
+                            if let Some(ref locks) = self.file_locks {
+                                locks.release(file_path, &self.agent_id);
+                            }
+                            return Err(ToolError::new(format!(
+                                "policy: patch queued for approval (id={patch_id}): {reason}. \
+                                 The change was NOT applied. A human must approve via POST /api/approve."
+                            )));
+                        }
+                        audit::PolicyDecision::AutoApprove => {
+                            // Proceed with write
+                        }
+                    }
+                }
+            }
+
+            // Execute with diff tracking
+            let result = tools::execute_tool_with_diff(tool_name, &value)
+                .map_err(|e| {
+                    // Release lock on error
+                    if let Some(ref locks) = self.file_locks {
+                        locks.release(file_path, &self.agent_id);
+                    }
+                    ToolError::new(e)
+                })?;
+
+            let (output, preview) = result;
+
+            // Log diff to audit trail
+            if let (Some(audit), Some(preview)) = (&self.audit_logger, preview) {
+                if preview.additions > 0 || preview.deletions > 0 {
+                    audit.log(
+                        &AuditEvent::new("", AuditEventKind::ToolResult,
+                            format!("diff preview: {}", preview.summary))
+                            .with_tool(tool_name)
+                            .with_redacted_payload(preview.diff_text),
+                    );
+                }
+            }
+
+            // Release file lock after successful write
+            if let Some(ref locks) = self.file_locks {
+                locks.release(file_path, &self.agent_id);
+            }
+
+            return Ok(output);
+        }
+
         execute_tool(tool_name, &value).map_err(ToolError::new)
     }
 }
@@ -745,6 +982,9 @@ mod tests {
             governance: None,
             audit_logger: None,
             intelligence_config: None,
+            file_locks: None,
+            agent_id: "test-agent".to_string(),
+            daemon_state: None,
         };
         let result = executor.execute("bash", r#"{"command":"ls"}"#);
         assert!(result.is_err());

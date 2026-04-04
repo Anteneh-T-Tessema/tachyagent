@@ -443,12 +443,9 @@ mod tests {
         )
         .expect("write settings");
 
-        let previous = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(&root).expect("change cwd");
         let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8")
             .expect("system prompt should load")
             .join("\n\n");
-        std::env::set_current_dir(previous).expect("restore cwd");
 
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));

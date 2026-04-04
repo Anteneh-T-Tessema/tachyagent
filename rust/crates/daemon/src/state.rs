@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink};
+use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager};
 use backend::BackendRegistry;
 use platform::{
     AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace,
     ScheduleRule, ScheduledTask, TaskScheduler,
 };
+use runtime::FileLockManager;
 use serde::{Deserialize, Serialize};
 
 /// Persisted state — saved to .tachy/state.json on every mutation.
@@ -49,6 +50,15 @@ pub struct WebhookConfig {
     pub enabled: bool,
 }
 
+/// A patch awaiting human approval from the policy engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPatch {
+    pub id: String,
+    pub patch: FilePatch,
+    pub reason: String,
+    pub created_at: String,
+}
+
 /// Shared daemon state, wrapped in Arc<Mutex<>> for thread safety.
 pub struct DaemonState {
     pub workspace_root: PathBuf,
@@ -63,6 +73,18 @@ pub struct DaemonState {
     pub conv_counter: u64,
     pub api_key: Option<String>,
     pub webhooks: Vec<WebhookConfig>,
+    /// Shared file lock manager for parallel agent safety.
+    pub file_locks: FileLockManager,
+    /// Policy engine for patch-level governance.
+    pub policy_engine: PolicyEngine,
+    /// Patches awaiting human approval.
+    pub pending_patches: Vec<PendingPatch>,
+    /// Counter for pending patch IDs.
+    pub patch_counter: u64,
+    /// SSO/SAML manager for enterprise authentication.
+    pub sso_manager: SsoManager,
+    /// User store for RBAC.
+    pub user_store: audit::UserStore,
 }
 
 impl DaemonState {
@@ -118,6 +140,12 @@ impl DaemonState {
             conv_counter,
             api_key,
             webhooks,
+            file_locks: FileLockManager::new(),
+            policy_engine: PolicyEngine::enterprise_default(),
+            pending_patches: Vec::new(),
+            patch_counter: 0,
+            sso_manager: SsoManager::new(SsoConfig::default()),
+            user_store: audit::UserStore::new(),
         })
     }
 
@@ -178,6 +206,52 @@ impl DaemonState {
         } else {
             false
         }
+    }
+
+    /// Queue a patch for human approval.
+    pub fn queue_pending_patch(&mut self, patch: FilePatch, reason: String) -> String {
+        self.patch_counter += 1;
+        let id = format!("patch-{}", self.patch_counter);
+        self.pending_patches.push(PendingPatch {
+            id: id.clone(),
+            patch,
+            reason,
+            created_at: timestamp(),
+        });
+        self.save();
+        id
+    }
+
+    /// Approve a pending patch — apply it to disk.
+    pub fn approve_patch(&mut self, patch_id: &str) -> Result<String, String> {
+        let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
+            .ok_or_else(|| format!("patch '{}' not found", patch_id))?;
+        let pending = self.pending_patches.remove(idx);
+        // Apply the patch
+        std::fs::write(&pending.patch.file_path, &pending.patch.new_content)
+            .map_err(|e| format!("failed to apply patch: {e}"))?;
+        self.audit_logger.log(
+            &AuditEvent::new("daemon", AuditEventKind::PermissionGranted,
+                format!("patch {} approved and applied: {}", patch_id, pending.patch.file_path))
+                .with_agent(&pending.patch.agent_id),
+        );
+        self.save();
+        Ok(pending.patch.file_path)
+    }
+
+    /// Reject a pending patch — discard it.
+    pub fn reject_patch(&mut self, patch_id: &str) -> Result<String, String> {
+        let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
+            .ok_or_else(|| format!("patch '{}' not found", patch_id))?;
+        let pending = self.pending_patches.remove(idx);
+        self.audit_logger.log(
+            &AuditEvent::new("daemon", AuditEventKind::PermissionDenied,
+                format!("patch {} rejected: {}", patch_id, pending.patch.file_path))
+                .with_agent(&pending.patch.agent_id)
+                .with_severity(audit::AuditSeverity::Warning),
+        );
+        self.save();
+        Ok(pending.patch.file_path)
     }
 
     /// Fire webhooks for an event.

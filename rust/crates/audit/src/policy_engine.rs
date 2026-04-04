@@ -53,6 +53,8 @@ pub enum PolicyRuleType {
     MaxPatchSize { max_lines: usize },
     /// Block patches containing specific patterns (e.g., secrets).
     ContentBlock { patterns: Vec<String> },
+    /// Block patches whose diff contains specific patterns (checks added lines only).
+    DiffContentBlock { patterns: Vec<String> },
     /// Require tests to pass before applying.
     RequireTests,
 }
@@ -174,6 +176,24 @@ impl PolicyEngine {
                 // This rule is checked externally (after test execution)
                 PolicyDecision::AutoApprove
             }
+            PolicyRuleType::DiffContentBlock { patterns } => {
+                // Check patterns against the diff summary (added lines)
+                for pattern in patterns {
+                    if let Ok(re) = regex::Regex::new(pattern) {
+                        if re.is_match(&patch.diff_summary) {
+                            return match rule.action {
+                                PolicyAction::RequireApproval => PolicyDecision::RequiresApproval {
+                                    reason: format!("rule '{}': diff matches '{}'", rule.name, pattern),
+                                },
+                                PolicyAction::Reject => PolicyDecision::Reject {
+                                    reason: format!("rule '{}': blocked diff pattern '{}'", rule.name, pattern),
+                                },
+                            };
+                        }
+                    }
+                }
+                PolicyDecision::AutoApprove
+            }
         }
     }
 }
@@ -276,5 +296,31 @@ mod tests {
         assert!(path_matches("src/auth/login.rs", "**/auth/**"));
         assert!(path_matches("config/.env.local", "**/.env*"));
         assert!(!path_matches("src/utils.rs", "**/auth/**"));
+    }
+
+    #[test]
+    fn diff_content_block_checks_diff_summary() {
+        let engine = PolicyEngine::new(vec![
+            PolicyRule {
+                name: "block_unsafe".to_string(),
+                rule_type: PolicyRuleType::DiffContentBlock {
+                    patterns: vec!["unsafe".to_string()],
+                },
+                action: PolicyAction::RequireApproval,
+            },
+        ]);
+        let patch = test_patch("src/lib.rs", "safe code", 5, 2);
+        assert_eq!(engine.evaluate(&patch), PolicyDecision::AutoApprove);
+
+        let unsafe_patch = FilePatch {
+            diff_summary: "+unsafe fn do_thing()".to_string(),
+            ..test_patch("src/lib.rs", "unsafe fn do_thing() {}", 1, 0)
+        };
+        match engine.evaluate(&unsafe_patch) {
+            PolicyDecision::RequiresApproval { reason } => {
+                assert!(reason.contains("unsafe"));
+            }
+            other => panic!("expected RequiresApproval, got {:?}", other),
+        }
     }
 }

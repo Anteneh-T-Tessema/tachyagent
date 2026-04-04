@@ -290,6 +290,7 @@ fn execute_single_task(
 ) -> TaskResult {
     let s = state.lock().unwrap();
     let workspace_root = task.work_dir.clone().unwrap_or_else(|| s.workspace_root.clone());
+    let file_locks = s.file_locks.clone();
 
     // Find or create agent config
     let template = s.config.agent_templates.iter()
@@ -322,7 +323,11 @@ fn execute_single_task(
         &s.audit_logger,
         &s.config.intelligence,
         &workspace_root,
+        Some(file_locks.clone()),
     );
+
+    // Release all file locks held by this agent on completion
+    file_locks.release_all(&task.id);
 
     TaskResult {
         success: result.success,

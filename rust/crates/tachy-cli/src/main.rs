@@ -18,7 +18,7 @@ use runtime::{
     ConversationRuntime, PermissionMode, PermissionPolicy,
     Session, ToolError, ToolExecutor,
 };
-use tools::execute_tool;
+use tools::{execute_tool, execute_tool_with_diff};
 
 const DEFAULT_MODEL: &str = "gemma4:26b";
 const DEFAULT_DATE: &str = "2026-04-03";
@@ -1164,6 +1164,7 @@ fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result<(), Box<dy
         &state.audit_logger,
         &state.config.intelligence,
         &state.workspace_root,
+        None, // No shared file locks in single-agent CLI mode
     );
 
     if result.success {
@@ -1600,7 +1601,38 @@ impl ToolExecutor for CliToolExecutor {
             ResetColor
         );
 
-        match execute_tool(tool_name, &value) {
+        // Use execute_tool_with_diff for write/edit to get diff previews
+        let result = if tool_name == "write_file" || tool_name == "edit_file" {
+            match execute_tool_with_diff(tool_name, &value) {
+                Ok((output, Some(preview))) => {
+                    // Show colored diff preview in the terminal
+                    if !preview.diff_colored.is_empty() && (preview.additions > 0 || preview.deletions > 0) {
+                        let _ = execute!(
+                            stdout,
+                            SetForegroundColor(Color::DarkYellow),
+                            Print(format!("    ┌─ diff: {}\n", preview.summary)),
+                            ResetColor
+                        );
+                        for line in preview.diff_colored.lines() {
+                            let _ = execute!(stdout, Print(format!("    │ {line}\n")));
+                        }
+                        let _ = execute!(
+                            stdout,
+                            SetForegroundColor(Color::DarkYellow),
+                            Print("    └─\n"),
+                            ResetColor
+                        );
+                    }
+                    Ok(output)
+                }
+                Ok((output, None)) => Ok(output),
+                Err(e) => Err(e),
+            }
+        } else {
+            execute_tool(tool_name, &value)
+        };
+
+        match result {
             Ok(output) => {
                 // Track file modifications for /undo
                 match tool_name {

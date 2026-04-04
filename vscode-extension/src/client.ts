@@ -1,108 +1,184 @@
-import * as http from 'http';
+import * as vscode from "vscode";
+import * as http from "http";
+import * as https from "https";
 
 export interface HealthResponse {
-    status: string;
-    models: number;
-    agents: number;
-    tasks: number;
+  status: string;
+  models: number;
 }
 
-export interface AgentResponse {
-    id: string;
-    template: string;
-    status: string;
-    iterations: number;
-    tool_invocations: number;
-    summary: string | null;
-}
-
-export interface StartAgentResponse {
-    agent_id: string;
-    status: string;
-    message: string;
+export interface CompletionRequest {
+  prefix: string;
+  suffix: string;
+  language: string;
+  filePath: string;
+  maxTokens: number;
 }
 
 export class TachyClient {
-    constructor(private baseUrl: string) {}
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
 
-    async health(): Promise<HealthResponse | null> {
-        try {
-            return await this.get<HealthResponse>('/health');
-        } catch {
-            return null;
+  constructor() {
+    this.endpoint = "";
+    this.apiKey = "";
+    this.model = "";
+    this.reloadConfig();
+  }
+
+  reloadConfig() {
+    const config = vscode.workspace.getConfiguration("tachy");
+    this.endpoint = config.get<string>("endpoint", "http://localhost:7777");
+    this.apiKey = config.get<string>("apiKey", "");
+    this.model = config.get<string>("model", "gemma4:26b");
+  }
+
+  async health(): Promise<HealthResponse> {
+    const data = await this.get("/health");
+    return JSON.parse(data);
+  }
+
+  async complete(req: CompletionRequest): Promise<string> {
+    const body = JSON.stringify({
+      prefix: req.prefix,
+      suffix: req.suffix,
+      language: req.language,
+      model: this.model,
+      max_tokens: req.maxTokens,
+    });
+
+    try {
+      // Use the dedicated /api/complete endpoint (synchronous, fast)
+      const data = await this.post("/api/complete", body);
+      const parsed = JSON.parse(data);
+      return parsed.completion || "";
+    } catch {
+      // Fallback to agent run + poll if /api/complete isn't available
+      return this.completeViaAgent(req);
+    }
+  }
+
+  private async completeViaAgent(req: CompletionRequest): Promise<string> {
+    const prompt = this.buildPrompt(req);
+    const body = JSON.stringify({
+      template: "chat-assistant",
+      prompt,
+      model: this.model,
+    });
+
+    const data = await this.post("/api/agents/run", body);
+    const parsed = JSON.parse(data);
+
+    if (parsed.agent_id) {
+      return this.pollForResult(parsed.agent_id, 10_000);
+    }
+    return "";
+  }
+
+  private buildPrompt(req: CompletionRequest): string {
+    const lines = [
+      `Complete the following ${req.language} code. Return ONLY the completion text, no explanation.`,
+      "",
+      "```" + req.language,
+      req.prefix,
+      "█", // cursor marker
+    ];
+    if (req.suffix) {
+      lines.push(req.suffix);
+    }
+    lines.push("```");
+    lines.push("");
+    lines.push(
+      `Respond with ONLY the code that replaces █. Maximum ${req.maxTokens} tokens. No markdown fences.`
+    );
+    return lines.join("\n");
+  }
+
+  private async pollForResult(
+    agentId: string,
+    timeoutMs: number
+  ): Promise<string> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const data = await this.get(`/api/agents/${agentId}`);
+        const agent = JSON.parse(data);
+        if (
+          agent.status === "Completed" ||
+          agent.status === "completed" ||
+          agent.status === "Failed" ||
+          agent.status === "failed"
+        ) {
+          return agent.summary || "";
         }
+      } catch {
+        // ignore polling errors
+      }
+      await sleep(200);
     }
+    return "";
+  }
 
-    async startAgent(template: string, prompt: string, model: string): Promise<StartAgentResponse> {
-        return this.post<StartAgentResponse>('/api/agents/run', { template, prompt, model });
-    }
+  private get(path: string): Promise<string> {
+    return this.request("GET", path);
+  }
 
-    async getAgent(agentId: string): Promise<AgentResponse> {
-        return this.get<AgentResponse>(`/api/agents/${agentId}`);
-    }
+  private post(path: string, body: string): Promise<string> {
+    return this.request("POST", path, body);
+  }
 
-    async runAndPoll(template: string, prompt: string, model: string, onProgress?: (secs: number) => void): Promise<AgentResponse> {
-        const start = await this.startAgent(template, prompt, model);
-        const agentId = start.agent_id;
+  private request(
+    method: string,
+    path: string,
+    body?: string
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(path, this.endpoint);
+      const isHttps = url.protocol === "https:";
+      const lib = isHttps ? https : http;
 
-        let elapsed = 0;
-        const pollInterval = 1000;
-        const maxWait = 300000;
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.apiKey
+            ? { Authorization: `Bearer ${this.apiKey}` }
+            : {}),
+          ...(body ? { "Content-Length": Buffer.byteLength(body) } : {}),
+        },
+        timeout: 15_000,
+      };
 
-        while (elapsed < maxWait) {
-            await sleep(pollInterval);
-            elapsed += pollInterval;
-            if (onProgress) { onProgress(Math.round(elapsed / 1000)); }
-
-            try {
-                const agent = await this.getAgent(agentId);
-                if (agent.status === 'completed' || agent.status === 'failed') {
-                    return agent;
-                }
-            } catch {
-                // Keep polling
-            }
-        }
-
-        return { id: agentId, template, status: 'timeout', iterations: 0, tool_invocations: 0, summary: 'Request timed out after 5 minutes.' };
-    }
-
-    private get<T>(path: string): Promise<T> {
-        return new Promise((resolve, reject) => {
-            const url = new URL(path, this.baseUrl);
-            http.get(url.toString(), (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try { resolve(JSON.parse(data)); }
-                    catch (e) { reject(e); }
-                });
-            }).on('error', reject);
+      const req = lib.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => (data += chunk.toString()));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          } else {
+            resolve(data);
+          }
         });
-    }
+      });
 
-    private post<T>(path: string, body: object): Promise<T> {
-        return new Promise((resolve, reject) => {
-            const url = new URL(path, this.baseUrl);
-            const payload = JSON.stringify(body);
-            const req = http.request(url.toString(), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-            }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try { resolve(JSON.parse(data)); }
-                    catch (e) { reject(e); }
-                });
-            });
-            req.on('error', reject);
-            req.write(payload);
-            req.end();
-        });
-    }
+      req.on("error", reject);
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("request timeout"));
+      });
+
+      if (body) {
+        req.write(body);
+      }
+      req.end();
+    });
+  }
 }
 
 function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }

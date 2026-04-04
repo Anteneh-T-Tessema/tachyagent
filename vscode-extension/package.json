@@ -1,107 +1,75 @@
 {
-  "name": "tachy",
-  "displayName": "Tachy — Local AI Coding Agent",
-  "description": "AI coding agent powered by Gemma 4 + Ollama. Runs locally, zero cloud dependency.",
+  "name": "tachy-autocomplete",
+  "displayName": "Tachy Autocomplete",
+  "description": "AI-powered inline code completions from your local Tachy agent",
   "version": "0.1.0",
   "publisher": "tachy",
-  "license": "Proprietary",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anteneh-T-Tessema/tachyagent"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["AI", "Programming Languages", "Other"],
-  "keywords": ["ai", "coding", "agent", "local", "ollama", "gemma"],
+  "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
-  "icon": "icon.png",
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "tachy",
-          "title": "Tachy",
-          "icon": "$(hubot)"
-        }
-      ]
-    },
-    "views": {
-      "tachy": [
-        {
-          "type": "webview",
-          "id": "tachy.chat",
-          "name": "Chat"
-        }
-      ]
-    },
-    "commands": [
-      {
-        "command": "tachy.newChat",
-        "title": "Tachy: New Chat"
-      },
-      {
-        "command": "tachy.reviewFile",
-        "title": "Tachy: Review Current File"
-      },
-      {
-        "command": "tachy.explainSelection",
-        "title": "Tachy: Explain Selection"
-      },
-      {
-        "command": "tachy.fixSelection",
-        "title": "Tachy: Fix Selection"
-      },
-      {
-        "command": "tachy.startDaemon",
-        "title": "Tachy: Start Daemon"
-      }
-    ],
-    "menus": {
-      "editor/context": [
-        {
-          "command": "tachy.explainSelection",
-          "when": "editorHasSelection",
-          "group": "tachy@1"
-        },
-        {
-          "command": "tachy.fixSelection",
-          "when": "editorHasSelection",
-          "group": "tachy@2"
-        },
-        {
-          "command": "tachy.reviewFile",
-          "group": "tachy@3"
-        }
-      ]
-    },
     "configuration": {
-      "title": "Tachy",
+      "title": "Tachy Autocomplete",
       "properties": {
-        "tachy.daemonUrl": {
+        "tachy.endpoint": {
           "type": "string",
-          "default": "http://127.0.0.1:7777",
-          "description": "URL of the Tachy daemon"
+          "default": "http://localhost:7777",
+          "description": "Tachy daemon URL"
+        },
+        "tachy.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the Tachy daemon (optional)"
         },
         "tachy.model": {
           "type": "string",
           "default": "gemma4:26b",
-          "description": "Default model to use"
+          "description": "LLM model for completions"
         },
-        "tachy.autoStart": {
+        "tachy.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Automatically start the Tachy daemon on VS Code launch"
+          "default": true,
+          "description": "Enable/disable Tachy inline completions"
+        },
+        "tachy.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "description": "Maximum tokens per completion"
+        },
+        "tachy.debounceMs": {
+          "type": "number",
+          "default": 300,
+          "description": "Debounce delay in milliseconds before requesting completion"
         }
       }
-    }
+    },
+    "commands": [
+      {
+        "command": "tachy.toggleAutocomplete",
+        "title": "Tachy: Toggle Autocomplete"
+      },
+      {
+        "command": "tachy.checkHealth",
+        "title": "Tachy: Check Daemon Health"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "npx @vscode/vsce package"
+    "lint": "eslint src --ext ts"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0",
-    "@vscode/vsce": "^2.22.0"
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
   }
 }

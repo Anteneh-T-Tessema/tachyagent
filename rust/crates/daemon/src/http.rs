@@ -6,6 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::engine::AgentEngine;
+use crate::parallel::{self, AgentTask, ParallelRun, RunStatus, TaskStatus};
 use crate::state::DaemonState;
 use crate::web;
 use platform::ScheduleRule;
@@ -88,6 +89,44 @@ struct RunAgentResponse {
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+/// Request to submit a parallel run.
+#[derive(Debug, Deserialize)]
+struct ParallelRunRequest {
+    /// Tasks to execute in parallel (with optional dependencies).
+    tasks: Vec<ParallelTaskInput>,
+    /// Maximum concurrent agents (default: 4, capped at 8).
+    #[serde(default = "default_concurrency")]
+    max_concurrency: usize,
+}
+
+fn default_concurrency() -> usize { 4 }
+
+#[derive(Debug, Deserialize)]
+struct ParallelTaskInput {
+    /// Agent template name.
+    template: String,
+    /// Prompt for the agent.
+    prompt: String,
+    /// Optional model override.
+    #[serde(default)]
+    model: Option<String>,
+    /// Task IDs this task depends on (must complete first).
+    #[serde(default)]
+    deps: Vec<String>,
+    /// Priority (higher = runs first). Default: 5.
+    #[serde(default = "default_priority")]
+    priority: u8,
+}
+
+fn default_priority() -> u8 { 5 }
+
+/// Cancel request for a parallel run.
+#[derive(Debug, Deserialize)]
+struct CancelRunRequest {
+    /// Optional: cancel a specific task. If omitted, cancels all pending tasks.
+    task_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +243,12 @@ fn handle_request(
         ("GET", "/api/webhooks") => handle_list_webhooks(state),
         ("POST", "/api/webhook/trigger") => handle_webhook_trigger(&body, state),
         ("GET", "/api/pending-approvals") => handle_pending_approvals(state),
+        ("GET", "/api/file-locks") => handle_list_file_locks(state),
         ("POST", "/api/approve") => handle_approve(&body, state),
+        ("GET", "/api/auth/sso/login") => handle_sso_login(state),
+        ("POST", "/api/auth/sso/callback") => handle_sso_callback(&body, state),
+        ("POST", "/api/auth/sso/logout") => handle_sso_logout(&body, state),
+        ("GET", "/api/auth/sso/sessions") => handle_sso_sessions(state),
         ("POST", "/api/agents/run") => {
             // License check for agent execution
             let ws_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
@@ -216,6 +260,7 @@ fn handle_request(
             }
             handle_run_agent(&body, state)
         }
+        ("POST", "/api/complete") => handle_complete(&body, state),
         ("POST", "/api/chat/stream") => {
             let ws_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
             let license = audit::LicenseFile::load_or_create(&ws_root.join(".tachy"));
@@ -228,11 +273,35 @@ fn handle_request(
             handle_chat_stream(&body, state)
         }
         ("POST", "/api/tasks/schedule") => handle_schedule_agent(&body, state),
+        ("POST", "/api/parallel/run") => {
+            let ws_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
+            let license = audit::LicenseFile::load_or_create(&ws_root.join(".tachy"));
+            if !license.status().is_active() {
+                return json_response(402, &ErrorResponse {
+                    error: format!("{}. Purchase at https://tachy.dev/pricing", license.status().display()),
+                });
+            }
+            handle_parallel_run(&body, state)
+        }
+        ("GET", "/api/parallel/runs") => handle_list_parallel_runs(state),
         _ => {
             // Dynamic routes: GET /api/agents/<id>
             if method == "GET" && path.starts_with("/api/agents/") {
                 let agent_id = &path["/api/agents/".len()..];
                 return handle_get_agent(agent_id, state);
+            }
+            // Dynamic routes: GET /api/parallel/runs/<id>
+            if method == "GET" && path.starts_with("/api/parallel/runs/") {
+                let run_id = &path["/api/parallel/runs/".len()..];
+                return handle_get_parallel_run(run_id, state);
+            }
+            // Dynamic routes: POST /api/parallel/runs/<id>/cancel
+            if method == "POST" && path.starts_with("/api/parallel/runs/") && path.ends_with("/cancel") {
+                let run_id = path
+                    .strip_prefix("/api/parallel/runs/")
+                    .and_then(|s| s.strip_suffix("/cancel"))
+                    .unwrap_or("");
+                return handle_cancel_parallel_run(run_id, &body, state);
             }
             json_response(404, &ErrorResponse {
                 error: format!("not found: {method} {path}"),
@@ -603,9 +672,11 @@ fn handle_webhook_trigger(body: &str, state: &Arc<Mutex<DaemonState>>) -> String
         let result = {
             let s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
             let workspace_root = s.workspace_root.clone();
+            let file_locks = s.file_locks.clone();
             AgentEngine::run_agent(
                 &bg_agent_id, &config, &bg_prompt, &s.registry, &governance,
                 &s.audit_logger, &s.config.intelligence, &workspace_root,
+                Some(file_locks),
             )
         };
         let mut s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -636,36 +707,96 @@ fn handle_webhook_trigger(body: &str, state: &Arc<Mutex<DaemonState>>) -> String
 
 fn handle_pending_approvals(state: &Arc<Mutex<DaemonState>>) -> String {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    // Return agents that are in "pending approval" state
-    let pending: Vec<serde_json::Value> = s.agents.values()
+
+    // Agents in suspended state
+    let pending_agents: Vec<serde_json::Value> = s.agents.values()
         .filter(|a| format!("{:?}", a.status) == "Suspended")
         .map(|a| serde_json::json!({
+            "type": "agent",
             "agent_id": a.id,
             "template": a.config.template.name,
             "prompt": a.result_summary.as_deref().unwrap_or(""),
             "created_at": a.created_at,
         }))
         .collect();
-    json_response(200, &pending)
+
+    // Patches awaiting approval from policy engine
+    let pending_patches: Vec<serde_json::Value> = s.pending_patches.iter()
+        .map(|p| serde_json::json!({
+            "type": "patch",
+            "patch_id": p.id,
+            "file_path": p.patch.file_path,
+            "agent_id": p.patch.agent_id,
+            "reason": p.reason,
+            "diff_summary": p.patch.diff_summary,
+            "additions": p.patch.additions,
+            "deletions": p.patch.deletions,
+            "created_at": p.created_at,
+        }))
+        .collect();
+
+    let mut all = pending_agents;
+    all.extend(pending_patches);
+
+    json_response(200, &serde_json::json!({
+        "pending": all,
+        "count": all.len(),
+    }))
 }
 
 fn handle_approve(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
     #[derive(Deserialize)]
-    struct Req { agent_id: String, approved: bool }
+    struct Req {
+        /// Agent ID (for agent approvals) or patch ID (for patch approvals).
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        patch_id: Option<String>,
+        approved: bool,
+    }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
         Err(e) => return json_response(400, &ErrorResponse { error: format!("invalid body: {e}") }),
     };
 
+    // Handle patch approval
+    if let Some(patch_id) = &req.patch_id {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if req.approved {
+            match s.approve_patch(patch_id) {
+                Ok(file_path) => {
+                    return json_response(200, &serde_json::json!({
+                        "ok": true, "status": "approved", "file_path": file_path
+                    }));
+                }
+                Err(e) => return json_response(404, &ErrorResponse { error: e }),
+            }
+        } else {
+            match s.reject_patch(patch_id) {
+                Ok(file_path) => {
+                    return json_response(200, &serde_json::json!({
+                        "ok": true, "status": "rejected", "file_path": file_path
+                    }));
+                }
+                Err(e) => return json_response(404, &ErrorResponse { error: e }),
+            }
+        }
+    }
+
+    // Handle agent approval (legacy)
+    let agent_id = match &req.agent_id {
+        Some(id) => id.clone(),
+        None => return json_response(400, &ErrorResponse {
+            error: "either 'agent_id' or 'patch_id' is required".to_string(),
+        }),
+    };
+
     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
 
-    if let Some(agent) = s.agents.get_mut(&req.agent_id) {
+    if let Some(agent) = s.agents.get_mut(&agent_id) {
         let session_id = agent.config.session_id.clone();
-        let agent_id = req.agent_id.clone();
         if req.approved {
             agent.mark_running();
-            drop(s);
-            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.audit_logger.log(
                 &audit::AuditEvent::new(
                     &session_id,
@@ -674,14 +805,9 @@ fn handle_approve(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
                 )
                 .with_agent(&agent_id),
             );
-            drop(s);
-            let _s = state.lock().unwrap_or_else(|e| e.into_inner());
-            // s is now re-locked, save handled by caller
             json_response(200, &serde_json::json!({ "ok": true, "status": "approved" }))
         } else {
             agent.mark_failed("rejected by human reviewer");
-            drop(s);
-            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.audit_logger.log(
                 &audit::AuditEvent::new(
                     &session_id,
@@ -777,6 +903,7 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
         let result = {
             let s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
             let workspace_root = s.workspace_root.clone();
+            let file_locks = s.file_locks.clone();
             AgentEngine::run_agent(
                 &bg_agent_id,
                 &config,
@@ -786,6 +913,7 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
                 &s.audit_logger,
                 &s.config.intelligence,
                 &workspace_root,
+                Some(file_locks),
             )
         };
 
@@ -873,9 +1001,11 @@ fn handle_chat_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
     let result = {
         let s = state.lock().unwrap_or_else(|e| e.into_inner());
         let workspace_root = s.workspace_root.clone();
+        let file_locks = s.file_locks.clone();
         AgentEngine::run_agent(
             &agent_id, &config, &prompt, &s.registry, &governance,
             &s.audit_logger, &s.config.intelligence, &workspace_root,
+            Some(file_locks),
         )
     };
 
@@ -952,6 +1082,459 @@ fn handle_schedule_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> String 
         Ok(task_id) => json_response(200, &serde_json::json!({ "task_id": task_id })),
         Err(e) => json_response(400, &ErrorResponse { error: e }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inline completion handler (for VS Code extension)
+// ---------------------------------------------------------------------------
+
+fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct CompleteRequest {
+        prefix: String,
+        suffix: Option<String>,
+        language: Option<String>,
+        #[serde(default = "default_complete_model")]
+        model: String,
+        #[serde(default = "default_max_tokens")]
+        max_tokens: usize,
+    }
+    fn default_complete_model() -> String { "gemma4:26b".to_string() }
+    fn default_max_tokens() -> usize { 128 }
+
+    let req: CompleteRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return json_response(400, &ErrorResponse {
+                error: format!("invalid request: {e}"),
+            });
+        }
+    };
+
+    let lang = req.language.as_deref().unwrap_or("code");
+    let prompt = format!(
+        "Complete the following {lang} code. Return ONLY the completion, no explanation, no markdown fences.\n\n{}{}\n",
+        req.prefix,
+        req.suffix.as_deref().unwrap_or("")
+    );
+
+    // Run synchronously with a minimal agent config
+    let (config, governance) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut template = platform::AgentTemplate::chat_assistant();
+        template.model = req.model.clone();
+        template.max_iterations = 1; // Single turn for completion
+        let config = platform::AgentConfig {
+            template,
+            session_id: format!("complete-{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
+            working_directory: s.workspace_root.to_string_lossy().to_string(),
+            environment: std::collections::BTreeMap::new(),
+        };
+        let governance = s.config.governance.clone();
+        (config, governance)
+    };
+
+    let result = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        AgentEngine::run_agent(
+            "completer", &config, &prompt, &s.registry, &governance,
+            &s.audit_logger, &s.config.intelligence, &s.workspace_root,
+            None,
+        )
+    };
+
+    json_response(200, &serde_json::json!({
+        "completion": result.summary,
+        "model": req.model,
+        "success": result.success,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// SSO/SAML handlers
+// ---------------------------------------------------------------------------
+
+fn handle_sso_login(state: &Arc<Mutex<DaemonState>>) -> String {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if !s.sso_manager.is_enabled() {
+        return json_response(400, &ErrorResponse {
+            error: "SSO is not configured. Set sso.enabled=true in config.".to_string(),
+        });
+    }
+    let login_url = s.sso_manager.build_login_url(Some("/"));
+
+    // Return a redirect response
+    format!(
+        "HTTP/1.1 302 Found\r\n\
+         Location: {login_url}\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\
+         \r\n"
+    )
+}
+
+fn handle_sso_callback(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if !s.sso_manager.is_enabled() {
+        return json_response(400, &ErrorResponse {
+            error: "SSO is not configured".to_string(),
+        });
+    }
+
+    // Extract SAMLResponse from form-encoded body
+    let saml_response = extract_form_value(body, "SAMLResponse");
+    let saml_response = match saml_response {
+        Some(r) => r,
+        None => {
+            // Try JSON body
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) {
+                match parsed.get("SAMLResponse").and_then(|v| v.as_str()) {
+                    Some(r) => r.to_string(),
+                    None => return json_response(400, &ErrorResponse {
+                        error: "SAMLResponse parameter required".to_string(),
+                    }),
+                }
+            } else {
+                return json_response(400, &ErrorResponse {
+                    error: "SAMLResponse parameter required".to_string(),
+                });
+            }
+        }
+    };
+
+    let mut user_store = std::mem::take(&mut s.user_store);
+    let result = s.sso_manager.process_callback(&saml_response, &mut user_store);
+    s.user_store = user_store;
+
+    match result {
+        Ok(session) => {
+            s.audit_logger.log(
+                &audit::AuditEvent::new("sso", audit::AuditEventKind::PermissionGranted,
+                    format!("SSO login: {} (role={:?})", session.email, session.role))
+                    .with_user(&session.user_id),
+            );
+            json_response(200, &serde_json::json!({
+                "token": session.token,
+                "user_id": session.user_id,
+                "email": session.email,
+                "role": format!("{:?}", session.role),
+                "expires_at": session.expires_at,
+            }))
+        }
+        Err(e) => {
+            s.audit_logger.log(
+                &audit::AuditEvent::new("sso", audit::AuditEventKind::PermissionDenied,
+                    format!("SSO login failed: {e}"))
+                    .with_severity(audit::AuditSeverity::Warning),
+            );
+            json_response(401, &ErrorResponse { error: e })
+        }
+    }
+}
+
+fn handle_sso_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    #[derive(Deserialize)]
+    struct Req { token: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return json_response(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.sso_manager.invalidate_session(&req.token);
+    s.audit_logger.log(
+        &audit::AuditEvent::new("sso", audit::AuditEventKind::SessionEnd, "SSO logout"),
+    );
+    json_response(200, &serde_json::json!({ "ok": true }))
+}
+
+fn handle_sso_sessions(state: &Arc<Mutex<DaemonState>>) -> String {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let sessions: Vec<_> = s.sso_manager.active_sessions().iter().map(|sess| {
+        serde_json::json!({
+            "user_id": sess.user_id,
+            "email": sess.email,
+            "role": format!("{:?}", sess.role),
+            "created_at": sess.created_at,
+            "expires_at": sess.expires_at,
+        })
+    }).collect();
+    json_response(200, &serde_json::json!({
+        "sessions": sessions,
+        "count": sessions.len(),
+    }))
+}
+
+/// Extract a value from URL-encoded form data.
+fn extract_form_value(body: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    for part in body.split('&') {
+        if let Some(value) = part.strip_prefix(&prefix) {
+            // URL-decode
+            return Some(value.replace('+', " ").replace("%3D", "=").replace("%2B", "+"));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// File lock handler
+// ---------------------------------------------------------------------------
+
+fn handle_list_file_locks(state: &Arc<Mutex<DaemonState>>) -> String {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let locks = s.file_locks.list_locks();
+    let entries: Vec<_> = locks.iter().map(|(file, agent)| {
+        serde_json::json!({ "file": file, "agent_id": agent })
+    }).collect();
+    json_response(200, &serde_json::json!({
+        "locks": entries,
+        "count": entries.len(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Parallel execution handlers
+// ---------------------------------------------------------------------------
+
+fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    let req: ParallelRunRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return json_response(400, &ErrorResponse {
+                error: format!("invalid request body: {e}"),
+            });
+        }
+    };
+
+    if req.tasks.is_empty() {
+        return json_response(400, &ErrorResponse {
+            error: "at least one task is required".to_string(),
+        });
+    }
+
+    // Validate templates exist
+    {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        for task_input in &req.tasks {
+            if !s.config.agent_templates.iter().any(|t| t.name == task_input.template) {
+                return json_response(400, &ErrorResponse {
+                    error: format!("unknown template: {}", task_input.template),
+                });
+            }
+        }
+    }
+
+    // Build the run ID and tasks
+    let run_id = format!("run-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let tasks: Vec<AgentTask> = req.tasks.iter().enumerate().map(|(i, t)| {
+        AgentTask {
+            id: format!("{run_id}-t{i}"),
+            run_id: run_id.clone(),
+            template: t.template.clone(),
+            prompt: audit::sanitize_prompt(&t.prompt, 50_000),
+            model: t.model.clone(),
+            deps: t.deps.clone(),
+            priority: t.priority,
+            status: TaskStatus::Pending,
+            result: None,
+            created_at: now,
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+        }
+    }).collect();
+
+    let max_concurrency = req.max_concurrency.min(8).max(1);
+
+    let run = ParallelRun {
+        id: run_id.clone(),
+        tasks,
+        status: RunStatus::Running,
+        created_at: now,
+        max_concurrency,
+    };
+
+    // Log the parallel run start
+    {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.audit_logger.log(
+            &audit::AuditEvent::new("daemon", audit::AuditEventKind::SessionStart,
+                format!("parallel run {run_id}: {} tasks, max_concurrency={max_concurrency}",
+                    req.tasks.len()))
+        );
+    }
+
+    // Execute in a background thread
+    let bg_state = Arc::clone(state);
+    let bg_run_id = run_id.clone();
+    let task_count = run.tasks.len();
+    std::thread::spawn(move || {
+        let completed_run = parallel::execute_parallel_run(run, &bg_state);
+
+        // Log completion
+        let s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
+        let completed = completed_run.tasks.iter()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count();
+        s.audit_logger.log(
+            &audit::AuditEvent::new("daemon", audit::AuditEventKind::SessionEnd,
+                format!("parallel run {bg_run_id}: {completed}/{task_count} tasks completed, status={:?}",
+                    completed_run.status))
+        );
+
+        // Fire webhooks
+        s.fire_webhooks("parallel_run_completed", &serde_json::json!({
+            "run_id": bg_run_id,
+            "status": completed_run.status,
+            "tasks_completed": completed,
+            "tasks_total": task_count,
+        }));
+    });
+
+    json_response(202, &serde_json::json!({
+        "run_id": run_id,
+        "status": "running",
+        "task_count": req.tasks.len(),
+        "max_concurrency": max_concurrency,
+        "message": "Parallel run started. Poll GET /api/parallel/runs/<id> for status.",
+    }))
+}
+
+fn handle_list_parallel_runs(state: &Arc<Mutex<DaemonState>>) -> String {
+    // The orchestrator lives inside execute_parallel_run threads, so we track runs
+    // via the audit log. For now, return a summary from audit events.
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Scan agents for parallel run tasks
+    let parallel_agents: Vec<_> = s.agents.iter()
+        .filter(|(id, _)| id.starts_with("run-"))
+        .map(|(id, agent)| {
+            serde_json::json!({
+                "agent_id": id,
+                "status": format!("{:?}", agent.status),
+                "template": agent.config.template.name,
+            })
+        })
+        .collect();
+
+    json_response(200, &serde_json::json!({
+        "runs": parallel_agents,
+        "count": parallel_agents.len(),
+    }))
+}
+
+fn handle_get_parallel_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Find all tasks belonging to this run
+    let tasks: Vec<_> = s.agents.iter()
+        .filter(|(id, _)| id.starts_with(run_id))
+        .map(|(id, agent)| {
+            serde_json::json!({
+                "task_id": id,
+                "template": agent.config.template.name,
+                "status": format!("{:?}", agent.status),
+                "iterations": agent.iterations_completed,
+                "tool_invocations": agent.tool_invocations,
+                "summary": agent.result_summary,
+            })
+        })
+        .collect();
+
+    if tasks.is_empty() {
+        return json_response(404, &ErrorResponse {
+            error: format!("parallel run '{run_id}' not found"),
+        });
+    }
+
+    let all_done = tasks.iter().all(|t| {
+        let status = t.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        status.contains("Completed") || status.contains("Failed")
+    });
+    let any_success = tasks.iter().any(|t| {
+        let status = t.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        status.contains("Completed")
+    });
+
+    let run_status = if !all_done {
+        "running"
+    } else if any_success && tasks.iter().all(|t| {
+        t.get("status").and_then(|v| v.as_str()).unwrap_or("").contains("Completed")
+    }) {
+        "completed"
+    } else if any_success {
+        "partially_completed"
+    } else {
+        "failed"
+    };
+
+    json_response(200, &serde_json::json!({
+        "run_id": run_id,
+        "status": run_status,
+        "tasks": tasks,
+        "task_count": tasks.len(),
+    }))
+}
+
+fn handle_cancel_parallel_run(run_id: &str, body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    let cancel_req: Option<CancelRunRequest> = serde_json::from_str(body).ok();
+
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mut cancelled = 0usize;
+    let task_ids: Vec<String> = s.agents.keys()
+        .filter(|id| id.starts_with(run_id))
+        .cloned()
+        .collect();
+
+    if task_ids.is_empty() {
+        return json_response(404, &ErrorResponse {
+            error: format!("parallel run '{run_id}' not found"),
+        });
+    }
+
+    for task_id in &task_ids {
+        // If a specific task_id was requested, only cancel that one
+        if let Some(ref req) = cancel_req {
+            if let Some(ref specific_id) = req.task_id {
+                if task_id != specific_id {
+                    continue;
+                }
+            }
+        }
+
+        if let Some(agent) = s.agents.get_mut(task_id) {
+            // Only cancel if not already completed
+            if !agent.result_summary.as_deref().map(|s| s.contains("completed")).unwrap_or(false) {
+                agent.mark_failed("cancelled by user");
+                cancelled += 1;
+            }
+        }
+    }
+
+    s.audit_logger.log(
+        &audit::AuditEvent::new("daemon", audit::AuditEventKind::SessionEnd,
+            format!("parallel run {run_id}: {cancelled} tasks cancelled"))
+    );
+    s.save();
+
+    json_response(200, &serde_json::json!({
+        "run_id": run_id,
+        "cancelled": cancelled,
+        "message": format!("{cancelled} task(s) cancelled"),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,6 +1748,47 @@ mod tests {
         let raw2 = "GET /api/tasks HTTP/1.1\r\n\r\n";
         let response2 = handle_request(raw2, &state, &rate_limiter, "127.0.0.1");
         assert!(response2.contains("hourly scan"));
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn parallel_run_endpoint_validates_and_accepts() {
+        let root = std::env::temp_dir().join(format!(
+            "tachy-http-parallel-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = Arc::new(Mutex::new(
+            DaemonState::init(root.clone()).expect("should init"),
+        ));
+
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+
+        // Empty tasks should fail
+        let raw_empty = "POST /api/parallel/run HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"tasks\":[]}";
+        let response = handle_request(raw_empty, &state, &rate_limiter, "127.0.0.1");
+        assert!(response.contains("400"));
+        assert!(response.contains("at least one task"));
+
+        // Unknown template should fail
+        let raw_bad = "POST /api/parallel/run HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"tasks\":[{\"template\":\"nonexistent\",\"prompt\":\"test\"}]}";
+        let response = handle_request(raw_bad, &state, &rate_limiter, "127.0.0.1");
+        assert!(response.contains("400"));
+        assert!(response.contains("unknown template"));
+
+        // List runs should return empty initially
+        let raw_list = "GET /api/parallel/runs HTTP/1.1\r\n\r\n";
+        let response = handle_request(raw_list, &state, &rate_limiter, "127.0.0.1");
+        assert!(response.contains("200"));
+        assert!(response.contains("\"count\": 0"));
+
+        // Non-existent run should 404
+        let raw_get = "GET /api/parallel/runs/run-nonexistent HTTP/1.1\r\n\r\n";
+        let response = handle_request(raw_get, &state, &rate_limiter, "127.0.0.1");
+        assert!(response.contains("404"));
 
         std::fs::remove_dir_all(root).ok();
     }

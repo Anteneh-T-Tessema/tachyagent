@@ -4,6 +4,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::indexer::CodebaseIndex;
+use crate::lsp::{Diagnostic, DiagnosticSeverity, LspManager};
 
 /// Configuration for the edit-test-fix cycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +13,9 @@ pub struct EditTestFixConfig {
     pub test_command: Option<String>,
     pub test_timeout_secs: u64,
     pub targeted_tests: bool,
+    /// Run LSP diagnostics before tests for faster feedback on syntax/type errors.
+    #[serde(default = "super::default_true")]
+    pub lsp_diagnostics_enabled: bool,
 }
 
 impl Default for EditTestFixConfig {
@@ -21,6 +25,7 @@ impl Default for EditTestFixConfig {
             test_command: None,
             test_timeout_secs: 120,
             targeted_tests: true,
+            lsp_diagnostics_enabled: true,
         }
     }
 }
@@ -54,6 +59,21 @@ pub struct TestResult {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// Result of running LSP diagnostics on edited files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticResult {
+    pub files_checked: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl DiagnosticResult {
+    pub fn has_errors(&self) -> bool {
+        self.error_count > 0
+    }
 }
 
 pub struct EditTestFix;
@@ -152,6 +172,106 @@ impl EditTestFix {
             edited_files.join(", ")
         )
     }
+
+    /// Run LSP diagnostics on the edited files.
+    /// Returns errors/warnings without needing to run the full test suite.
+    pub fn run_diagnostics(
+        workspace_root: &Path,
+        edited_files: &[String],
+    ) -> DiagnosticResult {
+        let lsp = LspManager::new(workspace_root);
+        let mut all_diagnostics = Vec::new();
+
+        for file in edited_files {
+            let diags = lsp.get_diagnostics(file);
+            all_diagnostics.extend(diags);
+        }
+
+        let error_count = all_diagnostics
+            .iter()
+            .filter(|d| d.severity == DiagnosticSeverity::Error)
+            .count();
+        let warning_count = all_diagnostics
+            .iter()
+            .filter(|d| d.severity == DiagnosticSeverity::Warning)
+            .count();
+
+        DiagnosticResult {
+            files_checked: edited_files.len(),
+            error_count,
+            warning_count,
+            diagnostics: all_diagnostics,
+        }
+    }
+
+    /// Build a fix prompt from LSP diagnostics (faster than test-based fix prompts).
+    pub fn build_diagnostic_fix_prompt(
+        diag_result: &DiagnosticResult,
+        edited_files: &[String],
+    ) -> String {
+        let mut prompt = format!(
+            "LSP diagnostics found {} error(s) and {} warning(s) in your edits:\n\n",
+            diag_result.error_count, diag_result.warning_count
+        );
+
+        for d in &diag_result.diagnostics {
+            let severity = match d.severity {
+                DiagnosticSeverity::Error => "ERROR",
+                DiagnosticSeverity::Warning => "WARN",
+                _ => "INFO",
+            };
+            prompt.push_str(&format!(
+                "  {}:{}:{} [{}] {}\n",
+                d.file, d.line, d.column, severity, d.message
+            ));
+        }
+
+        prompt.push_str(&format!(
+            "\nFiles you edited: {}\n\n\
+             Please fix the errors above. Focus on the ERROR-level diagnostics first. \
+             These are compile/type errors that must be resolved before tests can pass.",
+            edited_files.join(", ")
+        ));
+
+        prompt
+    }
+
+    /// Combined diagnostic + test cycle. Runs diagnostics first (fast), then tests.
+    /// Returns early if diagnostics find errors — no point running tests on broken code.
+    pub fn run_diagnostic_then_test(
+        workspace_root: &Path,
+        edited_files: &[String],
+        test_command: &str,
+        test_timeout_secs: u64,
+        lsp_enabled: bool,
+    ) -> CycleCheckResult {
+        // Phase 1: LSP diagnostics (fast — no compilation needed for most languages)
+        if lsp_enabled {
+            let diag_result = Self::run_diagnostics(workspace_root, edited_files);
+            if diag_result.has_errors() {
+                return CycleCheckResult::DiagnosticErrors(diag_result);
+            }
+        }
+
+        // Phase 2: Run tests (slower but catches logic errors)
+        match Self::run_tests(test_command, test_timeout_secs) {
+            Ok(test_result) if test_result.exit_code == 0 => CycleCheckResult::Passed,
+            Ok(test_result) => CycleCheckResult::TestFailure(test_result),
+            Err(_) => CycleCheckResult::TestExecutionError,
+        }
+    }
+}
+
+/// Result of the combined diagnostic + test check.
+pub enum CycleCheckResult {
+    /// All diagnostics clean and tests pass.
+    Passed,
+    /// LSP found errors — no tests were run.
+    DiagnosticErrors(DiagnosticResult),
+    /// Diagnostics clean but tests failed.
+    TestFailure(TestResult),
+    /// Could not execute the test command.
+    TestExecutionError,
 }
 
 #[cfg(test)]
@@ -198,6 +318,61 @@ mod tests {
         assert!(prompt.len() < 10000);
         assert!(prompt.contains("cargo test"));
         assert!(prompt.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn diagnostic_fix_prompt_includes_errors() {
+        let diag_result = DiagnosticResult {
+            files_checked: 2,
+            error_count: 1,
+            warning_count: 1,
+            diagnostics: vec![
+                Diagnostic {
+                    file: "src/main.rs".to_string(),
+                    line: 10,
+                    column: 5,
+                    severity: DiagnosticSeverity::Error,
+                    message: "cannot find value `foo`".to_string(),
+                    source: "cargo".to_string(),
+                },
+                Diagnostic {
+                    file: "src/main.rs".to_string(),
+                    line: 20,
+                    column: 1,
+                    severity: DiagnosticSeverity::Warning,
+                    message: "unused variable".to_string(),
+                    source: "cargo".to_string(),
+                },
+            ],
+        };
+        let prompt = EditTestFix::build_diagnostic_fix_prompt(
+            &diag_result,
+            &["src/main.rs".to_string()],
+        );
+        assert!(prompt.contains("1 error(s)"));
+        assert!(prompt.contains("1 warning(s)"));
+        assert!(prompt.contains("cannot find value"));
+        assert!(prompt.contains("ERROR"));
+        assert!(prompt.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn diagnostic_result_has_errors() {
+        let empty = DiagnosticResult {
+            files_checked: 1,
+            error_count: 0,
+            warning_count: 2,
+            diagnostics: Vec::new(),
+        };
+        assert!(!empty.has_errors());
+
+        let with_errors = DiagnosticResult {
+            files_checked: 1,
+            error_count: 3,
+            warning_count: 0,
+            diagnostics: Vec::new(),
+        };
+        assert!(with_errors.has_errors());
     }
 
     #[test]

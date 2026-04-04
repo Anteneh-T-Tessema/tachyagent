@@ -9,6 +9,8 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::diff::UnifiedDiff;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
@@ -155,26 +157,129 @@ pub fn read_file(
     })
 }
 
-pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
+/// Result of a diff preview before writing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffPreview {
+    /// The file path being modified.
+    pub file_path: String,
+    /// Unified diff text (compatible with `git apply`).
+    pub diff_text: String,
+    /// Colored diff text for terminal display.
+    pub diff_colored: String,
+    /// Summary line (e.g. "file.rs: +5 -3").
+    pub summary: String,
+    /// Number of additions.
+    pub additions: usize,
+    /// Number of deletions.
+    pub deletions: usize,
+    /// Whether this is a new file creation.
+    pub is_new_file: bool,
+}
+
+/// Generate a diff preview for write_file WITHOUT writing to disk.
+pub fn preview_write_file(path: &str, content: &str) -> io::Result<DiffPreview> {
+    let absolute_path = normalize_path_allow_missing(path)?;
+    let old_content = fs::read_to_string(&absolute_path).unwrap_or_default();
+    let is_new = !absolute_path.exists();
+    let display_path = absolute_path.to_string_lossy().into_owned();
+    let diff = UnifiedDiff::compute(&display_path, &old_content, content);
+    Ok(DiffPreview {
+        file_path: display_path,
+        diff_text: diff.render(),
+        diff_colored: diff.render_colored(),
+        summary: diff.summary(),
+        additions: diff.additions,
+        deletions: diff.deletions,
+        is_new_file: is_new,
+    })
+}
+
+/// Generate a diff preview for edit_file WITHOUT writing to disk.
+pub fn preview_edit_file(
+    path: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> io::Result<DiffPreview> {
+    let absolute_path = normalize_path(path)?;
+    let original = fs::read_to_string(&absolute_path)?;
+    if old_string == new_string {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "old_string and new_string must differ",
+        ));
+    }
+    let effective_old = if original.contains(old_string) {
+        old_string.to_string()
+    } else {
+        match fuzzy_find_match(&original, old_string) {
+            Some(matched) => matched,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "old_string not found in file",
+                ));
+            }
+        }
+    };
+    let updated = if replace_all {
+        original.replace(&effective_old, new_string)
+    } else {
+        original.replacen(&effective_old, new_string, 1)
+    };
+    let display_path = absolute_path.to_string_lossy().into_owned();
+    let diff = UnifiedDiff::compute(&display_path, &original, &updated);
+    Ok(DiffPreview {
+        file_path: display_path,
+        diff_text: diff.render(),
+        diff_colored: diff.render_colored(),
+        summary: diff.summary(),
+        additions: diff.additions,
+        deletions: diff.deletions,
+        is_new_file: false,
+    })
+}
+
+pub fn write_file(path: &str, content: &str) -> io::Result<(WriteFileOutput, DiffPreview)> {
     let absolute_path = normalize_path_allow_missing(path)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
+    let is_new = original_file.is_none();
+    let display_path = absolute_path.to_string_lossy().into_owned();
+
+    // Compute diff BEFORE writing
+    let diff = UnifiedDiff::compute(
+        &display_path,
+        original_file.as_deref().unwrap_or(""),
+        content,
+    );
+    let preview = DiffPreview {
+        file_path: display_path.clone(),
+        diff_text: diff.render(),
+        diff_colored: diff.render_colored(),
+        summary: diff.summary(),
+        additions: diff.additions,
+        deletions: diff.deletions,
+        is_new_file: is_new,
+    };
+
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&absolute_path, content)?;
 
-    Ok(WriteFileOutput {
+    let output = WriteFileOutput {
         kind: if original_file.is_some() {
             String::from("update")
         } else {
             String::from("create")
         },
-        file_path: absolute_path.to_string_lossy().into_owned(),
+        file_path: display_path,
         content: content.to_owned(),
         structured_patch: make_patch(original_file.as_deref().unwrap_or(""), content),
         original_file,
         git_diff: None,
-    })
+    };
+    Ok((output, preview))
 }
 
 pub fn edit_file(
@@ -182,7 +287,7 @@ pub fn edit_file(
     old_string: &str,
     new_string: &str,
     replace_all: bool,
-) -> io::Result<EditFileOutput> {
+) -> io::Result<(EditFileOutput, DiffPreview)> {
     let absolute_path = normalize_path(path)?;
     let original_file = fs::read_to_string(&absolute_path)?;
     if old_string == new_string {
@@ -220,10 +325,24 @@ pub fn edit_file(
     } else {
         original_file.replacen(&effective_old, new_string, 1)
     };
+
+    // Compute diff BEFORE writing
+    let display_path = absolute_path.to_string_lossy().into_owned();
+    let diff = UnifiedDiff::compute(&display_path, &original_file, &updated);
+    let preview = DiffPreview {
+        file_path: display_path.clone(),
+        diff_text: diff.render(),
+        diff_colored: diff.render_colored(),
+        summary: diff.summary(),
+        additions: diff.additions,
+        deletions: diff.deletions,
+        is_new_file: false,
+    };
+
     fs::write(&absolute_path, &updated)?;
 
-    Ok(EditFileOutput {
-        file_path: absolute_path.to_string_lossy().into_owned(),
+    let output = EditFileOutput {
+        file_path: display_path,
         old_string: effective_old,
         new_string: new_string.to_owned(),
         original_file: original_file.clone(),
@@ -231,7 +350,8 @@ pub fn edit_file(
         user_modified: false,
         replace_all,
         git_diff: None,
-    })
+    };
+    Ok((output, preview))
 }
 
 /// Try to find old_string in the file with normalized whitespace.
@@ -679,9 +799,11 @@ mod tests {
     #[test]
     fn reads_and_writes_files() {
         let path = temp_path("read-write.txt");
-        let write_output = write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
+        let (write_output, diff_preview) = write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
             .expect("write should succeed");
         assert_eq!(write_output.kind, "create");
+        assert!(diff_preview.is_new_file);
+        assert!(diff_preview.additions > 0);
 
         let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1))
             .expect("read should succeed");
@@ -693,9 +815,11 @@ mod tests {
         let path = temp_path("edit.txt");
         write_file(path.to_string_lossy().as_ref(), "alpha beta alpha")
             .expect("initial write should succeed");
-        let output = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
+        let (output, diff_preview) = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
             .expect("edit should succeed");
         assert!(output.replace_all);
+        assert!(diff_preview.additions > 0 || diff_preview.deletions > 0);
+        assert!(!diff_preview.diff_text.is_empty());
     }
 
     #[test]
@@ -709,7 +833,7 @@ mod tests {
         .expect("write should succeed");
 
         // Model sends tab indentation instead of spaces — should still match
-        let output = edit_file(
+        let (output, _preview) = edit_file(
             path.to_string_lossy().as_ref(),
             "\tprintln!(\"hello\");",
             "    println!(\"world\");",
@@ -734,7 +858,7 @@ mod tests {
         .expect("write should succeed");
 
         // Model sends with trailing spaces — should still match
-        let output = edit_file(
+        let (output, _preview) = edit_file(
             path.to_string_lossy().as_ref(),
             "line one  \nline two  ",
             "LINE ONE\nLINE TWO",

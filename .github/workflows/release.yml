@@ -33,6 +33,7 @@ jobs:
     defaults:
       run:
         working-directory: rust
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -55,34 +56,34 @@ jobs:
           fi
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         run: |
           mkdir -p dist
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            cp target/${{ matrix.target }}/release/tachy-cli.exe dist/tachy.exe
-            cd dist && 7z a ${{ matrix.name }}.zip tachy.exe
-          else
-            cp target/${{ matrix.target }}/release/tachy-cli dist/tachy
-            cd dist && tar czf ${{ matrix.name }}.tar.gz tachy
-          fi
-        shell: bash
+          cp target/${{ matrix.target }}/release/tachy-cli dist/tachy
+          cd dist
+          tar czf ${{ matrix.name }}.tar.gz tachy
+          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256 || sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
 
-      - name: Checksum
+      - name: Package (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
         run: |
-          cd rust/dist
-          if [ -f "${{ matrix.name }}.tar.gz" ]; then
-            shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256 || sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
-          fi
-          if [ -f "${{ matrix.name }}.zip" ]; then
-            shasum -a 256 ${{ matrix.name }}.zip > ${{ matrix.name }}.zip.sha256 || sha256sum ${{ matrix.name }}.zip > ${{ matrix.name }}.zip.sha256
-          fi
-        shell: bash
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "target/${{ matrix.target }}/release/tachy-cli.exe" "dist/tachy.exe"
+          Compress-Archive -Path "dist/tachy.exe" -DestinationPath "dist/${{ matrix.name }}.zip"
+          $hash = (Get-FileHash "dist/${{ matrix.name }}.zip" -Algorithm SHA256).Hash
+          "$hash  ${{ matrix.name }}.zip" | Out-File "dist/${{ matrix.name }}.zip.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: rust/dist/${{ matrix.name }}.tar.gz*
+          path: |
+            rust/dist/*.tar.gz
+            rust/dist/*.tar.gz.sha256
+            rust/dist/*.zip
+            rust/dist/*.zip.sha256
 
   release:
     needs: build

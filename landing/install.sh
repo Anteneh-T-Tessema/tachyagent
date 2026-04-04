@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://tachy.dev/install.sh | bash
 
 # Do NOT use set -e — we handle every error ourselves
-REPO="your-org/tachy"  # TODO: replace with actual repo
+REPO="Anteneh-T-Tessema/tachyagent"
 BOLD="\033[1m"
 GREEN="\033[32m"
 YELLOW="\033[33m"

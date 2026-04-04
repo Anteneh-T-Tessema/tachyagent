@@ -8,7 +8,7 @@ Tachy is a local-first AI agent platform. It runs frontier open models (Gemma 4,
 
 ```bash
 # One command to install everything
-curl -fsSL https://tachy.dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Anteneh-T-Tessema/tachyagent/main/landing/install.sh | bash
 ```
 
 That's it. The install script downloads Tachy, which then:

@@ -361,6 +361,7 @@ impl TerminalRenderer {
         colored_output
     }
 
+    #[allow(dead_code)]
     pub fn stream_markdown(&self, markdown: &str, out: &mut impl Write) -> io::Result<()> {
         let rendered_markdown = self.render_markdown(markdown);
         for chunk in rendered_markdown.split_inclusive(char::is_whitespace) {

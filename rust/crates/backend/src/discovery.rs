@@ -47,7 +47,7 @@ impl HealthReport {
             println!("  ✓ Ollama running at {} (v{})", self.ollama_url, version);
         } else {
             println!("  ✗ Ollama not running at {}", self.ollama_url);
-            println!("    Install: curl -fsSL https://ollama.com/install.sh | sh");
+            println!("    Install: https://ollama.com/download");
             println!("    Start:   ollama serve");
         }
 
@@ -83,7 +83,9 @@ impl HealthReport {
         } else if !self.local_models.is_empty() {
             println!("  Recommended: tachy --model {}", self.local_models[0].name);
         } else {
-            println!("  Get started: tachy pull llama3.1:8b && tachy --model llama3.1:8b");
+            println!("  Get started:");
+            println!("    ollama pull gemma4:26b");
+            println!("    tachy --model gemma4:26b");
         }
     }
 }
@@ -142,14 +144,13 @@ pub fn check_ollama(base_url: &str) -> (bool, Option<String>) {
     }
 }
 
-/// Detect GPU information (macOS Metal / Linux NVIDIA).
+/// Detect GPU information (macOS Metal / Linux NVIDIA / Linux AMD / Windows).
 pub fn detect_gpu() -> Option<String> {
-    // macOS: check for Apple Silicon
+    // macOS: check for Apple Silicon or Intel
     if cfg!(target_os = "macos") {
         if let Ok(output) = Command::new("sysctl").arg("-n").arg("machdep.cpu.brand_string").output() {
             let brand = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !brand.is_empty() {
-                // Get memory
                 let mem = Command::new("sysctl")
                     .arg("-n")
                     .arg("hw.memsize")
@@ -172,7 +173,45 @@ pub fn detect_gpu() -> Option<String> {
         {
             let info = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !info.is_empty() {
-                return Some(info);
+                return Some(format!("NVIDIA {info}"));
+            }
+        }
+
+        // Linux: check for AMD ROCm
+        if let Ok(output) = Command::new("rocm-smi").arg("--showproductname").output() {
+            let info = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !info.is_empty() && info.contains("GPU") {
+                return Some(format!("AMD {}", info.lines().last().unwrap_or("GPU")));
+            }
+        }
+
+        // Linux: check /proc/meminfo for total RAM (CPU inference fallback)
+        if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+            for line in content.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(kb_str) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = kb_str.parse::<u64>() {
+                            let gb = kb / 1_048_576;
+                            return Some(format!("CPU only ({gb} GB RAM)"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Windows: check for GPU via wmic
+    if cfg!(target_os = "windows") {
+        if let Ok(output) = Command::new("wmic")
+            .args(["path", "win32_VideoController", "get", "name"])
+            .output()
+        {
+            let info = String::from_utf8_lossy(&output.stdout);
+            for line in info.lines().skip(1) {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
         }
     }
@@ -181,22 +220,25 @@ pub fn detect_gpu() -> Option<String> {
 }
 
 /// Pick the best model based on available RAM/VRAM.
-pub fn recommend_model(models: &[LocalModel], gpu_info: &Option<String>) -> Option<String> {
+pub fn recommend_model(models: &[LocalModel], _gpu_info: &Option<String>) -> Option<String> {
     if models.is_empty() {
         return None;
     }
 
-    // Prefer models with tool support and good coding ability
-    let preferred_order = [
-        "qwen3-coder",
-        "qwen3:",
-        "qwen2.5-coder",
-        "llama3.1:",
-        "mistral:",
-        "codestral:",
-        "llama3:",
-        "codellama:",
-    ];
+    let ram_gb = detect_system_ram_gb();
+
+    // Prefer models that fit in available RAM
+    // Rule of thumb: model needs ~1.2x its file size in RAM
+    let preferred_order: Vec<&str> = if ram_gb >= 32 {
+        // 32GB+: can run 26-30B models
+        vec!["gemma4:", "qwen3-coder", "qwen3:", "qwen2.5-coder", "llama3.1:", "mistral:", "codestral:", "llama3:", "codellama:"]
+    } else if ram_gb >= 16 {
+        // 16GB: stick to 7-8B models, maybe small MoE
+        vec!["qwen3:8b", "qwen3:", "llama3.1:8b", "llama3.1:", "mistral:", "gemma4:e4b", "gemma4:", "codestral:", "llama3:", "codellama:"]
+    } else {
+        // 8GB or less: only small models
+        vec!["gemma4:e4b", "gemma4:e2b", "llama3.2:3b", "qwen3:8b", "mistral:7b", "llama3.1:8b", "llama3:", "codellama:"]
+    };
 
     for prefix in &preferred_order {
         if let Some(model) = models.iter().find(|m| m.name.starts_with(prefix)) {
@@ -206,6 +248,51 @@ pub fn recommend_model(models: &[LocalModel], gpu_info: &Option<String>) -> Opti
 
     // Fall back to first model
     Some(models[0].name.clone())
+}
+
+/// Public wrapper for system RAM detection.
+pub fn detect_system_ram_gb_public() -> u64 {
+    detect_system_ram_gb()
+}
+
+/// Detect system RAM in GB.
+fn detect_system_ram_gb() -> u64 {
+    // macOS
+    if cfg!(target_os = "macos") {
+        if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+            if let Ok(bytes) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+                return bytes / 1_073_741_824;
+            }
+        }
+    }
+    // Linux
+    if cfg!(target_os = "linux") {
+        if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+            for line in content.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(kb_str) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = kb_str.parse::<u64>() {
+                            return kb / 1_048_576;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Windows
+    if cfg!(target_os = "windows") {
+        if let Ok(output) = Command::new("wmic")
+            .args(["computersystem", "get", "TotalPhysicalMemory"])
+            .output()
+        {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Ok(bytes) = line.trim().parse::<u64>() {
+                    return bytes / 1_073_741_824;
+                }
+            }
+        }
+    }
+    16 // default assumption
 }
 
 /// Run a full health check.
@@ -305,6 +392,13 @@ mod tests {
                 family: "llama".to_string(),
             },
             LocalModel {
+                name: "gemma4:26b".to_string(),
+                size_bytes: 16_000_000_000,
+                parameter_size: "26B".to_string(),
+                quantization: "Q4_K_M".to_string(),
+                family: "gemma4".to_string(),
+            },
+            LocalModel {
                 name: "qwen3-coder:30b".to_string(),
                 size_bytes: 18_000_000_000,
                 parameter_size: "30B".to_string(),
@@ -321,7 +415,7 @@ mod tests {
         ];
 
         let rec = recommend_model(&models, &None);
-        assert_eq!(rec.as_deref(), Some("qwen3-coder:30b"));
+        assert_eq!(rec.as_deref(), Some("gemma4:26b"));
     }
 
     #[test]

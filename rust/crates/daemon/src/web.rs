@@ -104,12 +104,13 @@ tr:hover td { background: rgba(99,102,241,0.05); }
     <!-- Chat Page -->
     <div id="page-chat" class="chat-container">
       <div class="messages" id="messages">
-        <div class="message assistant"><div class="bubble">Hi! I'm Tachy, your AI assistant. I can read files, run commands, search your codebase, and more — all running locally on your machine. What would you like to do?</div></div>
+        <div class="message assistant"><div class="bubble">Hi! I'm Tachy, your local AI coding agent. Powered by Gemma 4 and Ollama — everything runs on your machine. I can read files, write code, run commands, search your codebase, and plan multi-step tasks. What would you like to do?</div></div>
       </div>
       <div class="input-bar">
         <select id="model-select"></select>
-        <input type="text" id="chat-input" placeholder="Ask anything... (e.g. 'review my auth code for security issues')" onkeydown="if(event.key==='Enter')sendMessage()">
+        <input type="text" id="chat-input" placeholder="Ask anything..." onkeydown="if(event.key==='Enter')sendMessage()">
         <button onclick="sendMessage()" id="send-btn">Send</button>
+        <button onclick="newConversation()" title="New conversation" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);padding:10px 12px;border-radius:var(--radius);cursor:pointer">+</button>
       </div>
     </div>
 
@@ -146,7 +147,7 @@ tr:hover td { background: rgba(99,102,241,0.05); }
         <h3>Audit Trail</h3>
         <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Every agent action is logged. Audit data is stored in <code>.tachy/audit.jsonl</code></p>
         <table><thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Tool</th><th>Detail</th></tr></thead>
-        <tbody id="audit-table"><tr><td colspan="5" style="color:var(--muted)">Audit log is append-only on disk. API endpoint coming soon.</td></tr></tbody></table>
+        <tbody id="audit-table"><tr><td colspan="5" style="color:var(--muted)">Loading audit log...</td></tr></tbody></table>
       </div>
     </div>
 
@@ -157,6 +158,7 @@ tr:hover td { background: rgba(99,102,241,0.05); }
         <div class="card" style="flex:1;min-width:150px"><div class="stat"><div class="stat-value" id="stat-agents">-</div><div class="stat-label">Agents Run</div></div></div>
         <div class="card" style="flex:1;min-width:150px"><div class="stat"><div class="stat-value" id="stat-tasks">-</div><div class="stat-label">Scheduled Tasks</div></div></div>
       </div>
+      <div id="dashboard-details"></div>
       <div class="card">
         <h3>Scheduled Tasks</h3>
         <table><thead><tr><th>ID</th><th>Name</th><th>Schedule</th><th>Status</th><th>Runs</th></tr></thead>
@@ -197,6 +199,8 @@ function showPage(page) {
   if (page === 'models') loadModels();
   if (page === 'agents') loadAgents();
   if (page === 'dashboard') loadDashboard();
+  if (page === 'audit') loadAudit();
+  if (page === 'audit') loadAuditLog();
 }
 
 // Health check
@@ -229,7 +233,7 @@ async function loadModels() {
         select.appendChild(opt);
       });
       // Default to best available Ollama model
-      const preferred = ['qwen3-coder:30b','qwen3:8b','llama3.1:8b','llama3.1:latest','mistral:7b'];
+      const preferred = ['gemma4:26b','gemma4:31b','qwen3-coder:30b','qwen3:8b','llama3.1:8b','mistral:7b'];
       const ollama = models.filter(m => m.backend === 'Ollama');
       for (const pref of preferred) {
         if (ollama.find(m => m.name === pref)) { select.value = pref; break; }
@@ -278,11 +282,32 @@ async function loadAgents() {
 
 // Dashboard
 async function loadDashboard() {
-  const health = await checkHealth();
-  if (health) {
-    document.getElementById('stat-models').textContent = health.models;
-    document.getElementById('stat-agents').textContent = health.agents;
-    document.getElementById('stat-tasks').textContent = health.tasks;
+  try {
+    const r = await authFetch(API + '/api/metrics');
+    const m = await r.json();
+    document.getElementById('stat-models').textContent = m.models_available || 0;
+    document.getElementById('stat-agents').textContent = m.total_agents_run || 0;
+    document.getElementById('stat-tasks').textContent = m.scheduled_tasks || 0;
+
+    // Update detailed stats
+    const details = document.getElementById('dashboard-details');
+    if (details) {
+      details.innerHTML = `
+        <div class="card"><h3>Agent Metrics</h3>
+          <p>Completed: ${m.completed || 0} · Failed: ${m.failed || 0}</p>
+          <p>Total iterations: ${m.total_iterations || 0} · Tool calls: ${m.total_tool_invocations || 0}</p>
+        </div>
+        <div class="card"><h3>Usage by Template</h3>
+          ${Object.entries(m.agents_by_template || {}).map(([k,v]) => `<p>${k}: ${v} runs</p>`).join('') || '<p>No agents run yet</p>'}
+        </div>`;
+    }
+  } catch(e) {
+    const health = await checkHealth();
+    if (health) {
+      document.getElementById('stat-models').textContent = health.models;
+      document.getElementById('stat-agents').textContent = health.agents;
+      document.getElementById('stat-tasks').textContent = health.tasks;
+    }
   }
   try {
     const r = await authFetch(API + '/api/tasks');
@@ -335,6 +360,14 @@ async function sendMessage() {
   input.value = '';
 
   addMessage('user', text);
+  saveConversation();
+  // Save user message server-side
+  if (currentConvId) {
+    authFetch(API + '/api/conversations/message', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: currentConvId, role: 'user', content: text }),
+    }).catch(() => {});
+  }
 
   const btn = document.getElementById('send-btn');
   btn.disabled = true;
@@ -350,57 +383,157 @@ async function sendMessage() {
   div.scrollIntoView({ behavior: 'smooth' });
 
   try {
-    const r = await authFetch(API + '/api/chat/stream', {
+    // Start the agent asynchronously
+    const r = await authFetch(API + '/api/agents/run', {
       method: 'POST',
-      body: JSON.stringify({ template: 'chat', prompt: text, model: model })
+      body: JSON.stringify({ template: 'chat', prompt: text, model: model }),
     });
+    const startResult = await r.json();
+    const agentId = startResult.agent_id;
 
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let meta = {};
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.startsWith('event: ')) {
-          const eventType = line.substring(7);
-          const dataLine = lines[i + 1];
-          if (dataLine && dataLine.startsWith('data: ')) {
-            const data = dataLine.substring(6);
-            try {
-              const parsed = JSON.parse(data);
-              if (eventType === 'token') {
-                fullText += parsed.text || '';
-                div.innerHTML = '<div class="bubble">' + renderMarkdown(fullText) + '</div>';
-                div.scrollIntoView({ behavior: 'smooth' });
-              } else if (eventType === 'done') {
-                meta = parsed;
-              } else if (eventType === 'error') {
-                fullText = 'Error: ' + (parsed.error || 'unknown');
-              }
-            } catch(e) {}
-          }
-        }
-      }
+    if (!agentId) {
+      div.innerHTML = '<div class="bubble">' + formatError(startResult.error || 'Failed to start agent') + '</div>';
+      btn.disabled = false;
+      btn.textContent = 'Send';
+      return;
     }
 
-    if (!fullText) fullText = 'No response received';
-    const metaStr = `${model} · ${meta.iterations || 0} iteration${(meta.iterations||0)!==1?'s':''} · ${meta.tool_invocations || 0} tool call${(meta.tool_invocations||0)!==1?'s':''}`;
-    div.innerHTML = '<div class="bubble">' + renderMarkdown(fullText) + '</div><div class="meta">' + metaStr + '</div>';
+    // Poll for completion
+    let elapsed = 0;
+    const pollInterval = 1000;
+    const maxWait = 300000; // 5 minutes
+
+    const pollForResult = async () => {
+      let elapsed = 0;
+      while (elapsed < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        elapsed += pollInterval;
+
+        const secs = Math.round(elapsed/1000);
+        const dots = '.'.repeat(secs % 4);
+        div.innerHTML = '<div class="bubble"><span class="spinner"></span> Working' + dots + ' (' + secs + 's)</div>';
+
+        try {
+          const poll = await authFetch(API + '/api/agents/' + agentId);
+          const agent = await poll.json();
+
+          if (agent.status === 'completed' || agent.status === 'failed') {
+            const summary = agent.summary || 'No response.';
+            const metaStr = model + ' · ' + (agent.iterations || 0) + ' iterations · ' + (agent.tool_invocations || 0) + ' tool calls';
+            div.innerHTML = '<div class="bubble">' + renderMarkdown(summary) + '</div><div class="meta">' + metaStr + '</div>';
+            // Save assistant response server-side
+            if (currentConvId) {
+              authFetch(API + '/api/conversations/message', {
+                method: 'POST',
+                body: JSON.stringify({ conversation_id: currentConvId, role: 'assistant', content: summary, model: model, iterations: agent.iterations, tool_invocations: agent.tool_invocations }),
+              }).catch(() => {});
+            }
+            return;
+          }
+        } catch(pollErr) {}
+      }
+      div.innerHTML = '<div class="bubble">Request timed out after 5 minutes. Check the Agents page.</div>';
+    };
+    await pollForResult();
 
   } catch(e) {
-    div.innerHTML = '<div class="bubble">Connection error: ' + escapeHtml(e.message) + '</div>';
+    const errorMsg = formatError(e.message || 'Unknown error');
+    div.innerHTML = '<div class="bubble">' + errorMsg + '</div>';
   }
 
   btn.disabled = false;
   btn.textContent = 'Send';
+  saveConversation();
+}
+
+// User-friendly error messages
+function formatError(raw) {
+  if (raw.includes('AbortError') || raw.includes('abort')) {
+    return 'Request timed out. The model may be too slow for this query. Try a smaller model or a simpler question.';
+  }
+  if (raw.includes('Failed to fetch') || raw.includes('NetworkError')) {
+    return 'Cannot connect to Tachy daemon. Make sure `tachy serve` is running.';
+  }
+  if (raw.includes('model') && raw.includes('not found')) {
+    return 'Model not found. Run `tachy pull <model>` to download it, or select a different model.';
+  }
+  if (raw.includes('rate limit')) {
+    return 'Too many requests. Please wait a moment and try again.';
+  }
+  if (raw.includes('API key')) {
+    return 'Authentication required. Set your API key in the URL: ?key=your-key';
+  }
+  if (raw.includes('EOF') || raw.includes('empty')) {
+    return 'The model returned an empty response. Try rephrasing your question or using a different model.';
+  }
+  return 'Error: ' + escapeHtml(raw);
+}
+
+// Conversation persistence — server-side with localStorage fallback
+let currentConvId = localStorage.getItem('tachy_current_conv') || '';
+
+async function saveConversation() {
+  // Save to localStorage as immediate cache
+  try {
+    const msgs = document.getElementById('messages').innerHTML;
+    if (currentConvId) localStorage.setItem('tachy_conv_' + currentConvId, msgs);
+  } catch(e) {}
+}
+
+async function loadConversation() {
+  // Try server-side conversations first
+  try {
+    const r = await authFetch(API + '/api/conversations');
+    if (r.ok) {
+      const convs = await r.json();
+      if (convs.length > 0) {
+        // Load the most recent conversation
+        const latest = convs[convs.length - 1];
+        currentConvId = latest.id;
+        localStorage.setItem('tachy_current_conv', currentConvId);
+        if (latest.messages && latest.messages.length > 0) {
+          const container = document.getElementById('messages');
+          container.innerHTML = '';
+          for (const msg of latest.messages) {
+            const div = document.createElement('div');
+            div.className = 'message ' + msg.role;
+            const rendered = msg.role === 'assistant' ? renderMarkdown(msg.content) : escapeHtml(msg.content);
+            div.innerHTML = '<div class="bubble">' + rendered + '</div>';
+            container.appendChild(div);
+          }
+          return;
+        }
+      }
+    }
+  } catch(e) {}
+  // Fallback to localStorage
+  try {
+    if (currentConvId) {
+      const saved = localStorage.getItem('tachy_conv_' + currentConvId);
+      if (saved) { document.getElementById('messages').innerHTML = saved; }
+    }
+  } catch(e) {}
+}
+
+async function newConversation() {
+  // Create server-side conversation
+  try {
+    const r = await authFetch(API + '/api/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Chat ' + new Date().toLocaleString() }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      currentConvId = data.id || ('conv-' + Date.now());
+    } else {
+      currentConvId = 'conv-' + Date.now();
+    }
+  } catch(e) {
+    currentConvId = 'conv-' + Date.now();
+  }
+  localStorage.setItem('tachy_current_conv', currentConvId);
+  document.getElementById('messages').innerHTML = '<div class="message assistant"><div class="bubble">New conversation. How can I help?</div></div>';
+  saveConversation();
 }
 
 // Run agent from agents page
@@ -411,16 +544,34 @@ async function runAgent() {
 
   const btn = document.getElementById('run-agent-btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Running...';
+  btn.innerHTML = '<span class="spinner"></span> Starting...';
 
   try {
     const r = await authFetch(API + '/api/agents/run', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ template, prompt })
     });
-    await r.json();
+    const result = await r.json();
+    btn.innerHTML = '<span class="spinner"></span> Running (' + (result.agent_id || '?') + ')...';
     loadAgents();
+
+    // Poll until complete
+    if (result.agent_id) {
+      let elapsed = 0;
+      while (elapsed < 300000) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        elapsed += 3000;
+        try {
+          const poll = await authFetch(API + '/api/agents/' + result.agent_id);
+          const agent = await poll.json();
+          if (agent.status === 'completed' || agent.status === 'failed') {
+            loadAgents();
+            break;
+          }
+        } catch(e) {}
+        btn.innerHTML = '<span class="spinner"></span> Running (' + Math.round(elapsed/1000) + 's)...';
+      }
+    }
   } catch(e) { alert('Error: ' + e.message); }
 
   btn.disabled = false;
@@ -436,7 +587,47 @@ function escapeHtml(text) {
 checkHealth();
 loadModels();
 loadTemplates();
+loadConversation();
 setInterval(checkHealth, 30000);
+
+async function loadAudit() {
+  try {
+    const r = await authFetch(API + '/api/audit');
+    if (!r.ok) throw new Error('not available');
+    const events = await r.json();
+    const tbody = document.getElementById('audit-table');
+    if (!events || events.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No audit events yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = events.slice(-50).reverse().map(e =>
+      `<tr><td>${e.timestamp}</td><td>${e.kind}</td><td>${e.agent_id||'—'}</td><td>${e.tool_name||'—'}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(e.detail||'').substring(0,80)}</td></tr>`
+    ).join('');
+  } catch(e) {
+    document.getElementById('audit-table').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Could not load audit log</td></tr>';
+  }
+}
+
+// Audit log viewer
+async function loadAuditLog() {
+  try {
+    const r = await authFetch(API + '/api/audit');
+    if (r.ok) {
+      const events = await r.json();
+      const tbody = document.getElementById('audit-table');
+      if (events.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No audit events yet</td></tr>';
+        return;
+      }
+      tbody.innerHTML = events.slice(-50).reverse().map(e =>
+        '<tr><td>' + (e.timestamp||'') + '</td><td>' + (e.kind||'') + '</td><td>' + (e.agent_id||'—') + '</td><td>' + (e.tool_name||'—') + '</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml((e.detail||'').substring(0,80)) + '</td></tr>'
+      ).join('');
+    }
+  } catch(e) {
+    console.error('Failed to load audit log', e);
+  }
+}
+
 </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 use crate::session::Session;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn reconstructs_usage_from_session_messages() {
-        let session = Session {
+        let session = Session { branches: Vec::new(), current_branch: String::new(),
             version: 1,
             messages: vec![ConversationMessage {
                 role: MessageRole::Assistant,

@@ -1,9 +1,12 @@
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, read_file, write_file, BashCommandInput,
-    GrepSearchInput,
+    edit_file, execute_bash, glob_search, grep_search, list_directory, read_file, write_file,
+    BashCommandInput, GrepSearchInput,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+pub mod custom;
+pub use custom::{CustomTool, CustomToolRegistry, CustomToolsFile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
@@ -140,6 +143,44 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: "list_directory",
+            description: "List files and directories at a given path. Returns names, types, and sizes. Skips node_modules, .git, target, and other noise directories.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to list (default: current directory)" },
+                    "depth": { "type": "integer", "minimum": 1, "maximum": 5, "description": "How deep to recurse (default: 1)" }
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "remember",
+            description: "Store a persistent memory that survives across sessions. Use this to remember user preferences, project context, important decisions, or patterns you've learned.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "What to remember" },
+                    "category": { "type": "string", "enum": ["preference", "project", "decision", "pattern", "note"], "description": "Category of memory" }
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "call_agent",
+            description: "Call another Tachy agent and get its result. Use this to orchestrate multi-agent workflows — e.g., call the code-reviewer, then the test-runner, then deploy.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "template": { "type": "string", "description": "Agent template name (e.g., 'code-reviewer', 'test-runner', 'security-scanner')" },
+                    "prompt": { "type": "string", "description": "What to ask the agent to do" }
+                },
+                "required": ["template", "prompt"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -151,8 +192,29 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
+        "list_directory" => from_value::<ListDirInput>(input).and_then(run_list_directory),
         _ => Err(format!("unsupported tool: {name}")),
     }
+}
+
+/// Execute a tool, checking custom tools if the built-in tools don't match.
+pub fn execute_tool_with_custom(
+    name: &str,
+    input: &Value,
+    custom_registry: &CustomToolRegistry,
+) -> Result<String, String> {
+    // Try built-in tools first
+    match name {
+        "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search" | "list_directory" => {
+            return execute_tool(name, input);
+        }
+        _ => {}
+    }
+    // Try custom tools
+    if custom_registry.find(name).is_some() {
+        return custom_registry.execute(name, input);
+    }
+    Err(format!("unsupported tool: {name}"))
 }
 
 fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> {
@@ -225,6 +287,16 @@ struct EditFileInput {
 struct GlobSearchInputValue {
     pattern: String,
     path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListDirInput {
+    path: Option<String>,
+    depth: Option<usize>,
+}
+
+fn run_list_directory(input: ListDirInput) -> Result<String, String> {
+    to_pretty_json(list_directory(input.path.as_deref(), input.depth).map_err(io_to_string)?)
 }
 
 #[cfg(test)]

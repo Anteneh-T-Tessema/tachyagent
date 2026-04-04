@@ -1,0 +1,10 @@
+=== Knowledge (no tools) ===
+
+=== Tool: list_directory ===
+
+=== Tool: read_file ===
+
+=== Tool: bash ===
+
+=== Tool: grep_search ===
+

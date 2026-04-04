@@ -4,6 +4,7 @@ use audit::{AuditEvent, AuditEventKind, AuditLogger, AuditSeverity, GovernancePo
 use backend::{BackendRegistry, DynBackend};
 use intelligence::{
     CodebaseIndex, CodebaseIndexer, ContextSelector, IntelligenceConfig,
+    build_optimized_prompt, clean_code_output, contains_code, validate_code,
     git, IndexerConfig,
 };
 use runtime::{
@@ -40,6 +41,23 @@ impl AgentEngine {
     ) -> AgentRunResult {
         let model = &config.template.model;
         let enable_tools = !config.template.allowed_tools.is_empty();
+
+        // Pre-flight: check if Ollama is reachable for local models
+        let model_entry = registry.find_model(model);
+        if let Some(entry) = model_entry {
+            if format!("{:?}", entry.backend) == "Ollama" {
+                let (alive, _) = backend::check_ollama("http://localhost:11434");
+                if !alive {
+                    return AgentRunResult {
+                        agent_id: agent_id.to_string(),
+                        success: false,
+                        iterations: 0,
+                        tool_invocations: 0,
+                        summary: "Ollama is not running. Start it with: ollama serve".to_string(),
+                    };
+                }
+            }
+        }
 
         // Create backend
         let client = match registry.create_client(model, enable_tools) {
@@ -98,11 +116,8 @@ impl AgentEngine {
         };
 
         // --- Intelligence: Smart Context Selection ---
-        let mut system_prompt = vec![config.template.system_prompt.clone()];
-
-        if intelligence_config.context_enabled {
+        let context_text = if intelligence_config.context_enabled {
             if let Some(idx) = &index {
-                // Determine model context window from registry
                 let ctx_window = registry
                     .find_model(model)
                     .map(|m| m.context_window)
@@ -117,7 +132,6 @@ impl AgentEngine {
                 ) {
                     Ok(injection) => {
                         let rendered = ContextSelector::render_injection(&injection, idx);
-                        system_prompt.push(rendered);
                         audit_logger.log(
                             &AuditEvent::new(
                                 &config.session_id,
@@ -131,16 +145,58 @@ impl AgentEngine {
                             )
                             .with_agent(agent_id),
                         );
+                        Some(rendered)
                     }
-                    Err(_) => {
-                        // Graceful degradation: continue without context
-                    }
+                    Err(_) => None,
                 }
+            } else {
+                None
             }
+        } else {
+            None
+        };
+
+        // --- Intelligence: Model-specific prompt optimization ---
+        let mut system_prompt = build_optimized_prompt(
+            model,
+            &config.template.system_prompt,
+            context_text.as_deref(),
+        );
+
+        // --- Intelligence: Inject persistent memory ---
+        let tachy_dir = workspace_root.join(".tachy");
+        let memory = intelligence::AgentMemory::load(&tachy_dir);
+        if let Some(memory_context) = memory.as_system_context() {
+            system_prompt.push(memory_context);
+            audit_logger.log(
+                &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                    format!("memory injected: {} entries", memory.entries().len()))
+                    .with_agent(agent_id),
+            );
         }
 
-        // Build permission policy — include git tools if enabled
+        // --- Load custom tools ---
+        let custom_tools = tools::CustomToolRegistry::load(&tachy_dir);
+        if !custom_tools.tools().is_empty() {
+            audit_logger.log(
+                &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                    format!("custom tools loaded: {}", custom_tools.tools().len()))
+                    .with_agent(agent_id),
+            );
+        }
+
+        // Build permission policy — include git tools and custom tools if enabled
         let mut allowed = config.template.allowed_tools.clone();
+        // Always allow the remember tool
+        if !allowed.contains(&"remember".to_string()) {
+            allowed.push("remember".to_string());
+        }
+        // Add custom tool names
+        for tool in custom_tools.tools() {
+            if !allowed.contains(&tool.name) {
+                allowed.push(tool.name.clone());
+            }
+        }
         if intelligence_config.git_enabled {
             for name in ["git_status", "git_diff", "git_branch", "git_commit"] {
                 if !allowed.contains(&name.to_string()) {
@@ -150,10 +206,16 @@ impl AgentEngine {
         }
         let permission_policy = build_permission_policy(&allowed);
 
-        // Build tool executor with git tools
+        // Build tool executor with git tools, custom tools, and memory
         let tool_executor = IntelligentToolExecutor {
             allowed_tools: allowed,
             git_enabled: intelligence_config.git_enabled,
+            custom_tools,
+            workspace_root: workspace_root.to_path_buf(),
+            registry: None, // Set below for call_agent support
+            governance: Some(governance.clone()),
+            audit_logger: None,
+            intelligence_config: Some(intelligence_config.clone()),
         };
 
         let mut runtime = ConversationRuntime::new(
@@ -177,7 +239,8 @@ impl AgentEngine {
         );
 
         // --- Intelligence: Plan-and-Execute or simple run ---
-        if intelligence_config.planning_enabled {
+        let use_planning = intelligence_config.planning_enabled && config.template.use_planning;
+        if use_planning {
             Self::run_with_planning(
                 agent_id, config, prompt, &mut runtime, intelligence_config,
                 workspace_root, &index, governance, audit_logger,
@@ -187,7 +250,7 @@ impl AgentEngine {
         }
     }
 
-    /// Simple execution — single run_turn, no planning.
+    /// Simple execution — single run_turn with output validation.
     fn run_simple(
         agent_id: &str,
         config: &AgentConfig,
@@ -201,7 +264,29 @@ impl AgentEngine {
             Ok(summary) => {
                 let tool_count = summary.tool_results.len() as u32;
                 check_governance(governance, tool_count, &config.session_id, agent_id, audit_logger);
-                let result_summary = extract_text_summary(&summary.assistant_messages);
+                let mut result_summary = extract_text_summary(&summary.assistant_messages);
+
+                // --- Output validation: clean model artifacts ---
+                result_summary = clean_code_output(&result_summary);
+
+                // --- Output validation: check code quality ---
+                if contains_code(&result_summary) {
+                    let lang = detect_language_from_content(&result_summary);
+                    let validation = validate_code(&result_summary, &lang);
+                    if !validation.valid {
+                        let issues: Vec<String> = validation.errors.iter()
+                            .map(|e| e.message.clone())
+                            .collect();
+                        audit_logger.log(
+                            &AuditEvent::new(
+                                &config.session_id,
+                                AuditEventKind::SessionEnd,
+                                format!("output validation warnings: {}", issues.join("; ")),
+                            )
+                            .with_agent(agent_id),
+                        );
+                    }
+                }
 
                 audit_logger.log(
                     &AuditEvent::new(
@@ -486,6 +571,21 @@ fn extract_text_summary(messages: &[runtime::ConversationMessage]) -> String {
     }
 }
 
+/// Detect programming language from code content (for validation).
+fn detect_language_from_content(code: &str) -> String {
+    if code.contains("fn ") && (code.contains("let ") || code.contains("pub ")) {
+        "rust".to_string()
+    } else if code.contains("def ") && code.contains(":") {
+        "python".to_string()
+    } else if code.contains("function ") || code.contains("const ") || code.contains("=>") {
+        "javascript".to_string()
+    } else if code.contains("func ") && code.contains("package ") {
+        "go".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
 /// Load existing index or build a new one.
 fn load_or_build_index(
     workspace_root: &Path,
@@ -515,10 +615,17 @@ fn load_or_build_index(
     Ok(index)
 }
 
-/// Tool executor with intelligence features (git tools).
+/// Tool executor with intelligence features (git tools, custom tools, memory).
 struct IntelligentToolExecutor {
     allowed_tools: Vec<String>,
     git_enabled: bool,
+    custom_tools: tools::CustomToolRegistry,
+    workspace_root: std::path::PathBuf,
+    /// Registry for call_agent tool — allows agents to call other agents.
+    registry: Option<std::sync::Arc<BackendRegistry>>,
+    governance: Option<GovernancePolicy>,
+    audit_logger: Option<std::sync::Arc<AuditLogger>>,
+    intelligence_config: Option<IntelligenceConfig>,
 }
 
 impl ToolExecutor for IntelligentToolExecutor {
@@ -527,6 +634,55 @@ impl ToolExecutor for IntelligentToolExecutor {
             return Err(ToolError::new(format!(
                 "tool '{tool_name}' not in agent's allowed tools"
             )));
+        }
+
+        // Handle remember tool
+        if tool_name == "remember" {
+            let value = serde_json::from_str(input)
+                .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+            let tachy_dir = self.workspace_root.join(".tachy");
+            return intelligence::execute_remember(&value, &tachy_dir).map_err(ToolError::new);
+        }
+
+        // Handle call_agent tool — agent-to-agent communication
+        if tool_name == "call_agent" {
+            let value: serde_json::Value = serde_json::from_str(input)
+                .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+            let template = value.get("template").and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::new("'template' required"))?;
+            let prompt = value.get("prompt").and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::new("'prompt' required"))?;
+
+            if let (Some(reg), Some(gov), Some(audit), Some(intel)) = (
+                &self.registry, &self.governance, &self.audit_logger, &self.intelligence_config
+            ) {
+                let sub_agent_id = format!("sub-{}", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+
+                // Find the template
+                let config = platform::PlatformConfig::default();
+                let agent_template = config.agent_templates.iter()
+                    .find(|t| t.name == template)
+                    .cloned()
+                    .ok_or_else(|| ToolError::new(format!("unknown agent template: {template}")))?;
+
+                let agent_config = platform::AgentConfig {
+                    template: agent_template,
+                    session_id: format!("sess-{sub_agent_id}"),
+                    working_directory: self.workspace_root.to_string_lossy().to_string(),
+                    environment: std::collections::BTreeMap::new(),
+                };
+
+                let result = AgentEngine::run_agent(
+                    &sub_agent_id, &agent_config, prompt, reg, gov, audit, intel, &self.workspace_root,
+                );
+
+                return Ok(format!(
+                    "Agent '{}' completed (success={}, {} iterations, {} tool calls):\n\n{}",
+                    template, result.success, result.iterations, result.tool_invocations, result.summary
+                ));
+            }
+            return Err(ToolError::new("call_agent not available in this context"));
         }
 
         // Handle git tools
@@ -552,7 +708,14 @@ impl ToolExecutor for IntelligentToolExecutor {
             }
         }
 
-        // Standard tools
+        // Handle custom tools
+        if self.custom_tools.find(tool_name).is_some() {
+            let value = serde_json::from_str(input)
+                .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+            return self.custom_tools.execute(tool_name, &value).map_err(ToolError::new);
+        }
+
+        // Standard built-in tools
         let value = serde_json::from_str(input)
             .map_err(|e| ToolError::new(format!("invalid tool input: {e}")))?;
         execute_tool(tool_name, &value).map_err(ToolError::new)
@@ -576,6 +739,12 @@ mod tests {
         let mut executor = IntelligentToolExecutor {
             allowed_tools: vec!["read_file".to_string()],
             git_enabled: false,
+            custom_tools: tools::CustomToolRegistry::default(),
+            workspace_root: std::path::PathBuf::from("/tmp"),
+            registry: None,
+            governance: None,
+            audit_logger: None,
+            intelligence_config: None,
         };
         let result = executor.execute("bash", r#"{"command":"ls"}"#);
         assert!(result.is_err());

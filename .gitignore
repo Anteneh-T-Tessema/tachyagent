@@ -1,2 +1,10 @@
 __pycache__/
 archive/
+*.pyc
+.DS_Store
+node_modules/
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix
+rust/target/
+rust/.tachy/

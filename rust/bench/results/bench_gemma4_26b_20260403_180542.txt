@@ -1,0 +1,20 @@
+=== Knowledge (no tools) ===
+
+=== Tool: list_directory ===
+
+=== Tool: read_file ===
+
+=== Tool: bash ===
+
+=== Tool: grep_search ===
+
+=== Tool: edit_file ===
+
+=== Multi-step ===
+Model: gemma4:26b
+Date: Fri Apr  3 18:06:24 EDT 2026
+Passed: 14/14
+Failed: 0
+Accuracy: 100.0%
+Total time: 41s
+Average: 2s per task

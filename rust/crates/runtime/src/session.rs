@@ -6,7 +6,9 @@ use std::path::Path;
 use crate::json::{JsonError, JsonValue};
 use crate::usage::TokenUsage;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageRole {
     System,
     User,
@@ -14,7 +16,7 @@ pub enum MessageRole {
     Tool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -32,17 +34,32 @@ pub enum ContentBlock {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub role: MessageRole,
     pub blocks: Vec<ContentBlock>,
     pub usage: Option<TokenUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub version: u32,
     pub messages: Vec<ConversationMessage>,
+    /// Branch history — allows forking and returning to previous states.
+    #[serde(default)]
+    pub branches: Vec<SessionBranch>,
+    /// Current branch name (empty = main).
+    #[serde(default)]
+    pub current_branch: String,
+}
+
+/// A saved branch point in the conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionBranch {
+    pub name: String,
+    pub message_count: usize,
+    pub created_at: String,
+    pub messages_snapshot: Vec<ConversationMessage>,
 }
 
 #[derive(Debug)]
@@ -82,7 +99,40 @@ impl Session {
         Self {
             version: 1,
             messages: Vec::new(),
+            branches: Vec::new(),
+            current_branch: String::new(),
         }
+    }
+
+    /// Create a branch at the current point in the conversation.
+    /// Saves a snapshot of all messages so you can return later.
+    pub fn create_branch(&mut self, name: &str) {
+        let branch = SessionBranch {
+            name: name.to_string(),
+            message_count: self.messages.len(),
+            created_at: format!("{}s", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_secs()),
+            messages_snapshot: self.messages.clone(),
+        };
+        self.branches.push(branch);
+        self.current_branch = name.to_string();
+    }
+
+    /// Switch to a previously saved branch, restoring its message state.
+    pub fn switch_branch(&mut self, name: &str) -> Result<(), String> {
+        let branch = self.branches.iter()
+            .find(|b| b.name == name)
+            .ok_or_else(|| format!("branch '{name}' not found"))?
+            .clone();
+        self.messages = branch.messages_snapshot;
+        self.current_branch = name.to_string();
+        Ok(())
+    }
+
+    /// List all branches.
+    pub fn list_branches(&self) -> Vec<&SessionBranch> {
+        self.branches.iter().collect()
     }
 
     pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), SessionError> {
@@ -131,7 +181,7 @@ impl Session {
             .iter()
             .map(ConversationMessage::from_json)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { version, messages })
+        Ok(Self { version, messages, branches: Vec::new(), current_branch: String::new() })
     }
 }
 

@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -107,7 +106,7 @@ impl EditTestFix {
     }
 
     /// Run tests and return the result.
-    pub fn run_tests(command: &str, timeout_secs: u64) -> Result<TestResult, EditTestFixError> {
+    pub fn run_tests(command: &str, _timeout_secs: u64) -> Result<TestResult, EditTestFixError> {
         let output = Command::new("sh")
             .arg("-c")
             .arg(command)

@@ -1,0 +1,107 @@
+{
+  "name": "tachy",
+  "displayName": "Tachy — Local AI Coding Agent",
+  "description": "AI coding agent powered by Gemma 4 + Ollama. Runs locally, zero cloud dependency.",
+  "version": "0.1.0",
+  "publisher": "tachy",
+  "license": "Proprietary",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["AI", "Programming Languages", "Other"],
+  "keywords": ["ai", "coding", "agent", "local", "ollama", "gemma"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "icon": "icon.png",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tachy",
+          "title": "Tachy",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "tachy": [
+        {
+          "type": "webview",
+          "id": "tachy.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tachy.newChat",
+        "title": "Tachy: New Chat"
+      },
+      {
+        "command": "tachy.reviewFile",
+        "title": "Tachy: Review Current File"
+      },
+      {
+        "command": "tachy.explainSelection",
+        "title": "Tachy: Explain Selection"
+      },
+      {
+        "command": "tachy.fixSelection",
+        "title": "Tachy: Fix Selection"
+      },
+      {
+        "command": "tachy.startDaemon",
+        "title": "Tachy: Start Daemon"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tachy.explainSelection",
+          "when": "editorHasSelection",
+          "group": "tachy@1"
+        },
+        {
+          "command": "tachy.fixSelection",
+          "when": "editorHasSelection",
+          "group": "tachy@2"
+        },
+        {
+          "command": "tachy.reviewFile",
+          "group": "tachy@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Tachy",
+      "properties": {
+        "tachy.daemonUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7777",
+          "description": "URL of the Tachy daemon"
+        },
+        "tachy.model": {
+          "type": "string",
+          "default": "gemma4:26b",
+          "description": "Default model to use"
+        },
+        "tachy.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start the Tachy daemon on VS Code launch"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

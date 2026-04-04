@@ -8,6 +8,7 @@ description = "Enterprise audit trail, compliance logging, and governance for ag
 
 [dependencies]
 runtime = { path = "../runtime" }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

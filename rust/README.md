@@ -1,31 +1,50 @@
 # Tachy
 
-**Enterprise AI agents that run on your infrastructure. Zero data leaves your network.**
+**The best local AI coding agent. Gemma 4 + Ollama + enterprise-grade security. Zero data leaves your machine.**
 
-Tachy is an on-premise AI agent platform. It connects to local models via Ollama (or any OpenAI-compatible endpoint), executes tools against your codebase, and logs every action to an immutable audit trail. Single binary. No cloud dependencies.
+Tachy is a local-first AI agent platform. It runs frontier open models (Gemma 4, Qwen3, Llama 3.1) via Ollama, executes tools against your codebase, and logs every action to an immutable audit trail. Single binary. No cloud. No API keys.
 
 ## Quick Start
 
 ```bash
-# Install Ollama (if you haven't already)
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama3.1:8b
-
-# Install Tachy
+# One command to install everything
 curl -fsSL https://tachy.dev/install.sh | sh
-
-# Initialize workspace and start
-tachy init
-tachy --model llama3.1:8b
 ```
 
-That's it. You're running a tool-using AI agent locally.
+That's it. The install script downloads Tachy, which then:
+1. Installs Ollama automatically (if not present)
+2. Starts the Ollama server
+3. Detects your RAM and pulls the right model
+4. Initializes the workspace
+5. Warms up the model
+
+Or install manually:
+
+```bash
+# Install Ollama (if you don't have it)
+# macOS: brew install ollama
+# Linux: curl -fsSL https://ollama.com/install.sh | sh
+# Windows: download from https://ollama.com/download
+
+# Pull a model based on your RAM
+ollama pull gemma4:26b    # 32GB+ RAM
+ollama pull qwen3:8b      # 16GB RAM
+ollama pull gemma4:e4b    # 8GB RAM
+
+# Install and run Tachy
+tachy setup
+tachy
+```
+
+That's it. You're running a frontier-class AI coding agent locally.
+
+`tachy setup` automatically installs Ollama, pulls the right model for your hardware, and warms it up. Zero manual steps.
 
 ## What It Does
 
 ```bash
 # Interactive REPL with tool use
-tachy --model llama3.1:8b
+tachy --model gemma4:26b
 › Read the auth module and check for security issues
 ⠋ Thinking
 ### Tool `read_file` → src/auth.rs (247 lines)
@@ -51,8 +70,9 @@ tachy doctor
 
 ## Why Tachy
 
-**For enterprises that can't send code to the cloud:**
+**For anyone who wants frontier AI coding capability without sending code to the cloud:**
 
+- Developers who want full control over their AI tools
 - Law firms with attorney-client privilege
 - Banks and fintechs under SOX/PCI compliance
 - Healthcare companies bound by HIPAA
@@ -61,13 +81,15 @@ tachy doctor
 
 **What you get:**
 
+- Frontier local models — Gemma 4 (256K context, native tool calling, LiveCodeBench 80%)
 - Full audit trail — every prompt, tool call, and response logged to append-only JSONL
+- Intelligence layer — codebase indexing, smart context, plan-and-execute, edit-test-fix
 - Governance policies — block destructive commands, enforce tool rate limits, protect sensitive paths
-- Model-agnostic — works with Ollama, vLLM, LM Studio, or any OpenAI-compatible endpoint
+- Model-agnostic — works with any Ollama model (Gemma 4, Qwen3, Llama 3.1, Mistral, etc.)
 - Single binary — no Python, no Node.js, no Docker required
-- 6 built-in tools — bash, file read/write/edit, glob search, grep search
+- 10 built-in tools — bash, file read/write/edit, glob search, grep search, git tools
 - 4 agent templates — code reviewer, security scanner, doc generator, test runner
-- HTTP API — 7 endpoints for programmatic agent management
+- HTTP API — 19 endpoints for programmatic agent management
 
 ## Commands
 
@@ -87,13 +109,14 @@ tachy serve [ADDR]                      Start HTTP daemon
 ## HTTP API
 
 ```
-GET  /health              → {"status":"ok","models":19,"agents":0,"tasks":0}
-GET  /api/models          → [{name, backend, supports_tool_use, context_window}]
-GET  /api/templates       → [{name, description, model, tools}]
-GET  /api/agents          → [{id, template, status, iterations, summary}]
-GET  /api/tasks           → [{id, name, schedule, status, run_count}]
-POST /api/agents/run      → {"template":"...","prompt":"..."}
-POST /api/tasks/schedule  → {"template":"...","name":"...","interval_seconds":N}
+GET  /health                → {"status":"ok","models":19,"agents":0,"tasks":0}
+GET  /api/models            → [{name, backend, supports_tool_use, context_window}]
+GET  /api/templates         → [{name, description, model, tools}]
+GET  /api/agents            → [{id, template, status, iterations, summary}]
+GET  /api/agents/:id        → {id, template, status, iterations, tool_invocations, summary}
+GET  /api/tasks             → [{id, name, schedule, status, run_count}]
+POST /api/agents/run        → 202 {"agent_id":"...","status":"running"} (async)
+POST /api/tasks/schedule    → {"template":"...","name":"...","interval_seconds":N}
 ```
 
 ## Configuration
@@ -119,19 +142,51 @@ Default enterprise policy blocks:
 
 All violations are logged to the audit trail with severity levels.
 
+## Recommended Models
+
+| Model | Size (Q4) | Best For | Context |
+|---|---|---|---|
+| `gemma4:26b` ⭐ | ~16 GB | Default — fast frontier, native tool calling | 256K |
+| `gemma4:31b` | ~19 GB | Maximum quality, complex reasoning | 256K |
+| `qwen3-coder:30b` | ~18 GB | Coding specialist | 32K |
+| `gemma4:e4b` | ~5 GB | Fast simple tasks, quick tool calls | 128K |
+| `qwen3:8b` | ~5 GB | Good general purpose | 32K |
+| `llama3.1:8b` | ~5 GB | Solid fallback | 128K |
+
+On Apple M-series (64GB), `gemma4:26b` is the sweet spot — only 4B active parameters (MoE), so it's fast while delivering frontier-level code quality. On 16GB machines, `qwen3:8b` is recommended. On 8GB, `gemma4:e4b` works well.
+
+## Pricing
+
+7-day free trial. No credit card required.
+
+| Plan | Price | What you get |
+|---|---|---|
+| Individual | $29/mo or $249/yr | All features, all models, CLI + Web UI + API |
+| Team | $99/mo or $899/yr | 10 seats, RBAC, shared audit trail |
+| Enterprise | Custom | Unlimited seats, SSO, custom policies, SLA |
+
+```bash
+# Check license status
+tachy license
+
+# Activate after purchase
+tachy activate TACHY-<your-key>
+```
+
 ## Architecture
 
 ```
 tachy-cli          CLI binary (REPL, commands, markdown rendering)
 ├── daemon         HTTP server + agent execution engine
+├── intelligence   Indexer, context, planner, edit-test-fix, verification
 ├── platform       Agent templates, scheduler, workspace config
-├── backend        Multi-model: Anthropic, Ollama, OpenAI-compatible
-├── audit          Compliance: events, logging, governance policy
+├── backend        Multi-model: Ollama (Gemma 4, Qwen3, Llama, Mistral)
+├── audit          Compliance: events, logging, governance, RBAC
 ├── runtime        Core: conversation loop, tools, permissions, sessions
-└── tools          Tool definitions + execution (bash, files, search)
+└── tools          Tool definitions + execution (bash, files, search, git)
 ```
 
-Built in Rust. Single binary. No unsafe code. Memory-safe by construction.
+Built in Rust. Single binary. `unsafe_code = "forbid"`. Memory-safe by construction.
 
 ## License
 

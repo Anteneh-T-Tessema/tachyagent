@@ -34,7 +34,7 @@ impl From<ConfigError> for PromptBuildError {
 }
 
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
-pub const FRONTIER_MODEL_NAME: &str = "Tachy Agent";
+pub const FRONTIER_MODEL_NAME: &str = "Tachy";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFile {
@@ -297,11 +297,24 @@ fn render_config_section(config: &RuntimeConfig) -> String {
 
 fn get_simple_intro_section(has_output_style: bool) -> String {
     format!(
-        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.",
+        concat!(
+            "You are Tachy, an expert AI coding agent running locally on the user's machine. ",
+            "You have direct access to the filesystem and shell. ",
+            "You {}",
+            "\n\n",
+            "KEY BEHAVIORS:\n",
+            "- Always explore before acting: use list_directory and read_file to understand the codebase before making changes.\n",
+            "- Make targeted, minimal edits. Do not rewrite entire files when a small edit_file call suffices.\n",
+            "- After writing or editing code, verify your changes work (run tests, check syntax).\n",
+            "- When asked to fix a bug, first reproduce it, then fix it, then verify the fix.\n",
+            "- Explain what you're doing and why, but keep it concise.\n",
+            "- Never fabricate file contents or tool outputs. If you're unsure, read the file first.\n",
+            "- NEVER generate or guess URLs unless they are for helping with programming tasks."
+        ),
         if has_output_style {
-            "according to your \"Output Style\" below, which describes how you should respond to user queries."
+            "respond according to your \"Output Style\" below."
         } else {
-            "with software engineering tasks."
+            "help with software engineering tasks."
         }
     )
 }
@@ -324,12 +337,14 @@ fn get_simple_system_section() -> String {
 
 fn get_simple_doing_tasks_section() -> String {
     let items = prepend_bullets(vec![
-        "Read relevant code before changing it and keep changes tightly scoped to the request.".to_string(),
-        "Do not add speculative abstractions, compatibility shims, or unrelated cleanup.".to_string(),
-        "Do not create files unless they are required to complete the task.".to_string(),
-        "If an approach fails, diagnose the failure before switching tactics.".to_string(),
+        "Read relevant code before changing it. Use list_directory to understand structure, then read_file for specifics.".to_string(),
+        "Keep changes tightly scoped to the request. Do not add speculative abstractions or unrelated cleanup.".to_string(),
+        "Use edit_file for surgical changes to existing files. Only use write_file for new files or complete rewrites.".to_string(),
+        "After making changes, verify them: run tests with bash, check for syntax errors, or read the file back to confirm.".to_string(),
+        "If an approach fails, diagnose the failure before switching tactics. Read error messages carefully.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
+        "For multi-file changes, work through files one at a time. Verify each change before moving to the next.".to_string(),
     ]);
 
     std::iter::once("# Doing tasks".to_string())
@@ -432,11 +447,7 @@ mod tests {
         std::env::set_current_dir(&root).expect("change cwd");
         let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8")
             .expect("system prompt should load")
-            .join(
-                "
-
-",
-            );
+            .join("\n\n");
         std::env::set_current_dir(previous).expect("restore cwd");
 
         assert!(prompt.contains("Project rules"));

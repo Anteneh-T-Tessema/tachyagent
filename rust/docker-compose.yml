@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  tachy:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - ./workspace:/home/tachy/workspace
+      - tachy-data:/home/tachy/workspace/.tachy
+    environment:
+      - TACHY_API_KEY=${TACHY_API_KEY:-}
+      - TACHY_PERMISSION_MODE=${TACHY_PERMISSION_MODE:-workspace-write}
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  tachy-data:
+  ollama-models:

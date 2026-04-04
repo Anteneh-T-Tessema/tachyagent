@@ -38,7 +38,7 @@ impl Default for PlatformConfig {
                 kind: BackendKind::Ollama,
                 base_url: Some("http://localhost:11434".to_string()),
                 api_key: None,
-                default_model: Some("llama3.1:8b".to_string()),
+                default_model: Some("gemma4:26b".to_string()),
             },
         );
 
@@ -46,7 +46,7 @@ impl Default for PlatformConfig {
             audit_log_path: ".tachy/audit.jsonl".to_string(),
             sessions_dir: ".tachy/sessions".to_string(),
             backends,
-            default_model: "llama3.1:8b".to_string(),
+            default_model: "gemma4:26b".to_string(),
             governance: GovernancePolicy::enterprise_default(),
             agent_templates: vec![
                 AgentTemplate::chat_assistant(),

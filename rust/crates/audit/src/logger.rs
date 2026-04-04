@@ -55,10 +55,12 @@ impl AuditSink for FileAuditSink {
 
 /// In-memory sink for testing.
 #[derive(Default, Clone)]
+#[allow(dead_code)]
 pub struct MemoryAuditSink {
     events: Arc<Mutex<Vec<AuditEvent>>>,
 }
 
+#[allow(dead_code)]
 impl MemoryAuditSink {
     #[must_use]
     pub fn new() -> Self {
@@ -88,21 +90,56 @@ impl AuditSink for MemoryAuditSink {
 /// Main audit logger that dispatches to one or more sinks.
 pub struct AuditLogger {
     sinks: Vec<Box<dyn AuditSink>>,
+    sequence: Mutex<u64>,
+    last_hash: Mutex<String>,
 }
 
 impl AuditLogger {
     #[must_use]
     pub fn new() -> Self {
-        Self { sinks: Vec::new() }
+        Self {
+            sinks: Vec::new(),
+            sequence: Mutex::new(0),
+            last_hash: Mutex::new(String::new()),
+        }
+    }
+
+    /// Create a logger that continues the hash chain from an existing audit file.
+    pub fn resume_from_file(path: &Path) -> Self {
+        let logger = Self::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let mut max_seq = 0u64;
+            let mut last_hash = String::new();
+            for line in content.lines() {
+                if let Ok(event) = serde_json::from_str::<AuditEvent>(line) {
+                    if event.sequence >= max_seq {
+                        max_seq = event.sequence;
+                        last_hash = event.hash.clone();
+                    }
+                }
+            }
+            *logger.sequence.lock().unwrap() = max_seq;
+            *logger.last_hash.lock().unwrap() = last_hash;
+        }
+        logger
     }
 
     pub fn add_sink(&mut self, sink: impl AuditSink + 'static) {
         self.sinks.push(Box::new(sink));
     }
 
+    /// Log an event with proper hash chain signing.
     pub fn log(&self, event: &AuditEvent) {
+        let mut seq = self.sequence.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last = self.last_hash.lock().unwrap_or_else(|e| e.into_inner());
+
+        *seq += 1;
+        let mut signed = event.clone();
+        signed.sign(*seq, &last);
+        *last = signed.hash.clone();
+
         for sink in &self.sinks {
-            if let Err(e) = sink.write_event(event) {
+            if let Err(e) = sink.write_event(&signed) {
                 eprintln!("audit sink error: {e}");
             }
         }
@@ -112,6 +149,18 @@ impl AuditLogger {
         for sink in &self.sinks {
             let _ = sink.flush();
         }
+    }
+
+    /// Get the current sequence number.
+    #[must_use]
+    pub fn sequence(&self) -> u64 {
+        *self.sequence.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Get the last hash in the chain.
+    #[must_use]
+    pub fn last_hash(&self) -> String {
+        self.last_hash.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

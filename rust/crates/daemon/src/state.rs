@@ -13,8 +13,40 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedState {
     agents: BTreeMap<String, AgentInstance>,
+    conversations: BTreeMap<String, Conversation>,
     agent_counter: u64,
     task_counter: u64,
+    conv_counter: u64,
+}
+
+/// A server-side conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: String,
+    pub title: String,
+    pub messages: Vec<ChatMessage>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub workspace: String,
+}
+
+/// A single chat message in a conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+    pub model: Option<String>,
+    pub iterations: Option<usize>,
+    pub tool_invocations: Option<u32>,
+}
+
+/// Webhook configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    pub url: String,
+    pub events: Vec<String>,
+    pub enabled: bool,
 }
 
 /// Shared daemon state, wrapped in Arc<Mutex<>> for thread safety.
@@ -24,17 +56,20 @@ pub struct DaemonState {
     pub registry: BackendRegistry,
     pub scheduler: TaskScheduler,
     pub agents: BTreeMap<String, AgentInstance>,
+    pub conversations: BTreeMap<String, Conversation>,
     pub audit_logger: AuditLogger,
     pub agent_counter: u64,
     pub task_counter: u64,
+    pub conv_counter: u64,
     pub api_key: Option<String>,
+    pub webhooks: Vec<WebhookConfig>,
 }
 
 impl DaemonState {
     pub fn init(workspace_root: PathBuf) -> Result<Self, String> {
         let ws = PlatformWorkspace::init(&workspace_root)?;
 
-        let mut audit_logger = AuditLogger::new();
+        let mut audit_logger = AuditLogger::resume_from_file(&ws.audit_log_path());
         if let Ok(sink) = FileAuditSink::new(ws.audit_log_path()) {
             audit_logger.add_sink(sink);
         }
@@ -54,18 +89,21 @@ impl DaemonState {
         let state_path = workspace_root.join(".tachy").join("state.json");
         let persisted = load_persisted_state(&state_path);
 
-        let (agents, agent_counter, task_counter) = match persisted {
+        let (agents, conversations, agent_counter, task_counter, conv_counter) = match persisted {
             Some(p) => {
                 let count = p.agents.len();
                 audit_logger.log(&AuditEvent::new(
                     "daemon",
                     AuditEventKind::SessionStart,
-                    format!("restored {count} agents from disk"),
+                    format!("restored {count} agents, {} conversations from disk", p.conversations.len()),
                 ));
-                (p.agents, p.agent_counter, p.task_counter)
+                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter)
             }
-            None => (BTreeMap::new(), 0, 0),
+            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0),
         };
+
+        // Load webhooks from config
+        let webhooks: Vec<WebhookConfig> = Vec::new(); // loaded from config if present
 
         Ok(Self {
             workspace_root,
@@ -73,10 +111,13 @@ impl DaemonState {
             registry,
             scheduler: TaskScheduler::new(),
             agents,
+            conversations,
             audit_logger,
             agent_counter,
             task_counter,
+            conv_counter,
             api_key,
+            webhooks,
         })
     }
 
@@ -95,11 +136,69 @@ impl DaemonState {
         let state_path = self.workspace_root.join(".tachy").join("state.json");
         let persisted = PersistedState {
             agents: self.agents.clone(),
+            conversations: self.conversations.clone(),
             agent_counter: self.agent_counter,
             task_counter: self.task_counter,
+            conv_counter: self.conv_counter,
         };
         if let Ok(json) = serde_json::to_string_pretty(&persisted) {
             let _ = std::fs::write(&state_path, json);
+        }
+    }
+
+    pub fn next_conv_id(&mut self) -> String {
+        self.conv_counter += 1;
+        format!("conv-{}", self.conv_counter)
+    }
+
+    /// Create a new conversation.
+    pub fn create_conversation(&mut self, title: &str) -> String {
+        let id = self.next_conv_id();
+        let now = timestamp();
+        let conv = Conversation {
+            id: id.clone(),
+            title: title.to_string(),
+            messages: Vec::new(),
+            created_at: now.clone(),
+            updated_at: now,
+            workspace: self.workspace_root.to_string_lossy().to_string(),
+        };
+        self.conversations.insert(id.clone(), conv);
+        self.save();
+        id
+    }
+
+    /// Add a message to a conversation.
+    pub fn add_message(&mut self, conv_id: &str, msg: ChatMessage) -> bool {
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            conv.messages.push(msg);
+            conv.updated_at = timestamp();
+            self.save();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Fire webhooks for an event.
+    pub fn fire_webhooks(&self, event_type: &str, payload: &serde_json::Value) {
+        for webhook in &self.webhooks {
+            if !webhook.enabled { continue; }
+            if !webhook.events.contains(&event_type.to_string()) && !webhook.events.contains(&"*".to_string()) { continue; }
+
+            let url = webhook.url.clone();
+            let body = serde_json::json!({
+                "event": event_type,
+                "payload": payload,
+                "timestamp": timestamp(),
+            });
+
+            // Fire and forget — don't block on webhook delivery
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("curl")
+                    .args(["-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body.to_string(), &url])
+                    .output();
+            });
         }
     }
 
@@ -170,6 +269,13 @@ impl DaemonState {
         self.save();
         Ok(task_id)
     }
+}
+
+fn timestamp() -> String {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}s", d.as_secs())
 }
 
 fn load_persisted_state(path: &PathBuf) -> Option<PersistedState> {

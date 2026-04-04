@@ -191,23 +191,40 @@ pub fn edit_file(
             "old_string and new_string must differ",
         ));
     }
-    if !original_file.contains(old_string) {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "old_string not found in file",
-        ));
-    }
+
+    // Try exact match first
+    let (effective_old, _fuzzy_matched) = if original_file.contains(old_string) {
+        (old_string.to_string(), false)
+    } else {
+        // Fuzzy match: try normalizing whitespace (tabs vs spaces, trailing whitespace)
+        match fuzzy_find_match(&original_file, old_string) {
+            Some(matched) => (matched, true),
+            None => {
+                // Provide a helpful error with nearby context
+                let hint = find_closest_match(&original_file, old_string);
+                let msg = if let Some(h) = hint {
+                    format!(
+                        "old_string not found in file. Did you mean:\n{}",
+                        h.chars().take(200).collect::<String>()
+                    )
+                } else {
+                    "old_string not found in file".to_string()
+                };
+                return Err(io::Error::new(io::ErrorKind::NotFound, msg));
+            }
+        }
+    };
 
     let updated = if replace_all {
-        original_file.replace(old_string, new_string)
+        original_file.replace(&effective_old, new_string)
     } else {
-        original_file.replacen(old_string, new_string, 1)
+        original_file.replacen(&effective_old, new_string, 1)
     };
     fs::write(&absolute_path, &updated)?;
 
     Ok(EditFileOutput {
         file_path: absolute_path.to_string_lossy().into_owned(),
-        old_string: old_string.to_owned(),
+        old_string: effective_old,
         new_string: new_string.to_owned(),
         original_file: original_file.clone(),
         structured_patch: make_patch(&original_file, &updated),
@@ -215,6 +232,79 @@ pub fn edit_file(
         replace_all,
         git_diff: None,
     })
+}
+
+/// Try to find old_string in the file with normalized whitespace.
+/// Returns the actual string from the file that matches.
+fn fuzzy_find_match(file_content: &str, old_string: &str) -> Option<String> {
+    let normalized_old = normalize_whitespace(old_string);
+    if normalized_old.is_empty() {
+        return None;
+    }
+
+    // Split file into lines and try to find a matching block
+    let file_lines: Vec<&str> = file_content.lines().collect();
+    let old_lines: Vec<&str> = old_string.lines().collect();
+
+    if old_lines.is_empty() {
+        return None;
+    }
+
+    let first_normalized = normalize_whitespace(old_lines[0]);
+    if first_normalized.is_empty() {
+        return None;
+    }
+
+    for start in 0..file_lines.len() {
+        if normalize_whitespace(file_lines[start]) != first_normalized {
+            continue;
+        }
+
+        // Check if subsequent lines match
+        let end = start + old_lines.len();
+        if end > file_lines.len() {
+            continue;
+        }
+
+        let all_match = old_lines.iter().enumerate().all(|(i, old_line)| {
+            normalize_whitespace(file_lines[start + i]) == normalize_whitespace(old_line)
+        });
+
+        if all_match {
+            // Return the actual text from the file
+            let matched: String = file_lines[start..end].join("\n");
+            // Preserve trailing newline if old_string had one
+            if old_string.ends_with('\n') && !matched.ends_with('\n') {
+                return Some(format!("{matched}\n"));
+            }
+            return Some(matched);
+        }
+    }
+
+    None
+}
+
+/// Normalize whitespace for fuzzy comparison: trim trailing, normalize tabs to spaces.
+fn normalize_whitespace(s: &str) -> String {
+    s.replace('\t', "    ").trim_end().to_string()
+}
+
+/// Find the closest matching block in the file for a helpful error message.
+fn find_closest_match(file_content: &str, old_string: &str) -> Option<String> {
+    let first_line = old_string.lines().next()?;
+    let trimmed = first_line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Find lines that contain the trimmed first line
+    for line in file_content.lines() {
+        if line.trim().contains(trimmed) {
+            return Some(line.to_string());
+        }
+    }
+
+    None
 }
 
 pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOutput> {
@@ -478,11 +568,105 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
     Ok(candidate)
 }
 
+/// List directory contents with metadata — essential for project structure understanding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListDirectoryOutput {
+    pub path: String,
+    pub entries: Vec<DirEntry>,
+    pub total: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+}
+
+pub fn list_directory(path: Option<&str>, max_depth: Option<usize>) -> io::Result<ListDirectoryOutput> {
+    let base = match path {
+        Some(p) => normalize_path(p)?,
+        None => std::env::current_dir()?,
+    };
+
+    if !base.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            format!("{} is not a directory", base.display()),
+        ));
+    }
+
+    let depth = max_depth.unwrap_or(1);
+    let mut entries = Vec::new();
+    let max_entries = 200;
+
+    // Skip common noise directories
+    let skip_dirs = [
+        "node_modules", ".git", "target", "__pycache__", ".venv",
+        "venv", "dist", "build", ".next", ".cache",
+    ];
+
+    let walker = WalkDir::new(&base)
+        .min_depth(1)
+        .max_depth(depth)
+        .sort_by_file_name();
+
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        // Skip noisy directories
+        if entry.file_type().is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                if skip_dirs.contains(&name) {
+                    continue;
+                }
+            }
+        }
+
+        let name = entry
+            .path()
+            .strip_prefix(&base)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .into_owned();
+
+        let size = if entry.file_type().is_file() {
+            entry.metadata().ok().map(|m| m.len())
+        } else {
+            None
+        };
+
+        entries.push(DirEntry {
+            name,
+            is_dir: entry.file_type().is_dir(),
+            size,
+        });
+
+        if entries.len() >= max_entries {
+            break;
+        }
+    }
+
+    let truncated = entries.len() >= max_entries;
+    let total = entries.len();
+
+    Ok(ListDirectoryOutput {
+        path: base.to_string_lossy().into_owned(),
+        entries,
+        total,
+        truncated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput};
+    use super::{edit_file, glob_search, grep_search, list_directory, read_file, write_file, GrepSearchInput};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -512,6 +696,71 @@ mod tests {
         let output = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
             .expect("edit should succeed");
         assert!(output.replace_all);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_whitespace() {
+        let path = temp_path("fuzzy-edit.txt");
+        // File has 4-space indentation
+        write_file(
+            path.to_string_lossy().as_ref(),
+            "fn main() {\n    println!(\"hello\");\n}\n",
+        )
+        .expect("write should succeed");
+
+        // Model sends tab indentation instead of spaces — should still match
+        let output = edit_file(
+            path.to_string_lossy().as_ref(),
+            "\tprintln!(\"hello\");",
+            "    println!(\"world\");",
+            false,
+        )
+        .expect("fuzzy edit should succeed");
+        assert!(!output.old_string.contains('\t')); // Should have matched the actual file content
+
+        // Verify the file was actually changed
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(content.contains("world"));
+        assert!(!content.contains("hello"));
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_trailing_whitespace() {
+        let path = temp_path("trailing-edit.txt");
+        write_file(
+            path.to_string_lossy().as_ref(),
+            "line one\nline two\nline three\n",
+        )
+        .expect("write should succeed");
+
+        // Model sends with trailing spaces — should still match
+        let output = edit_file(
+            path.to_string_lossy().as_ref(),
+            "line one  \nline two  ",
+            "LINE ONE\nLINE TWO",
+            false,
+        )
+        .expect("fuzzy edit should succeed");
+        assert!(output.old_string.contains("line one"));
+    }
+
+    #[test]
+    fn edit_file_gives_helpful_error() {
+        let path = temp_path("helpful-error.txt");
+        write_file(
+            path.to_string_lossy().as_ref(),
+            "fn main() {\n    println!(\"hello\");\n}\n",
+        )
+        .expect("write should succeed");
+
+        let err = edit_file(
+            path.to_string_lossy().as_ref(),
+            "completely_wrong_content",
+            "replacement",
+            false,
+        )
+        .expect_err("should fail");
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
@@ -547,5 +796,23 @@ mod tests {
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
+    }
+
+    #[test]
+    fn lists_directory_contents() {
+        let dir = temp_path("list-dir");
+        std::fs::create_dir_all(dir.join("subdir")).expect("subdir should be created");
+        write_file(
+            dir.join("file.txt").to_string_lossy().as_ref(),
+            "hello",
+        )
+        .expect("file write should succeed");
+
+        let output = list_directory(Some(dir.to_string_lossy().as_ref()), Some(1))
+            .expect("list should succeed");
+        assert_eq!(output.total, 2); // file.txt + subdir
+        assert!(output.entries.iter().any(|e| e.name == "file.txt" && !e.is_dir));
+        assert!(output.entries.iter().any(|e| e.name == "subdir" && e.is_dir));
+        assert!(!output.truncated);
     }
 }

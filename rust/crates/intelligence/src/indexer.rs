@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -239,7 +239,7 @@ impl CodebaseIndexer {
         existing: &CodebaseIndex,
         config: &IndexerConfig,
     ) -> Result<(CodebaseIndex, usize), IndexError> {
-        let mut new_index = Self::build_index(workspace_root, config)?;
+        let new_index = Self::build_index(workspace_root, config)?;
         let mut reindexed = 0usize;
 
         for (path, new_entry) in &new_index.files {
@@ -370,7 +370,7 @@ fn is_binary_extension(ext: &str) -> bool {
     )
 }
 
-fn extract_summary(path: &str, content: &str, language: &str) -> (Vec<String>, String) {
+fn extract_summary(_path: &str, content: &str, language: &str) -> (Vec<String>, String) {
     let mut exports = Vec::new();
 
     for line in content.lines().take(500) {

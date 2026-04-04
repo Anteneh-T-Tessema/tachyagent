@@ -3,6 +3,8 @@ mod bootstrap;
 mod compact;
 mod config;
 mod conversation;
+pub mod diff;
+pub mod filelock;
 mod file_ops;
 mod json;
 mod permissions;
@@ -16,6 +18,8 @@ pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
+pub use diff::{UnifiedDiff, DiffHunk, DiffLine};
+pub use filelock::{FileLockManager, LockError};
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, RuntimeConfig,
     TACHY_SETTINGS_SCHEMA_NAME,
@@ -25,9 +29,9 @@ pub use conversation::{
     ToolError, ToolExecutor, TurnSummary,
 };
 pub use file_ops::{
-    edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
-    GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
-    WriteFileOutput,
+    edit_file, glob_search, grep_search, list_directory, read_file, write_file,
+    DirEntry, EditFileOutput, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
+    ListDirectoryOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,

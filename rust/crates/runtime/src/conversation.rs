@@ -136,11 +136,14 @@ where
             .messages
             .push(ConversationMessage::user_text(user_input.into()));
 
+        // Auto-compact if context is getting large (prevents hitting context window limits)
+        self.auto_compact_if_needed();
+
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
         let mut iterations = 0;
         let mut consecutive_errors = 0;
-        const MAX_CONSECUTIVE_ERRORS: u32 = 2;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 3;
 
         loop {
             iterations += 1;
@@ -174,7 +177,10 @@ where
                         }
                         return Err(error);
                     }
-                    // On first error, inject an error message and let the model retry
+                    // Inject a recovery hint so the model can try again
+                    self.session.messages.push(ConversationMessage::user_text(
+                        format!("[System: Previous response failed ({}). Please try again. If you need to use a tool, use the function calling mechanism — do not print JSON as text.]", error)
+                    ));
                     continue;
                 }
             };
@@ -189,6 +195,10 @@ where
                         }
                         return Err(error);
                     }
+                    // Inject recovery hint for malformed responses
+                    self.session.messages.push(ConversationMessage::user_text(
+                        "[System: Your previous response was malformed. Please respond with either plain text or a tool call. Do not mix formats.]".to_string()
+                    ));
                     continue;
                 }
             };
@@ -235,12 +245,35 @@ where
                                     false,
                                 )
                             }
-                            Err(error) => ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                error.to_string(),
-                                true,
-                            ),
+                            Err(error) => {
+                                let err_msg = error.to_string();
+                                // Smart recovery for edit_file: if old_string not found,
+                                // read the file and include its content so the model can
+                                // see what the file actually contains and retry correctly.
+                                let recovery = if tool_name == "edit_file" && err_msg.contains("not found") {
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&input) {
+                                        if let Some(path) = parsed.get("path").and_then(|v| v.as_str()) {
+                                            if let Ok(content) = std::fs::read_to_string(path) {
+                                                let preview = if content.len() > 4000 {
+                                                    format!("{}…\n[truncated, {} total chars]", &content[..4000], content.len())
+                                                } else {
+                                                    content
+                                                };
+                                                Some(format!(
+                                                    "{err_msg}\n\nHere is the actual file content of {path}:\n```\n{preview}\n```\nPlease retry with the correct old_string that matches the file exactly."
+                                                ))
+                                            } else { None }
+                                        } else { None }
+                                    } else { None }
+                                } else { None };
+
+                                ConversationMessage::tool_result(
+                                    tool_use_id,
+                                    tool_name,
+                                    recovery.unwrap_or(err_msg),
+                                    true,
+                                )
+                            }
                         }
                     }
                     PermissionOutcome::Deny { reason } => {
@@ -263,6 +296,24 @@ where
     #[must_use]
     pub fn compact(&self, config: CompactionConfig) -> CompactionResult {
         compact_session(&self.session, config)
+    }
+
+    /// Automatically compact the session if estimated tokens exceed a threshold.
+    /// This prevents hitting context window limits mid-conversation.
+    fn auto_compact_if_needed(&mut self) {
+        let estimated = estimate_session_tokens(&self.session);
+        // Compact when we're using more than ~6K tokens (conservative for local models)
+        // Preserve the last 6 messages to maintain coherence
+        if estimated > 6_000 && self.session.messages.len() > 8 {
+            let config = CompactionConfig {
+                preserve_recent_messages: 6,
+                max_estimated_tokens: 6_000,
+            };
+            let result = compact_session(&self.session, config);
+            if result.removed_message_count > 0 {
+                self.session = result.compacted_session;
+            }
+        }
     }
 
     #[must_use]

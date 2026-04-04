@@ -180,7 +180,7 @@ impl GitTools {
         if !Self::is_git_repo() { return Err(GitError::NotARepo); }
 
         // Stage all
-        let add = Command::new("git").args(["add", "-A"]).output()
+        let _add = Command::new("git").args(["add", "-A"]).output()
             .map_err(|e| GitError::CommandFailed { command: "add".into(), stderr: e.to_string() })?;
 
         // Check if there's anything to commit
@@ -224,7 +224,7 @@ fn parse_status(c: char) -> ChangeStatus {
     }
 }
 
-fn parse_diff_stat(stat: &str, content: &str) -> (Vec<FileDiff>, DiffStats) {
+fn parse_diff_stat(_stat: &str, content: &str) -> (Vec<FileDiff>, DiffStats) {
     let mut files = Vec::new();
     let mut total_ins = 0usize;
     let mut total_del = 0usize;

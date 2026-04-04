@@ -49,13 +49,23 @@ pub struct BashCommandOutput {
 
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     if input.run_in_background.unwrap_or(false) {
-        let child = Command::new("sh")
-            .arg("-lc")
-            .arg(&input.command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let child = if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .arg("/C")
+                .arg(&input.command)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?
+        } else {
+            Command::new("sh")
+                .arg("-lc")
+                .arg(&input.command)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?
+        };
 
         return Ok(BashCommandOutput {
             stdout: String::new(),
@@ -92,8 +102,15 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
 }
 
 async fn execute_bash_async(input: BashCommandInput) -> io::Result<BashCommandOutput> {
-    let mut command = TokioCommand::new("sh");
-    command.arg("-lc").arg(&input.command);
+    let mut command = if cfg!(target_os = "windows") {
+        let mut cmd = TokioCommand::new("cmd");
+        cmd.arg("/C").arg(&input.command);
+        cmd
+    } else {
+        let mut cmd = TokioCommand::new("sh");
+        cmd.arg("-lc").arg(&input.command);
+        cmd
+    };
 
     // Enforce minimum 5 second timeout — local models often send tiny values
     let effective_timeout = input.timeout.map(|t| t.max(5_000));

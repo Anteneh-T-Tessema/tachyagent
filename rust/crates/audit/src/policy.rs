@@ -44,6 +44,9 @@ pub struct GovernancePolicy {
     pub block_destructive_shell: bool,
     /// File path patterns that agents cannot write to.
     pub protected_paths: Vec<String>,
+    /// File path patterns that require human approval before writing.
+    #[serde(default)]
+    pub approval_required_paths: Vec<String>,
 }
 
 impl GovernancePolicy {
@@ -83,6 +86,15 @@ impl GovernancePolicy {
                 "~/.ssh/**".to_string(),
                 "**/.env".to_string(),
                 "**/secrets/**".to_string(),
+            ],
+            approval_required_paths: vec![
+                "**/auth/**".to_string(),
+                "**/security/**".to_string(),
+                "**/crypto/**".to_string(),
+                "**/migrations/**".to_string(),
+                "**/deploy/**".to_string(),
+                "**/Dockerfile".to_string(),
+                "**/.github/**".to_string(),
             ],
         }
     }
@@ -169,6 +181,18 @@ impl GovernancePolicy {
         }
 
         None
+    }
+
+    /// Check if a file path requires human approval before writing.
+    #[must_use]
+    pub fn requires_approval(&self, file_path: &str) -> bool {
+        for pattern in &self.approval_required_paths {
+            let clean = pattern.trim_matches('*');
+            if !clean.is_empty() && file_path.contains(clean) {
+                return true;
+            }
+        }
+        false
     }
 }
 

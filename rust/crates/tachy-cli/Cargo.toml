@@ -9,7 +9,6 @@ publish.workspace = true
 audit = { path = "../audit" }
 backend = { path = "../backend" }
 commands = { path = "../commands" }
-compat-harness = { path = "../compat-harness" }
 crossterm = "0.28"
 daemon = { path = "../daemon" }
 intelligence = { path = "../intelligence" }

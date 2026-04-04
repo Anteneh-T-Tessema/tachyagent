@@ -101,6 +101,8 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
         compacted_session: Session {
             version: session.version,
             messages: compacted_messages,
+            branches: session.branches.clone(),
+            current_branch: session.current_branch.clone(),
         },
         removed_message_count: removed.len(),
     }
@@ -220,7 +222,7 @@ mod tests {
 
     #[test]
     fn leaves_small_sessions_unchanged() {
-        let session = Session {
+        let session = Session { branches: Vec::new(), current_branch: String::new(),
             version: 1,
             messages: vec![ConversationMessage::user_text("hello")],
         };
@@ -233,7 +235,7 @@ mod tests {
 
     #[test]
     fn compacts_older_messages_into_a_system_summary() {
-        let session = Session {
+        let session = Session { branches: Vec::new(), current_branch: String::new(),
             version: 1,
             messages: vec![
                 ConversationMessage::user_text("one ".repeat(200)),

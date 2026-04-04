@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tachy — The Best Local AI Coding Agent</title>
+<meta name="description" content="Local-first AI coding agent powered by Gemma 4. Frontier-level code quality, native tool calling, 256K context — all on your hardware. Zero data leaves your machine.">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --bg: #09090b; --surface: #18181b; --border: #27272a; --text: #fafafa; --muted: #a1a1aa; --accent: #6366f1; --accent2: #818cf8; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+a { color: var(--accent2); text-decoration: none; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+/* Hero */
+.hero { padding: 120px 0 80px; text-align: center; }
+.hero h1 { font-size: 56px; font-weight: 800; letter-spacing: -2px; margin-bottom: 20px; background: linear-gradient(135deg, #fff 0%, var(--accent2) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.hero p { font-size: 20px; color: var(--muted); max-width: 600px; margin: 0 auto 40px; }
+.hero-cta { display: inline-flex; gap: 12px; }
+.btn { padding: 14px 28px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--accent); }
+
+/* Install */
+.install { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; max-width: 520px; margin: 40px auto 0; font-family: 'SF Mono', Monaco, monospace; font-size: 14px; color: var(--muted); }
+.install code { color: var(--accent2); }
+
+/* Features */
+.features { padding: 80px 0; }
+.features h2 { font-size: 36px; font-weight: 700; text-align: center; margin-bottom: 48px; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+.feature { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; }
+.feature h3 { font-size: 18px; margin-bottom: 8px; }
+.feature p { color: var(--muted); font-size: 14px; }
+.feature-icon { font-size: 28px; margin-bottom: 12px; }
+
+/* Comparison */
+.comparison { padding: 80px 0; }
+.comparison h2 { font-size: 36px; font-weight: 700; text-align: center; margin-bottom: 48px; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; }
+th { background: var(--border); padding: 14px 16px; text-align: left; font-size: 14px; }
+td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--muted); }
+td:first-child { color: var(--text); font-weight: 500; }
+
+/* CTA */
+.cta { padding: 80px 0; text-align: center; }
+.cta h2 { font-size: 36px; font-weight: 700; margin-bottom: 16px; }
+.cta p { color: var(--muted); margin-bottom: 32px; }
+
+/* Footer */
+footer { padding: 40px 0; border-top: 1px solid var(--border); text-align: center; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 640px) {
+  .hero h1 { font-size: 36px; }
+  .hero p { font-size: 16px; }
+  .hero-cta { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="container">
+    <h1>The best local AI coding agent</h1>
+    <p>Frontier-level code quality from Gemma 4 — native tool calling, 256K context, plan-and-execute — all running on your hardware. Zero data leaves your machine.</p>
+    <div class="hero-cta">
+      <a href="#install" class="btn btn-primary">Get Started Free</a>
+      <a href="#pricing" class="btn btn-secondary">View Pricing</a>
+    </div>
+    <div class="install" id="install">
+      <code>curl -fsSL https://tachy.dev/install.sh | sh</code><br>
+      <code>tachy init && tachy serve</code>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="container">
+    <h2>Built for regulated environments</h2>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <h3>Tamper-proof audit trail</h3>
+        <p>Every action logged with SHA-256 hash chain. Verify integrity with <code>tachy verify-audit</code>. SOC 2 ready.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🛡️</div>
+        <h3>Governance policies</h3>
+        <p>Block destructive commands, enforce tool rate limits, protect sensitive paths. Policy-as-code via JSON.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🏠</div>
+        <h3>100% on-premise</h3>
+        <p>Single binary. No cloud dependencies. Runs with Ollama on your hardware. Your code never leaves your machine.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🤖</div>
+        <h3>Autonomous agents</h3>
+        <p>Plan → execute → test → commit. Agents break tasks into steps, run tests after edits, and auto-fix failures.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🧠</div>
+        <h3>Frontier open models</h3>
+        <p>Gemma 4 (256K context, native tool calling), Qwen3, Llama 3.1, Mistral — all via Ollama. No API keys needed.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔌</div>
+        <h3>API-first</h3>
+        <p>HTTP API for programmatic access. Plug into CI/CD pipelines, trigger agents via webhooks, automate code review.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="comparison">
+  <div class="container">
+    <h2>How Tachy compares</h2>
+    <table>
+      <tr><th>Capability</th><th>Claude Code</th><th>Cursor</th><th>Continue</th><th>Tachy</th></tr>
+      <tr><td>On-premise</td><td>❌</td><td>❌</td><td>Partial</td><td>✅</td></tr>
+      <tr><td>Audit trail</td><td>❌</td><td>❌</td><td>❌</td><td>✅ SHA-256 chain</td></tr>
+      <tr><td>Governance</td><td>❌</td><td>❌</td><td>❌</td><td>✅ Policy-as-code</td></tr>
+      <tr><td>RBAC</td><td>❌</td><td>❌</td><td>❌</td><td>✅ 3 roles</td></tr>
+      <tr><td>Autonomous agents</td><td>Partial</td><td>❌</td><td>❌</td><td>✅ Plan-execute-verify</td></tr>
+      <tr><td>HTTP API</td><td>❌</td><td>❌</td><td>❌</td><td>✅ 19 endpoints</td></tr>
+      <tr><td>Local models</td><td>❌</td><td>❌</td><td>✅</td><td>✅ Gemma 4, Qwen3, Llama, Mistral</td></tr>
+      <tr><td>Cloud dependency</td><td>Required</td><td>Required</td><td>Optional</td><td>None</td></tr>
+      <tr><td>VS Code extension</td><td>❌</td><td>✅</td><td>✅</td><td>✅</td></tr>
+      <tr><td>Cost</td><td>$200+/mo</td><td>$20/mo</td><td>Free</td><td>7-day free trial, then $29/mo</td></tr>
+    </table>
+  </div>
+</section>
+
+<section class="pricing" id="pricing">
+  <div class="container">
+    <h2>Pricing</h2>
+    <p style="color:#999;margin-bottom:32px">7-day free trial. No credit card required. Cancel anytime.</p>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;justify-content:center">
+      <div style="background:#141416;border:1px solid #2a2a2e;border-radius:12px;padding:32px;flex:1;min-width:260px;max-width:340px">
+        <h3 style="color:#6366f1;margin-bottom:8px">Individual</h3>
+        <div style="font-size:36px;font-weight:700;margin-bottom:4px">$29<span style="font-size:16px;color:#999">/mo</span></div>
+        <div style="color:#999;margin-bottom:24px">or $249/year (save 28%)</div>
+        <ul style="list-style:none;margin-bottom:24px;line-height:2">
+          <li>✓ All features</li>
+          <li>✓ All local models</li>
+          <li>✓ Unlimited tool calls</li>
+          <li>✓ CLI + Web UI + HTTP API</li>
+          <li>✓ Email support</li>
+        </ul>
+        <a href="https://buy.stripe.com/tachy_individual" class="btn btn-primary" style="display:block;text-align:center">Start Free Trial</a>
+      </div>
+      <div style="background:#141416;border:2px solid #6366f1;border-radius:12px;padding:32px;flex:1;min-width:260px;max-width:340px;position:relative">
+        <div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#6366f1;color:white;padding:4px 16px;border-radius:12px;font-size:12px;font-weight:600">MOST POPULAR</div>
+        <h3 style="color:#6366f1;margin-bottom:8px">Team</h3>
+        <div style="font-size:36px;font-weight:700;margin-bottom:4px">$99<span style="font-size:16px;color:#999">/mo</span></div>
+        <div style="color:#999;margin-bottom:24px">up to 10 seats, or $899/year</div>
+        <ul style="list-style:none;margin-bottom:24px;line-height:2">
+          <li>✓ Everything in Individual</li>
+          <li>✓ 10 developer seats</li>
+          <li>✓ RBAC + multi-user</li>
+          <li>✓ Shared audit trail</li>
+          <li>✓ Priority support</li>
+        </ul>
+        <a href="https://buy.stripe.com/tachy_team" class="btn btn-primary" style="display:block;text-align:center">Start Free Trial</a>
+      </div>
+      <div style="background:#141416;border:1px solid #2a2a2e;border-radius:12px;padding:32px;flex:1;min-width:260px;max-width:340px">
+        <h3 style="color:#6366f1;margin-bottom:8px">Enterprise</h3>
+        <div style="font-size:36px;font-weight:700;margin-bottom:4px">Custom</div>
+        <div style="color:#999;margin-bottom:24px">annual contract</div>
+        <ul style="list-style:none;margin-bottom:24px;line-height:2">
+          <li>✓ Everything in Team</li>
+          <li>✓ Unlimited seats</li>
+          <li>✓ SSO / SAML integration</li>
+          <li>✓ Custom governance policies</li>
+          <li>✓ Dedicated support + SLA</li>
+          <li>✓ On-site deployment help</li>
+        </ul>
+        <a href="mailto:sales@tachy.dev" class="btn btn-primary" style="display:block;text-align:center;background:#2a2a2e">Contact Sales</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <h2>Ready to deploy AI agents safely?</h2>
+    <p>7-day free trial. No credit card required.</p>
+    <a href="#install" class="btn btn-primary">Install Tachy</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>Tachy — Enterprise AI Agent Platform. Built in Rust. No unsafe code.</p>
+    <p style="margin-top:8px">Contact: hello@tachy.dev</p>
+  </div>
+</footer>
+
+</body>
+</html>

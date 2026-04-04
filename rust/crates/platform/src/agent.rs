@@ -22,7 +22,12 @@ pub struct AgentTemplate {
     pub max_iterations: usize,
     /// Whether this agent requires human approval before tool execution.
     pub requires_approval: bool,
+    /// Whether to use the plan-and-execute loop (false = simple single-turn).
+    #[serde(default = "default_true")]
+    pub use_planning: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl AgentTemplate {
     #[must_use]
@@ -39,14 +44,16 @@ impl AgentTemplate {
                 "Be specific. Reference line numbers. Suggest fixes."
             ).to_string(),
             allowed_tools: vec![
+                "list_directory".to_string(),
                 "read_file".to_string(),
                 "grep_search".to_string(),
                 "glob_search".to_string(),
                 "bash".to_string(),
             ],
-            model: "llama3.1:8b".to_string(),
+            model: "gemma4:26b".to_string(),
             max_iterations: 10,
             requires_approval: false,
+            use_planning: true,
         }
     }
 
@@ -65,14 +72,16 @@ impl AgentTemplate {
                 "Report findings with severity (critical/high/medium/low), file path, and remediation."
             ).to_string(),
             allowed_tools: vec![
+                "list_directory".to_string(),
                 "read_file".to_string(),
                 "grep_search".to_string(),
                 "glob_search".to_string(),
                 "bash".to_string(),
             ],
-            model: "llama3.1:8b".to_string(),
+            model: "gemma4:26b".to_string(),
             max_iterations: 20,
             requires_approval: false,
+            use_planning: true,
         }
     }
 
@@ -90,15 +99,17 @@ impl AgentTemplate {
                 "Be concise. Use code examples. Follow the project's existing doc style."
             ).to_string(),
             allowed_tools: vec![
+                "list_directory".to_string(),
                 "read_file".to_string(),
                 "write_file".to_string(),
                 "edit_file".to_string(),
                 "grep_search".to_string(),
                 "glob_search".to_string(),
             ],
-            model: "llama3.1:8b".to_string(),
+            model: "gemma4:26b".to_string(),
             max_iterations: 15,
             requires_approval: true,
+            use_planning: true,
         }
     }
 
@@ -122,9 +133,11 @@ impl AgentTemplate {
                 "- write_file: write a file\n",
                 "- edit_file: edit a file\n",
                 "- grep_search: search file contents\n",
-                "- glob_search: find files by pattern\n"
+                "- glob_search: find files by pattern\n",
+                "- list_directory: list files and folders in a directory\n"
             ).to_string(),
             allowed_tools: vec![
+                "list_directory".to_string(),
                 "read_file".to_string(),
                 "write_file".to_string(),
                 "edit_file".to_string(),
@@ -132,9 +145,10 @@ impl AgentTemplate {
                 "glob_search".to_string(),
                 "bash".to_string(),
             ],
-            model: "llama3.1:8b".to_string(),
+            model: "gemma4:26b".to_string(),
             max_iterations: 16,
             requires_approval: false,
+            use_planning: false, // Chat uses simple execution, not planning
         }
     }
 
@@ -152,13 +166,15 @@ impl AgentTemplate {
                 "Always run tests first, then investigate failures."
             ).to_string(),
             allowed_tools: vec![
+                "list_directory".to_string(),
                 "bash".to_string(),
                 "read_file".to_string(),
                 "grep_search".to_string(),
             ],
-            model: "llama3.1:8b".to_string(),
+            model: "gemma4:26b".to_string(),
             max_iterations: 10,
             requires_approval: false,
+            use_planning: true,
         }
     }
 }

@@ -1,0 +1,140 @@
+name: "Tachy Agent"
+description: "Run a Tachy AI agent in your CI pipeline — code review, security scan, test analysis, and more."
+author: "Tachy"
+
+branding:
+  icon: "cpu"
+  color: "purple"
+
+inputs:
+  template:
+    description: "Agent template (code-reviewer, security-scanner, test-runner, doc-writer)"
+    required: true
+  prompt:
+    description: "Prompt for the agent"
+    required: true
+  model:
+    description: "LLM model to use (default: gemma4:26b)"
+    required: false
+    default: "gemma4:26b"
+  version:
+    description: "Tachy version to install (default: latest)"
+    required: false
+    default: "latest"
+  fail-on-error:
+    description: "Fail the step if the agent reports failure"
+    required: false
+    default: "true"
+  max-iterations:
+    description: "Maximum agent iterations"
+    required: false
+    default: "16"
+
+outputs:
+  summary:
+    description: "Agent output summary"
+    value: ${{ steps.run.outputs.summary }}
+  success:
+    description: "Whether the agent succeeded (true/false)"
+    value: ${{ steps.run.outputs.success }}
+  iterations:
+    description: "Number of iterations the agent ran"
+    value: ${{ steps.run.outputs.iterations }}
+  tool-invocations:
+    description: "Number of tool calls made"
+    value: ${{ steps.run.outputs.tool_invocations }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Ollama
+      shell: bash
+      run: |
+        if ! command -v ollama &>/dev/null; then
+          curl -fsSL https://ollama.com/install.sh | sh
+        fi
+
+    - name: Start Ollama
+      shell: bash
+      run: |
+        ollama serve &
+        sleep 3
+        # Pull the model if not cached
+        ollama pull ${{ inputs.model }} || true
+
+    - name: Install Tachy
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          # Get latest release tag
+          VERSION=$(curl -sL https://api.github.com/repos/Anteneh-T-Tessema/tachyagent/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        fi
+        ARCH=$(uname -m)
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        case "$ARCH" in
+          x86_64) ARCH_NAME="x86_64" ;;
+          aarch64|arm64) ARCH_NAME="arm64" ;;
+          *) echo "Unsupported arch: $ARCH"; exit 1 ;;
+        esac
+        ASSET="tachy-${OS}-${ARCH_NAME}.tar.gz"
+        URL="https://github.com/Anteneh-T-Tessema/tachyagent/releases/download/${VERSION}/${ASSET}"
+        echo "Downloading $URL"
+        curl -sL "$URL" -o /tmp/tachy.tar.gz
+        tar xzf /tmp/tachy.tar.gz -C /tmp
+        sudo mv /tmp/tachy /usr/local/bin/tachy
+        chmod +x /usr/local/bin/tachy
+        tachy --version || echo "tachy installed"
+
+    - name: Initialize workspace
+      shell: bash
+      run: tachy init --non-interactive 2>/dev/null || true
+
+    - name: Run agent
+      id: run
+      shell: bash
+      run: |
+        set +e
+        OUTPUT=$(tachy agent \
+          --template "${{ inputs.template }}" \
+          --prompt "${{ inputs.prompt }}" \
+          --model "${{ inputs.model }}" \
+          2>&1)
+        EXIT_CODE=$?
+        set -e
+
+        # Parse output for structured data
+        SUCCESS="false"
+        ITERATIONS="0"
+        TOOL_INVOCATIONS="0"
+        if echo "$OUTPUT" | grep -q "✓ Agent completed"; then
+          SUCCESS="true"
+          ITERATIONS=$(echo "$OUTPUT" | grep -oP '\d+ iteration' | grep -oP '\d+' || echo "0")
+          TOOL_INVOCATIONS=$(echo "$OUTPUT" | grep -oP '\d+ tool call' | grep -oP '\d+' || echo "0")
+        fi
+
+        # Truncate for GitHub output (max 1MB)
+        SUMMARY=$(echo "$OUTPUT" | tail -100)
+
+        # Set outputs
+        echo "success=$SUCCESS" >> "$GITHUB_OUTPUT"
+        echo "iterations=$ITERATIONS" >> "$GITHUB_OUTPUT"
+        echo "tool_invocations=$TOOL_INVOCATIONS" >> "$GITHUB_OUTPUT"
+
+        # Multi-line output
+        {
+          echo "summary<<EOF"
+          echo "$SUMMARY"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        # Print to job log
+        echo "--- Tachy Agent Output ---"
+        echo "$OUTPUT"
+        echo "--- End ---"
+
+        # Fail if requested
+        if [ "${{ inputs.fail-on-error }}" = "true" ] && [ "$SUCCESS" = "false" ]; then
+          echo "::error::Tachy agent failed"
+          exit 1
+        fi

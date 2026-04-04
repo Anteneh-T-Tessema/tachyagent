@@ -134,7 +134,9 @@ impl AgentTemplate {
                 "- edit_file: edit a file\n",
                 "- grep_search: search file contents\n",
                 "- glob_search: find files by pattern\n",
-                "- list_directory: list files and folders in a directory\n"
+                "- list_directory: list files and folders in a directory\n",
+                "- web_search: search the web for documentation, solutions, or information\n",
+                "- web_fetch: fetch and read a web page\n"
             ).to_string(),
             allowed_tools: vec![
                 "list_directory".to_string(),
@@ -144,6 +146,8 @@ impl AgentTemplate {
                 "grep_search".to_string(),
                 "glob_search".to_string(),
                 "bash".to_string(),
+                "web_search".to_string(),
+                "web_fetch".to_string(),
             ],
             model: "gemma4:26b".to_string(),
             max_iterations: 16,

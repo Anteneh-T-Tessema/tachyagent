@@ -1,12 +1,14 @@
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, list_directory, read_file, write_file,
-    BashCommandInput, GrepSearchInput,
+    BashCommandInput, DiffPreview, GrepSearchInput,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub mod custom;
+pub mod web;
 pub use custom::{CustomTool, CustomToolRegistry, CustomToolsFile};
+pub use web::{web_search, web_fetch, WebSearchInput, WebSearchOutput, WebFetchInput, WebFetchOutput};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
@@ -181,6 +183,32 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: "web_search",
+            description: "Search the web and return results with titles, URLs, and snippets. Use this to find documentation, look up error messages, or research solutions.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Max results to return (default: 5)" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "web_fetch",
+            description: "Fetch a URL and extract its text content. Use this to read documentation pages, API references, or any web page.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "URL to fetch (must start with http:// or https://)" },
+                    "max_length": { "type": "integer", "minimum": 100, "maximum": 50000, "description": "Max content length in characters (default: 8000)" }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -193,6 +221,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
         "list_directory" => from_value::<ListDirInput>(input).and_then(run_list_directory),
+        "web_search" => from_value::<WebSearchInput>(input).and_then(run_web_search),
+        "web_fetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -205,7 +235,7 @@ pub fn execute_tool_with_custom(
 ) -> Result<String, String> {
     // Try built-in tools first
     match name {
-        "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search" | "list_directory" => {
+        "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search" | "list_directory" | "web_search" | "web_fetch" => {
             return execute_tool(name, input);
         }
         _ => {}
@@ -215,6 +245,34 @@ pub fn execute_tool_with_custom(
         return custom_registry.execute(name, input);
     }
     Err(format!("unsupported tool: {name}"))
+}
+
+/// Execute a tool and return an optional diff preview for write/edit operations.
+/// This is used by CLI and daemon executors to show/log diffs.
+pub fn execute_tool_with_diff(name: &str, input: &Value) -> Result<(String, Option<DiffPreview>), String> {
+    match name {
+        "write_file" => {
+            let parsed: WriteFileInput = from_value(input)?;
+            let (output, preview) = write_file(&parsed.path, &parsed.content).map_err(io_to_string)?;
+            let json = to_pretty_json(output)?;
+            Ok((json, Some(preview)))
+        }
+        "edit_file" => {
+            let parsed: EditFileInput = from_value(input)?;
+            let (output, preview) = edit_file(
+                &parsed.path,
+                &parsed.old_string,
+                &parsed.new_string,
+                parsed.replace_all.unwrap_or(false),
+            ).map_err(io_to_string)?;
+            let json = to_pretty_json(output)?;
+            Ok((json, Some(preview)))
+        }
+        _ => {
+            let result = execute_tool(name, input)?;
+            Ok((result, None))
+        }
+    }
 }
 
 fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> {
@@ -231,19 +289,19 @@ fn run_read_file(input: ReadFileInput) -> Result<String, String> {
 }
 
 fn run_write_file(input: WriteFileInput) -> Result<String, String> {
-    to_pretty_json(write_file(&input.path, &input.content).map_err(io_to_string)?)
+    let (output, _preview) = write_file(&input.path, &input.content).map_err(io_to_string)?;
+    to_pretty_json(output)
 }
 
 fn run_edit_file(input: EditFileInput) -> Result<String, String> {
-    to_pretty_json(
-        edit_file(
-            &input.path,
-            &input.old_string,
-            &input.new_string,
-            input.replace_all.unwrap_or(false),
-        )
-        .map_err(io_to_string)?,
+    let (output, _preview) = edit_file(
+        &input.path,
+        &input.old_string,
+        &input.new_string,
+        input.replace_all.unwrap_or(false),
     )
+    .map_err(io_to_string)?;
+    to_pretty_json(output)
 }
 
 fn run_glob_search(input: GlobSearchInputValue) -> Result<String, String> {
@@ -297,6 +355,14 @@ struct ListDirInput {
 
 fn run_list_directory(input: ListDirInput) -> Result<String, String> {
     to_pretty_json(list_directory(input.path.as_deref(), input.depth).map_err(io_to_string)?)
+}
+
+fn run_web_search(input: WebSearchInput) -> Result<String, String> {
+    to_pretty_json(web_search(&input)?)
+}
+
+fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
+    to_pretty_json(web_fetch(&input)?)
 }
 
 #[cfg(test)]

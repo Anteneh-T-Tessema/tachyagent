@@ -6,6 +6,7 @@ mod policy_engine;
 mod policy_file;
 mod rbac;
 mod security;
+pub mod sso;
 
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, verify_audit_chain};
 pub use license::{LicenseData, LicenseFile, LicenseStatus, LicenseTier};
@@ -18,3 +19,4 @@ pub use security::{
     hash_api_key, verify_api_key, is_safe_path, redact_sensitive, sanitize_prompt,
     RateLimiter,
 };
+pub use sso::{SsoConfig, SsoManager, SsoSession, SamlAssertion};

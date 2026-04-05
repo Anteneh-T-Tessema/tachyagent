@@ -75,8 +75,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 3.6**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-- [ ] 5. Implement team-scoped RBAC extension (`audit/src/rbac.rs`)
-  - [ ] 5.1 Add `check_team_permission(user_id, team_id, action, team_manager)` function to `audit/src/rbac.rs`
+- [x] 5. Implement team-scoped RBAC extension (`audit/src/rbac.rs`)
+  - [x] 5.1 Add `check_team_permission(user_id, team_id, action, team_manager)` function to `audit/src/rbac.rs`
     - Look up user's role in the specific team via `TeamManager`
     - Deny with 403 reason if Viewer attempts to run an agent
     - Log role changes to `AuditLogger` with kind `"role_change"` including old role, new role, and admin ID
@@ -98,7 +98,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 5.1**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-- [ ] 6. Checkpoint — Teams and RBAC
+- [x] 6. Checkpoint — Teams and RBAC
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 7. Implement Marketplace (`daemon/src/marketplace.rs`)
@@ -185,7 +185,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 10. Extend DaemonState (`daemon/src/state.rs`)
-  - [ ] 10.1 Add `metering`, `billing`, `team_manager`, `marketplace`, and `saas` fields to `DaemonState`
+  - [x] 10.1 Add `metering`, `billing`, `team_manager`, `marketplace`, and `saas` fields to `DaemonState`
     - `metering: MeteringService` — always present
     - `billing: Option<StripeBillingConnector>` — initialized only when Stripe API key is configured
     - `team_manager: TeamManager` — always present
@@ -237,8 +237,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
 - [ ] 12. Checkpoint — HTTP API wiring
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Implement SSO pen tests (`audit/tests/sso_pen_test.rs`)
-  - [ ] 13.1 Create SSO pen test file with security audit tests
+- [x] 13. Implement SSO pen tests (`audit/tests/sso_pen_test.rs`)
+  - [x] 13.1 Create SSO pen test file with security audit tests
     - Test XML entity expansion (billion laughs) rejection without excessive memory allocation
     - Test `<script>` tag in NameID does not propagate unescaped
     - Test forged Issuer rejection with "issuer mismatch" error
@@ -316,8 +316,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 10.2**
     - Test file: `rust/crates/daemon/tests/load_test.rs`
 
-- [ ] 17. Implement load tests (`daemon/tests/load_test.rs`)
-  - [ ] 17.1 Create load test file with parallel executor stress tests
+- [x] 17. Implement load tests (`daemon/tests/load_test.rs`)
+  - [x] 17.1 Create load test file with parallel executor stress tests
     - Test: 20 independent tasks at max concurrency 8, all reach terminal status within 60s (mock agent execution)
     - Test: deep dependency chain (10 sequential tasks), verify strict dependency order
     - Test: 16 concurrent threads acquiring locks on 4 shared files, verify mutual exclusion
@@ -326,7 +326,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Test: `release_all(agent_id)` releases only that agent's locks while other agents' locks remain intact, under 8 concurrent agents
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
-- [ ] 18. Final checkpoint — All tests pass
+- [x] 18. Final checkpoint — All tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

@@ -22,7 +22,7 @@ pub use metering::{MeteringError, MeteringService, UsageAggregate, UsageEvent, U
 pub use policy::{GovernancePolicy, GovernanceViolation, ToolGovernanceRule};
 pub use policy_engine::{PolicyEngine, PolicyDecision, PolicyRule, PolicyRuleType, PolicyAction, FilePatch};
 pub use policy_file::PolicyFile;
-pub use rbac::{check_permission, Action, AccessResult, Role, User, UserStore};
+pub use rbac::{check_permission, check_team_permission, Action, AccessResult, Role, User, UserStore};
 pub use security::{
     hash_api_key, verify_api_key, is_safe_path, redact_sensitive, sanitize_prompt,
     RateLimiter,

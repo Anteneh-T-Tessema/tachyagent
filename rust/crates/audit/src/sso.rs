@@ -416,7 +416,7 @@ fn urlencod(s: &str) -> String {
     out
 }
 
-fn base64_encode(data: &[u8]) -> String {
+pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
@@ -440,7 +440,7 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
     let chars: Vec<u8> = clean.bytes().collect();

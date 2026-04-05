@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager};
+use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService};
 use backend::BackendRegistry;
 use platform::{
     AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace,
@@ -10,7 +10,10 @@ use platform::{
 use runtime::FileLockManager;
 use serde::{Deserialize, Serialize};
 
+use crate::marketplace::Marketplace;
 use crate::mcp_client::McpClientManager;
+use crate::saas::SaaSPlatform;
+use crate::teams::TeamManager;
 
 /// Persisted state — saved to .tachy/state.json on every mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +92,14 @@ pub struct DaemonState {
     pub user_store: audit::UserStore,
     /// MCP client manager for external tool servers.
     pub mcp_client: McpClientManager,
+    /// Usage metering service.
+    pub metering: MeteringService,
+    /// Team workspace manager.
+    pub team_manager: TeamManager,
+    /// Agent marketplace.
+    pub marketplace: Marketplace,
+    /// SaaS platform (None if not in SaaS mode).
+    pub saas: Option<SaaSPlatform>,
 }
 
 impl DaemonState {
@@ -151,6 +162,10 @@ impl DaemonState {
             sso_manager: SsoManager::new(SsoConfig::default()),
             user_store: audit::UserStore::new(),
             mcp_client: McpClientManager::new(),
+            metering: MeteringService::new(AuditLogger::new()),
+            team_manager: TeamManager::new(),
+            marketplace: Marketplace::new(),
+            saas: None,
         })
     }
 

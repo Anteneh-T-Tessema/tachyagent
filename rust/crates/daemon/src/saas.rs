@@ -83,6 +83,7 @@ const DEFAULT_JWT_EXPIRY_SECS: u64 = 86_400;
 
 /// Internal record mapping email to tenant + password hash.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct UserRecord {
     tenant_id: String,
     email: String,

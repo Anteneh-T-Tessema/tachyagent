@@ -73,6 +73,24 @@ pub fn check_permission(role: Role, action: Action) -> AccessResult {
     }
 }
 
+/// Check if a user is allowed to perform an action within a specific team.
+///
+/// The caller must resolve the user's role in the team (via `TeamManager::get_member_role`)
+/// and pass it as `team_role`. If the user is not a member, pass `None`.
+pub fn check_team_permission(
+    user_id: &str,
+    team_id: &str,
+    action: Action,
+    team_role: Option<Role>,
+) -> AccessResult {
+    match team_role {
+        Some(role) => check_permission(role, action),
+        None => AccessResult::Denied {
+            reason: format!("user '{user_id}' is not a member of team '{team_id}'"),
+        },
+    }
+}
+
 /// User store — manages users and API key authentication.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserStore {
@@ -188,5 +206,29 @@ mod tests {
             enabled: false,
         });
         assert!(store.authenticate("key").is_none());
+    }
+
+    #[test]
+    fn team_permission_allows_member_with_role() {
+        let result = check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Developer));
+        assert_eq!(result, AccessResult::Allowed);
+    }
+
+    #[test]
+    fn team_permission_denies_viewer_running_agent() {
+        let result = check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Viewer));
+        assert!(matches!(result, AccessResult::Denied { .. }));
+    }
+
+    #[test]
+    fn team_permission_denies_non_member() {
+        let result = check_team_permission("user-1", "team-1", Action::ListAgents, None);
+        assert!(matches!(result, AccessResult::Denied { ref reason } if reason.contains("not a member")));
+    }
+
+    #[test]
+    fn team_permission_admin_can_manage() {
+        let result = check_team_permission("user-1", "team-1", Action::ManageUsers, Some(Role::Admin));
+        assert_eq!(result, AccessResult::Allowed);
     }
 }

@@ -1,16 +1,22 @@
 pub mod channels;
 mod engine;
 mod http;
+pub mod marketplace;
 pub mod mcp;
 pub mod mcp_client;
 pub mod parallel;
+pub mod saas;
 mod state;
+pub mod teams;
 mod web;
 
 pub use channels::{load_channels, ChannelConfig, ChannelType};
 pub use engine::{AgentEngine, AgentRunResult};
 pub use http::serve;
+pub use marketplace::{Marketplace, MarketplaceError, MarketplaceListing, MarketplaceVersion, InstallResult};
 pub use mcp::run_mcp_server;
 pub use mcp_client::{McpClientManager, McpServerConfig, McpTool};
 pub use parallel::{Orchestrator, ParallelRun, AgentTask, TaskStatus, RunStatus, execute_parallel_run};
+pub use saas::{DashboardSummary, ResourceLimits, SaaSError, SaaSPlatform, Tenant, TenantClaims};
 pub use state::{DaemonState, PendingPatch};
+pub use teams::{Team, TeamMember, TeamManager, TeamError, WorkspaceInvitation};

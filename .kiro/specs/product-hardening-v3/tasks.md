@@ -47,8 +47,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
 - [x] 3. Checkpoint — Metering and billing core
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. Implement TeamManager (`daemon/src/teams.rs`)
-  - [ ] 4.1 Create `Team`, `TeamMember`, `WorkspaceInvitation`, `TeamError` types and `TeamManager` struct
+- [x] 4. Implement TeamManager (`daemon/src/teams.rs`)
+  - [x] 4.1 Create `Team`, `TeamMember`, `WorkspaceInvitation`, `TeamError` types and `TeamManager` struct
     - Implement `create_team` (creator becomes Admin), `invite` (72h expiry token), `join` (validate token, reject expired/used), `update_member_role`, `remove_member`
     - Enforce last-admin invariant: reject removing or demoting the last Admin
     - Store team metadata (ID, name, created_at, member list) with serde Serialize/Deserialize
@@ -101,8 +101,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
 - [ ] 6. Checkpoint — Teams and RBAC
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Implement Marketplace (`daemon/src/marketplace.rs`)
-  - [ ] 7.1 Create `MarketplaceListing`, `MarketplaceVersion`, `MarketplaceError` types and `Marketplace` struct
+- [x] 7. Implement Marketplace (`daemon/src/marketplace.rs`)
+  - [x] 7.1 Create `MarketplaceListing`, `MarketplaceVersion`, `MarketplaceError` types and `Marketplace` struct
     - Implement `publish` with semver validation (`^\d+\.\d+\.\d+$`), conflict detection (same name+version), version history (append-only, latest as default)
     - Implement `search` with optional query filter, pagination, sorted by `average_rating` descending
     - Implement `install` returning the `AgentTemplate` for the requested or default version, with missing tools detection
@@ -150,8 +150,8 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 7.5**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-- [ ] 8. Implement SaaSPlatform (`daemon/src/saas.rs`)
-  - [ ] 8.1 Create `Tenant`, `ResourceLimits`, `SaaSPlatform`, `SaaSError`, `TenantClaims`, `DashboardSummary` types
+- [x] 8. Implement SaaSPlatform (`daemon/src/saas.rs`)
+  - [x] 8.1 Create `Tenant`, `ResourceLimits`, `SaaSPlatform`, `SaaSError`, `TenantClaims`, `DashboardSummary` types
     - Implement `signup` creating tenant with dedicated workspace dir, default config, managed Ollama endpoint
     - Implement `authenticate` with email/password returning JWT (configurable expiry, default 24h)
     - Implement `validate_jwt` verifying token and returning `TenantClaims`
@@ -181,7 +181,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 8.5**
     - Test file: `rust/crates/daemon/tests/saas_test.rs`
 
-- [ ] 9. Checkpoint — Marketplace and SaaS core
+- [x] 9. Checkpoint — Marketplace and SaaS core
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 10. Extend DaemonState (`daemon/src/state.rs`)

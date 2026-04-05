@@ -82,14 +82,21 @@ tachy doctor
 **What you get:**
 
 - Frontier local models — Gemma 4 (256K context, native tool calling, LiveCodeBench 80%)
-- Full audit trail — every prompt, tool call, and response logged to append-only JSONL
-- Intelligence layer — codebase indexing, smart context, plan-and-execute, edit-test-fix
-- Governance policies — block destructive commands, enforce tool rate limits, protect sensitive paths
+- Full audit trail — every prompt, tool call, and response logged to append-only JSONL with SHA-256 hash chain
+- Intelligence layer — codebase indexing, smart context, plan-and-execute, edit-test-fix with LSP diagnostics
+- Governance policies — patch-level policy engine, block destructive commands, protect sensitive paths, human-in-the-loop approval
+- Diff preview — see exactly what the agent wants to change before it writes to disk
+- Parallel execution — run multiple agents concurrently with DAG scheduling and file-level locking
+- SSO/SAML — enterprise authentication with role mapping from IdP groups
+- Web tools — agents can search the web and fetch documentation
 - Model-agnostic — works with any Ollama model (Gemma 4, Qwen3, Llama 3.1, Mistral, etc.)
 - Single binary — no Python, no Node.js, no Docker required
-- 10 built-in tools — bash, file read/write/edit, glob search, grep search, git tools
-- 4 agent templates — code reviewer, security scanner, doc generator, test runner
-- HTTP API — 19 endpoints for programmatic agent management
+- 13 built-in tools — bash, file read/write/edit, glob search, grep search, git tools, web search, web fetch
+- 5 agent templates — code reviewer, security scanner, doc generator, test runner, chat assistant
+- HTTP API — 30+ endpoints for programmatic agent management
+- Python SDK — `pip install tachy-agent` for programmatic access
+- VS Code extension — inline AI code completions from your local model
+- CI/CD GitHub Action — run agents in your CI pipeline
 
 ## Commands
 
@@ -109,14 +116,29 @@ tachy serve [ADDR]                      Start HTTP daemon
 ## HTTP API
 
 ```
-GET  /health                → {"status":"ok","models":19,"agents":0,"tasks":0}
-GET  /api/models            → [{name, backend, supports_tool_use, context_window}]
-GET  /api/templates         → [{name, description, model, tools}]
-GET  /api/agents            → [{id, template, status, iterations, summary}]
-GET  /api/agents/:id        → {id, template, status, iterations, tool_invocations, summary}
-GET  /api/tasks             → [{id, name, schedule, status, run_count}]
-POST /api/agents/run        → 202 {"agent_id":"...","status":"running"} (async)
-POST /api/tasks/schedule    → {"template":"...","name":"...","interval_seconds":N}
+GET  /health                    → daemon health, model count
+GET  /api/models                → available LLM models
+GET  /api/templates             → agent templates
+GET  /api/agents                → list all agents
+GET  /api/agents/:id            → agent status and results
+POST /api/agents/run            → start an agent (async, 202)
+POST /api/complete              → synchronous code completion (for VS Code)
+POST /api/parallel/run          → submit parallel agent DAG
+GET  /api/parallel/runs         → list parallel runs
+GET  /api/parallel/runs/:id     → parallel run status
+POST /api/parallel/runs/:id/cancel → cancel a run
+GET  /api/pending-approvals     → patches + agents awaiting approval
+POST /api/approve               → approve/reject a patch or agent
+GET  /api/file-locks            → active file locks
+GET  /api/auth/sso/login        → redirect to IdP
+POST /api/auth/sso/callback     → process SAML response
+POST /api/auth/sso/logout       → invalidate SSO session
+GET  /api/auth/sso/sessions     → active SSO sessions
+GET  /api/audit                 → audit log
+GET  /api/metrics               → Prometheus metrics
+POST /api/webhooks              → register webhook
+POST /api/tasks/schedule        → schedule an agent
+POST /api/chat/stream           → SSE streaming chat
 ```
 
 ## Configuration
@@ -171,6 +193,36 @@ tachy license
 
 # Activate after purchase
 tachy activate TACHY-<your-key>
+```
+
+## Python SDK
+
+```bash
+pip install tachy-agent
+```
+
+```python
+from tachy import TachyClient, ParallelTask
+
+client = TachyClient("http://localhost:7777")
+run = client.run_agent("code-reviewer", "review src/main.rs")
+agent = client.wait_for_agent(run.agent_id)
+print(agent.summary)
+```
+
+See `sdk/python/` for full documentation.
+
+## VS Code Extension
+
+AI-powered inline code completions from your local Tachy daemon. Install from `vscode-extension/`, then start typing — completions appear as ghost text.
+
+## CI/CD GitHub Action
+
+```yaml
+- uses: Anteneh-T-Tessema/tachyagent/.github/actions/tachy-agent@main
+  with:
+    template: code-reviewer
+    prompt: "Review the changes in this PR"
 ```
 
 ## Architecture

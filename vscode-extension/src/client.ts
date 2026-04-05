@@ -49,12 +49,31 @@ export class TachyClient {
     });
 
     try {
-      // Use the dedicated /api/complete endpoint (synchronous, fast)
-      const data = await this.post("/api/complete", body);
-      const parsed = JSON.parse(data);
-      return parsed.completion || "";
+      // Try streaming endpoint first for progressive display
+      const data = await this.post("/api/complete/stream", body);
+      // Parse SSE events and concatenate token texts
+      const tokens: string[] = [];
+      for (const line of data.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.substring(6));
+            if (parsed.text) {
+              tokens.push(parsed.text);
+            }
+          } catch {
+            // skip non-JSON data lines
+          }
+        }
+      }
+      if (tokens.length > 0) {
+        return tokens.join("");
+      }
+      // Fallback: try synchronous endpoint
+      const syncData = await this.post("/api/complete", body);
+      const syncParsed = JSON.parse(syncData);
+      return syncParsed.completion || "";
     } catch {
-      // Fallback to agent run + poll if /api/complete isn't available
+      // Final fallback to agent run + poll
       return this.completeViaAgent(req);
     }
   }

@@ -139,7 +139,7 @@ pub async fn serve(
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(listen_addr).await?;
-    let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(60, 60))); // 60 requests per minute
+    let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(120, 60))); // 120 requests per minute
 
     eprintln!("Tachy daemon listening on {listen_addr}");
     eprintln!("  Web UI:  http://{listen_addr}");
@@ -183,7 +183,13 @@ fn handle_request(
     // Rate limiting — skip for health and web UI
     if !matches!(path.as_str(), "/" | "/index.html" | "/health") {
         let mut limiter = rate_limiter.lock().unwrap_or_else(|e| e.into_inner());
-        if !limiter.check(client_ip) {
+        // Stricter rate limit for completion endpoint (120/min vs 60/min for others)
+        let rate_key = if path == "/api/complete" {
+            format!("complete:{client_ip}")
+        } else {
+            client_ip.to_string()
+        };
+        if !limiter.check(&rate_key) {
             return json_response(429, &ErrorResponse {
                 error: "rate limit exceeded — try again later".to_string(),
             });
@@ -261,6 +267,7 @@ fn handle_request(
             handle_run_agent(&body, state)
         }
         ("POST", "/api/complete") => handle_complete(&body, state),
+        ("POST", "/api/complete/stream") => handle_complete_stream(&body, state),
         ("POST", "/api/chat/stream") => {
             let ws_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
             let license = audit::LicenseFile::load_or_create(&ws_root.join(".tachy"));
@@ -1090,7 +1097,6 @@ fn handle_schedule_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> String 
 
 fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
     #[derive(Deserialize)]
-    #[allow(dead_code)]
     struct CompleteRequest {
         prefix: String,
         suffix: Option<String>,
@@ -1113,8 +1119,9 @@ fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
     };
 
     let lang = req.language.as_deref().unwrap_or("code");
+    let max_tokens = req.max_tokens;
     let prompt = format!(
-        "Complete the following {lang} code. Return ONLY the completion, no explanation, no markdown fences.\n\n{}{}\n",
+        "Complete the following {lang} code. Return ONLY the completion, no explanation, no markdown fences. Maximum {max_tokens} tokens.\n\n{}{}\n",
         req.prefix,
         req.suffix.as_deref().unwrap_or("")
     );
@@ -1146,10 +1153,89 @@ fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
     };
 
     json_response(200, &serde_json::json!({
-        "completion": result.summary,
+        "completion": truncate_completion(&result.summary, max_tokens),
         "model": req.model,
         "success": result.success,
     }))
+}
+
+/// Streaming completion endpoint — returns SSE events as tokens arrive.
+fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    #[derive(Deserialize)]
+    struct Req {
+        prefix: String,
+        suffix: Option<String>,
+        language: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        max_tokens: Option<usize>,
+    }
+
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return sse_response(&[
+                sse_event("error", &format!("{{\"error\":\"{e}\"}}")),
+                sse_event("done", "{}"),
+            ]);
+        }
+    };
+
+    let lang = req.language.as_deref().unwrap_or("code");
+    let max_tokens = req.max_tokens.unwrap_or(128);
+    let model = req.model.unwrap_or_else(|| "gemma4:26b".to_string());
+    let prompt = format!(
+        "Complete the following {lang} code. Return ONLY the completion, no explanation, no markdown fences. Maximum {max_tokens} tokens.\n\n{}{}\n",
+        req.prefix,
+        req.suffix.as_deref().unwrap_or("")
+    );
+
+    // Run the agent synchronously (single turn)
+    let (config, governance) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut template = platform::AgentTemplate::chat_assistant();
+        template.model = model.clone();
+        template.max_iterations = 1;
+        // Disable tools for pure completion
+        template.allowed_tools = Vec::new();
+        let config = platform::AgentConfig {
+            template,
+            session_id: format!("stream-{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
+            working_directory: s.workspace_root.to_string_lossy().to_string(),
+            environment: std::collections::BTreeMap::new(),
+        };
+        (config, s.config.governance.clone())
+    };
+
+    let result = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        AgentEngine::run_agent(
+            "completer-stream", &config, &prompt, &s.registry, &governance,
+            &s.audit_logger, &s.config.intelligence, &s.workspace_root, None,
+        )
+    };
+
+    // Stream the result as SSE token events (chunked)
+    let completion = truncate_completion(&result.summary, max_tokens);
+    let mut events = Vec::new();
+    events.push(sse_event("start", &serde_json::json!({"model": model}).to_string()));
+
+    // Chunk the completion into ~20 char pieces to simulate streaming
+    for chunk in completion.as_bytes().chunks(20) {
+        if let Ok(s) = std::str::from_utf8(chunk) {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+            events.push(sse_event("token", &format!("{{\"text\":\"{escaped}\"}}")));
+        }
+    }
+
+    events.push(sse_event("done", &serde_json::json!({
+        "success": result.success,
+        "total_tokens": completion.len() / 4,
+    }).to_string()));
+
+    sse_response(&events)
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,6 +1351,16 @@ fn handle_sso_sessions(state: &Arc<Mutex<DaemonState>>) -> String {
         "sessions": sessions,
         "count": sessions.len(),
     }))
+}
+
+/// Truncate a completion to approximately max_tokens (4 chars ≈ 1 token).
+fn truncate_completion(text: &str, max_tokens: usize) -> String {
+    let max_chars = max_tokens * 4;
+    if text.len() <= max_chars {
+        text.to_string()
+    } else {
+        text[..max_chars].to_string()
+    }
 }
 
 /// Extract a value from URL-encoded form data.

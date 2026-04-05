@@ -92,6 +92,9 @@ tr:hover td { background: rgba(99,102,241,0.05); }
     <div class="nav-item" onclick="showPage('agents')">🤖 Agents</div>
     <div class="nav-item" onclick="showPage('models')">🧠 Models</div>
     <div class="nav-item" onclick="showPage('audit')">📋 Audit Log</div>
+    <div class="nav-section">Operations</div>
+    <div class="nav-item" onclick="showPage('parallel')">⚡ Parallel Runs</div>
+    <div class="nav-item" onclick="showPage('approvals')">✅ Approvals</div>
     <div class="nav-section">System</div>
     <div class="nav-item" onclick="showPage('dashboard')">📊 Dashboard</div>
   </div>
@@ -151,6 +154,34 @@ tr:hover td { background: rgba(99,102,241,0.05); }
       </div>
     </div>
 
+    <!-- Parallel Runs Page -->
+    <div id="page-parallel" class="content" style="display:none">
+      <div class="card">
+        <h3>Parallel Runs</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">DAG-scheduled parallel agent execution. Tasks run concurrently with dependency ordering.</p>
+        <table><thead><tr><th>Run ID</th><th>Status</th><th>Tasks</th><th>Actions</th></tr></thead>
+        <tbody id="parallel-table"><tr><td colspan="4" style="color:var(--muted)">Loading...</td></tr></tbody></table>
+      </div>
+      <div class="card" id="parallel-detail" style="display:none">
+        <h3>Run Details</h3>
+        <div id="parallel-tasks"></div>
+      </div>
+      <div class="card">
+        <h3>File Locks</h3>
+        <table><thead><tr><th>File</th><th>Agent</th></tr></thead>
+        <tbody id="locks-table"><tr><td colspan="2" style="color:var(--muted)">No active locks</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <!-- Approvals Page -->
+    <div id="page-approvals" class="content" style="display:none">
+      <div class="card">
+        <h3>Pending Approvals</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Patches and agents awaiting human review from the policy engine.</p>
+        <div id="approvals-list"><p style="color:var(--muted)">Loading...</p></div>
+      </div>
+    </div>
+
     <!-- Dashboard Page -->
     <div id="page-dashboard" class="content" style="display:none">
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
@@ -190,17 +221,19 @@ function authFetch(url, opts) {
 function showPage(page) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   event.target.classList.add('active');
-  ['chat','agents','models','audit','dashboard'].forEach(p => {
+  ['chat','agents','models','audit','dashboard','parallel','approvals'].forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.style.display = p === page ? (p === 'chat' ? 'flex' : 'block') : 'none';
   });
-  document.getElementById('page-title').textContent = {chat:'Chat',agents:'Agents',models:'Models',audit:'Audit Log',dashboard:'Dashboard'}[page];
+  document.getElementById('page-title').textContent = {chat:'Chat',agents:'Agents',models:'Models',audit:'Audit Log',dashboard:'Dashboard',parallel:'Parallel Runs',approvals:'Approvals'}[page];
   currentPage = page;
   if (page === 'models') loadModels();
   if (page === 'agents') loadAgents();
   if (page === 'dashboard') loadDashboard();
   if (page === 'audit') loadAudit();
   if (page === 'audit') loadAuditLog();
+  if (page === 'parallel') loadParallelRuns();
+  if (page === 'approvals') loadApprovals();
 }
 
 // Health check
@@ -321,6 +354,84 @@ async function loadDashboard() {
       ).join('');
     }
   } catch(e) {}
+}
+
+// Parallel Runs
+async function loadParallelRuns() {
+  try {
+    const r = await authFetch(API + '/api/parallel/runs');
+    const data = await r.json();
+    const runs = data.runs || [];
+    const tbody = document.getElementById('parallel-table');
+    if (runs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No parallel runs</td></tr>';
+    } else {
+      tbody.innerHTML = runs.map(r =>
+        `<tr><td>${r.agent_id||r.run_id||''}</td><td>${r.status}</td><td>${r.task_count||'-'}</td><td><button onclick="viewParallelRun('${r.agent_id||r.run_id||''}')" style="background:var(--accent);color:white;border:none;padding:4px 12px;border-radius:4px;cursor:pointer">View</button></td></tr>`
+      ).join('');
+    }
+    // Load file locks
+    const lr = await authFetch(API + '/api/file-locks');
+    const locks = await lr.json();
+    const ltbody = document.getElementById('locks-table');
+    if ((locks.locks||[]).length === 0) {
+      ltbody.innerHTML = '<tr><td colspan="2" style="color:var(--muted)">No active locks</td></tr>';
+    } else {
+      ltbody.innerHTML = locks.locks.map(l => `<tr><td>${l.file}</td><td>${l.agent_id}</td></tr>`).join('');
+    }
+  } catch(e) { console.error('Failed to load parallel runs', e); }
+}
+
+async function viewParallelRun(runId) {
+  try {
+    const r = await authFetch(API + '/api/parallel/runs/' + runId);
+    const data = await r.json();
+    const detail = document.getElementById('parallel-detail');
+    detail.style.display = 'block';
+    document.getElementById('parallel-tasks').innerHTML = (data.tasks||[]).map(t =>
+      `<div style="padding:8px;border-bottom:1px solid var(--border)"><strong>${t.task_id}</strong> (${t.template}) — ${t.status}<br><span style="color:var(--muted);font-size:12px">${(t.summary||'').substring(0,200)}</span></div>`
+    ).join('');
+  } catch(e) { console.error('Failed to load run', e); }
+}
+
+// Approvals
+async function loadApprovals() {
+  try {
+    const r = await authFetch(API + '/api/pending-approvals');
+    const data = await r.json();
+    const items = data.pending || data || [];
+    const container = document.getElementById('approvals-list');
+    if (items.length === 0) {
+      container.innerHTML = '<p style="color:var(--muted)">No pending approvals</p>';
+      return;
+    }
+    container.innerHTML = items.map(item => {
+      const id = item.patch_id || item.agent_id || '';
+      const isPatch = item.type === 'patch';
+      return `<div class="card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <strong>${isPatch ? '📄 Patch' : '🤖 Agent'}: ${id}</strong>
+            ${item.file_path ? `<br><code>${item.file_path}</code>` : ''}
+            <br><span style="color:var(--muted);font-size:13px">${item.reason||''}</span>
+            ${item.diff_summary ? `<br><span style="font-size:12px">+${item.additions||0} -${item.deletions||0}</span>` : ''}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onclick="approveItem('${id}', ${isPatch}, true)" style="background:var(--success);color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Approve</button>
+            <button onclick="approveItem('${id}', ${isPatch}, false)" style="background:var(--error);color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Reject</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.error('Failed to load approvals', e); }
+}
+
+async function approveItem(id, isPatch, approved) {
+  try {
+    const body = isPatch ? {patch_id: id, approved} : {agent_id: id, approved};
+    await authFetch(API + '/api/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    loadApprovals();
+  } catch(e) { console.error('Approval failed', e); }
 }
 
 // Chat

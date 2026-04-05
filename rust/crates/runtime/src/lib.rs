@@ -10,6 +10,7 @@ mod json;
 mod permissions;
 mod prompt;
 mod session;
+pub mod transaction;
 mod usage;
 
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
@@ -20,6 +21,7 @@ pub use compact::{
 };
 pub use diff::{UnifiedDiff, DiffHunk, DiffLine};
 pub use filelock::{FileLockManager, LockError};
+pub use transaction::{EditTransaction, PendingEdit, TransactionError};
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, RuntimeConfig,
     TACHY_SETTINGS_SCHEMA_NAME,

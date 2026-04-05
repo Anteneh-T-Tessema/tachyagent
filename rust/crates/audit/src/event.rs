@@ -23,6 +23,8 @@ pub enum AuditEventKind {
     SessionCompacted,
     ConfigChange,
     ModelSwitch,
+    UsageMetering,
+    RoleChange,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

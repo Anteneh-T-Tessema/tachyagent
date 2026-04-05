@@ -7,6 +7,7 @@ mod policy_file;
 mod rbac;
 mod security;
 pub mod sso;
+pub mod telemetry;
 
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, verify_audit_chain};
 pub use license::{LicenseData, LicenseFile, LicenseStatus, LicenseTier};
@@ -20,3 +21,4 @@ pub use security::{
     RateLimiter,
 };
 pub use sso::{SsoConfig, SsoManager, SsoSession, SamlAssertion};
+pub use telemetry::{TelemetryCollector, TelemetryConfig, TelemetryEvent, TelemetrySummary};

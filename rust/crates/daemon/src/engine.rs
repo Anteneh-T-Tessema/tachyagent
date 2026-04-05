@@ -791,6 +791,18 @@ impl ToolExecutor for IntelligentToolExecutor {
             return self.custom_tools.execute(tool_name, &value).map_err(ToolError::new);
         }
 
+        // Handle MCP tools (mcp__<server>__<tool>)
+        if tool_name.starts_with("mcp__") {
+            let value: serde_json::Value = serde_json::from_str(input)
+                .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+            if let Some(ref ds) = self.daemon_state {
+                let mut s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                return s.mcp_client.call_tool(tool_name, &value)
+                    .map_err(ToolError::new);
+            }
+            return Err(ToolError::new("MCP tools not available in this context"));
+        }
+
         // Standard built-in tools — use diff-aware execution for write/edit
         let value: serde_json::Value = serde_json::from_str(input)
             .map_err(|e| ToolError::new(format!("invalid tool input: {e}")))?;

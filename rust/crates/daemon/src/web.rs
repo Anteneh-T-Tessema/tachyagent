@@ -79,8 +79,17 @@ tr:hover td { background: rgba(99,102,241,0.05); }
 
 /* Responsive */
 @media (max-width: 768px) {
-  .sidebar { display: none; }
+  .app { flex-direction: column; }
+  .sidebar { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; z-index: 100; }
+  .sidebar.open { display: flex; }
+  .main { width: 100%; }
   .message { max-width: 95%; }
+  .card { padding: 12px; }
+  table { font-size: 13px; }
+  th, td { padding: 6px 8px; }
+  .header { padding: 8px 12px; }
+  .chat-input { padding: 8px; }
+  .chat-input input { font-size: 14px; }
 }
 </style>
 </head>

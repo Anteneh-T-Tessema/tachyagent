@@ -255,6 +255,8 @@ fn handle_request(
         ("POST", "/api/auth/sso/callback") => handle_sso_callback(&body, state),
         ("POST", "/api/auth/sso/logout") => handle_sso_logout(&body, state),
         ("GET", "/api/auth/sso/sessions") => handle_sso_sessions(state),
+        ("POST", "/api/license/activate") => handle_license_activate(&body, state),
+        ("GET", "/api/license/status") => handle_license_status(state),
         ("POST", "/api/agents/run") => {
             // License check for agent execution
             let ws_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
@@ -1373,6 +1375,52 @@ fn extract_form_value(body: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// License handlers
+// ---------------------------------------------------------------------------
+
+fn handle_license_activate(body: &str, state: &Arc<Mutex<DaemonState>>) -> String {
+    #[derive(Deserialize)]
+    struct Req { key: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return json_response(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let tachy_dir = s.workspace_root.join(".tachy");
+    let mut license = audit::LicenseFile::load_or_create(&tachy_dir);
+
+    // Use the default license secret (same as the license server)
+    let secret = std::env::var("TACHY_LICENSE_SECRET")
+        .unwrap_or_else(|_| "tachy-license-secret-v1".to_string());
+
+    match license.activate(&req.key, &secret) {
+        Ok(data) => {
+            s.audit_logger.log(
+                &audit::AuditEvent::new("daemon", audit::AuditEventKind::ConfigChange,
+                    format!("license activated: {:?}", data.tier)),
+            );
+            json_response(200, &serde_json::json!({
+                "ok": true,
+                "status": license.status().display(),
+                "tier": format!("{:?}", data.tier),
+            }))
+        }
+        Err(e) => json_response(400, &ErrorResponse { error: e }),
+    }
+}
+
+fn handle_license_status(state: &Arc<Mutex<DaemonState>>) -> String {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let tachy_dir = s.workspace_root.join(".tachy");
+    let license = audit::LicenseFile::load_or_create(&tachy_dir);
+    json_response(200, &serde_json::json!({
+        "status": license.status().display(),
+        "active": license.status().is_active(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

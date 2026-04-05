@@ -1,0 +1,233 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tachy Agent API",
+    "version": "0.2.0",
+    "description": "Local-first AI agent platform API"
+  },
+  "servers": [{"url": "http://localhost:7777"}],
+  "security": [{"bearerAuth": []}],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {"error": {"type": "string"}}
+      },
+      "RunAgentRequest": {
+        "type": "object",
+        "required": ["template", "prompt"],
+        "properties": {
+          "template": {"type": "string"},
+          "prompt": {"type": "string"},
+          "model": {"type": "string"}
+        }
+      },
+      "CompleteRequest": {
+        "type": "object",
+        "required": ["prefix"],
+        "properties": {
+          "prefix": {"type": "string"},
+          "suffix": {"type": "string"},
+          "language": {"type": "string"},
+          "model": {"type": "string", "default": "gemma4:26b"},
+          "max_tokens": {"type": "integer", "default": 128}
+        }
+      },
+      "ParallelRunRequest": {
+        "type": "object",
+        "required": ["tasks"],
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["template", "prompt"],
+              "properties": {
+                "template": {"type": "string"},
+                "prompt": {"type": "string"},
+                "model": {"type": "string"},
+                "deps": {"type": "array", "items": {"type": "string"}},
+                "priority": {"type": "integer", "default": 5}
+              }
+            }
+          },
+          "max_concurrency": {"type": "integer", "default": 4}
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {"200": {"description": "Daemon health status"}}
+      }
+    },
+    "/api/models": {
+      "get": {
+        "summary": "List available LLM models",
+        "responses": {"200": {"description": "Array of model objects"}}
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "summary": "List agent templates",
+        "responses": {"200": {"description": "Array of template objects"}}
+      }
+    },
+    "/api/agents": {
+      "get": {
+        "summary": "List all agents",
+        "responses": {"200": {"description": "Array of agent objects"}}
+      }
+    },
+    "/api/agents/{id}": {
+      "get": {
+        "summary": "Get agent status",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Agent details"}, "404": {"description": "Not found"}}
+      }
+    },
+    "/api/agents/run": {
+      "post": {
+        "summary": "Start an agent (async)",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunAgentRequest"}}}},
+        "responses": {"202": {"description": "Agent started"}, "400": {"description": "Invalid request"}}
+      }
+    },
+    "/api/complete": {
+      "post": {
+        "summary": "Synchronous code completion",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CompleteRequest"}}}},
+        "responses": {"200": {"description": "Completion result"}}
+      }
+    },
+    "/api/complete/stream": {
+      "post": {
+        "summary": "Streaming code completion (SSE)",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CompleteRequest"}}}},
+        "responses": {"200": {"description": "SSE token stream"}}
+      }
+    },
+    "/api/parallel/run": {
+      "post": {
+        "summary": "Submit parallel agent run",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ParallelRunRequest"}}}},
+        "responses": {"202": {"description": "Run started"}}
+      }
+    },
+    "/api/parallel/runs": {
+      "get": {
+        "summary": "List parallel runs",
+        "responses": {"200": {"description": "Array of runs"}}
+      }
+    },
+    "/api/parallel/runs/{id}": {
+      "get": {
+        "summary": "Get parallel run status",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Run details"}}
+      }
+    },
+    "/api/parallel/runs/{id}/cancel": {
+      "post": {
+        "summary": "Cancel a parallel run",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Cancellation result"}}
+      }
+    },
+    "/api/pending-approvals": {
+      "get": {
+        "summary": "List pending approvals",
+        "responses": {"200": {"description": "Pending patches and agents"}}
+      }
+    },
+    "/api/approve": {
+      "post": {
+        "summary": "Approve or reject a pending item",
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"patch_id": {"type": "string"}, "agent_id": {"type": "string"}, "approved": {"type": "boolean"}}}}}},
+        "responses": {"200": {"description": "Approval result"}}
+      }
+    },
+    "/api/file-locks": {
+      "get": {
+        "summary": "List active file locks",
+        "responses": {"200": {"description": "Active locks"}}
+      }
+    },
+    "/api/auth/sso/login": {
+      "get": {
+        "summary": "Redirect to IdP login",
+        "responses": {"302": {"description": "Redirect to SAML IdP"}}
+      }
+    },
+    "/api/auth/sso/callback": {
+      "post": {
+        "summary": "Process SAML response",
+        "responses": {"200": {"description": "Session token"}, "401": {"description": "Auth failed"}}
+      }
+    },
+    "/api/auth/sso/logout": {
+      "post": {
+        "summary": "Invalidate SSO session",
+        "responses": {"200": {"description": "Logged out"}}
+      }
+    },
+    "/api/auth/sso/sessions": {
+      "get": {
+        "summary": "List active SSO sessions",
+        "responses": {"200": {"description": "Active sessions"}}
+      }
+    },
+    "/api/license/activate": {
+      "post": {
+        "summary": "Activate a license key",
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}}}},
+        "responses": {"200": {"description": "Activation result"}}
+      }
+    },
+    "/api/license/status": {
+      "get": {
+        "summary": "Get license status",
+        "responses": {"200": {"description": "License info"}}
+      }
+    },
+    "/api/audit": {
+      "get": {
+        "summary": "View audit log",
+        "responses": {"200": {"description": "Audit events"}}
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "summary": "Prometheus-format metrics",
+        "responses": {"200": {"description": "Metrics text"}}
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "summary": "List webhooks",
+        "responses": {"200": {"description": "Webhook list"}}
+      },
+      "post": {
+        "summary": "Register a webhook",
+        "responses": {"200": {"description": "Webhook created"}}
+      }
+    },
+    "/api/tasks": {
+      "get": {
+        "summary": "List scheduled tasks",
+        "responses": {"200": {"description": "Task list"}}
+      }
+    },
+    "/api/tasks/schedule": {
+      "post": {
+        "summary": "Schedule an agent",
+        "responses": {"200": {"description": "Task created"}}
+      }
+    }
+  }
+}

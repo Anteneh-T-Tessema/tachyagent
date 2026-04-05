@@ -10,6 +10,8 @@ use platform::{
 use runtime::FileLockManager;
 use serde::{Deserialize, Serialize};
 
+use crate::mcp_client::McpClientManager;
+
 /// Persisted state — saved to .tachy/state.json on every mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedState {
@@ -85,6 +87,8 @@ pub struct DaemonState {
     pub sso_manager: SsoManager,
     /// User store for RBAC.
     pub user_store: audit::UserStore,
+    /// MCP client manager for external tool servers.
+    pub mcp_client: McpClientManager,
 }
 
 impl DaemonState {
@@ -146,6 +150,7 @@ impl DaemonState {
             patch_counter: 0,
             sso_manager: SsoManager::new(SsoConfig::default()),
             user_store: audit::UserStore::new(),
+            mcp_client: McpClientManager::new(),
         })
     }
 

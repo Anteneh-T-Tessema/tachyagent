@@ -635,4 +635,69 @@ mod tests {
         let err = mgr.process_callback(&b64, &mut user_store).unwrap_err();
         assert!(err.contains("issuer mismatch"));
     }
+
+    // --- Edge case / fuzz-like tests for SAML parser ---
+
+    #[test]
+    fn parse_empty_xml() {
+        let result = super::parse_saml_response("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_xml_without_nameid() {
+        let xml = "<samlp:Response><saml:Issuer>idp</saml:Issuer></samlp:Response>";
+        let result = super::parse_saml_response(xml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_xml_with_nested_tags() {
+        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let result = super::parse_saml_response(xml).unwrap();
+        assert_eq!(result.subject_name_id, "user@test.com");
+    }
+
+    #[test]
+    fn parse_xml_with_special_chars_in_nameid() {
+        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user+tag@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let result = super::parse_saml_response(xml).unwrap();
+        assert_eq!(result.subject_name_id, "user+tag@test.com");
+    }
+
+    #[test]
+    fn parse_xml_with_no_attributes() {
+        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>u@t.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let result = super::parse_saml_response(xml).unwrap();
+        assert!(result.attributes.is_empty());
+        assert!(result.groups.is_empty());
+    }
+
+    #[test]
+    fn parse_xml_with_multiple_attributes() {
+        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>u@t.com</saml:NameID></saml:Subject><saml:AttributeStatement><saml:Attribute Name="email"><saml:AttributeValue>u@t.com</saml:AttributeValue></saml:Attribute><saml:Attribute Name="name"><saml:AttributeValue>User</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion></samlp:Response>"#;
+        let result = super::parse_saml_response(xml).unwrap();
+        assert_eq!(result.attributes.get("email").unwrap(), "u@t.com");
+        assert_eq!(result.attributes.get("name").unwrap(), "User");
+    }
+
+    #[test]
+    fn parse_malformed_base64_rejected() {
+        let config = SsoConfig { enabled: true, ..SsoConfig::default() };
+        let mut mgr = SsoManager::new(config);
+        let mut users = UserStore::new();
+        let err = mgr.process_callback("not-valid-base64!!!", &mut users).unwrap_err();
+        assert!(err.contains("invalid") || err.contains("base64") || err.contains("UTF-8"));
+    }
+
+    #[test]
+    fn parse_binary_garbage_rejected() {
+        let config = SsoConfig { enabled: true, ..SsoConfig::default() };
+        let mut mgr = SsoManager::new(config);
+        let mut users = UserStore::new();
+        // Valid base64 but not XML
+        let b64 = super::base64_encode(b"\x00\x01\x02\x03binary garbage");
+        let err = mgr.process_callback(&b64, &mut users).unwrap_err();
+        assert!(err.contains("missing") || err.contains("NameID"));
+    }
 }

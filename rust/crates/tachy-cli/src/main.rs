@@ -103,6 +103,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::ListTools => list_tools(),
         CliAction::ListChannels => list_channels(),
         CliAction::McpServer => daemon::run_mcp_server(),
+        CliAction::McpConnect { server } => run_mcp_connect(server.as_deref())?,
+        CliAction::PublishAgent { path } => publish_agent(&path)?,
         CliAction::Activate { key } => activate_license(&key)?,
         CliAction::LicenseStatus => show_license_status()?,
         CliAction::Help => print_help(),
@@ -147,6 +149,8 @@ enum CliAction {
     ListTools,
     ListChannels,
     McpServer,
+    McpConnect { server: Option<String> },
+    PublishAgent { path: String },
     Activate { key: String },
     LicenseStatus,
     Help,
@@ -168,6 +172,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             flag if flag.starts_with("--model=") => {
                 model = flag[8..].to_string();
+                index += 1;
+            }
+            "--json" => {
+                // Set global JSON output mode
+                std::env::set_var("TACHY_OUTPUT_JSON", "1");
                 index += 1;
             }
             other => {
@@ -220,6 +229,14 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "tools" => Ok(CliAction::ListTools),
         "channels" => Ok(CliAction::ListChannels),
         "mcp-server" => Ok(CliAction::McpServer),
+        "mcp-connect" => {
+            let server = rest.get(1).map(|s| s.to_string());
+            Ok(CliAction::McpConnect { server })
+        }
+        "publish" => {
+            let path = rest.get(1).ok_or("usage: publish <agent.yaml>")?;
+            Ok(CliAction::PublishAgent { path: path.to_string() })
+        }
         "activate" => {
             let key = rest.get(1).ok_or("usage: activate <LICENSE_KEY>")?;
             Ok(CliAction::Activate { key: key.clone() })
@@ -845,8 +862,24 @@ fn list_tools() {
     }
 }
 
+fn json_output_enabled() -> bool {
+    std::env::var("TACHY_OUTPUT_JSON").map(|v| v == "1").unwrap_or(false)
+}
+
 fn list_models() {
     let registry = BackendRegistry::with_defaults();
+    if json_output_enabled() {
+        let models: Vec<serde_json::Value> = registry.list_models().iter().map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "backend": format!("{:?}", m.backend),
+                "context_window": m.context_window,
+                "supports_tool_use": m.supports_tool_use,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&models).unwrap_or_default());
+        return;
+    }
     println!("Available models:\n");
     for model in registry.list_models() {
         let tools = if model.supports_tool_use { "tools" } else { "no-tools" };
@@ -952,6 +985,88 @@ fn run_doctor() {
 
 fn run_pull(model: &str) -> Result<(), Box<dyn std::error::Error>> {
     backend::pull_model(model).map_err(|e| e.into())
+}
+
+fn publish_agent(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::path::Path::new(path);
+    if !source.exists() {
+        return Err(format!("file not found: {path}").into());
+    }
+
+    let content = std::fs::read_to_string(source)?;
+
+    // Extract name from YAML (simple: look for "name: <value>")
+    let name = content.lines()
+        .find(|l| l.trim_start().starts_with("name:"))
+        .and_then(|l| l.split(':').nth(1))
+        .map(|v| v.trim().trim_matches('"').trim_matches('\'').to_string())
+        .or_else(|| {
+            // Try JSON
+            serde_json::from_str::<serde_json::Value>(&content).ok()
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+        })
+        .ok_or("agent file must have a 'name' field")?;
+
+    // Copy to .tachy/agents/
+    let agents_dir = env::current_dir()?.join(".tachy").join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+    let dest = agents_dir.join(format!("{name}.yaml"));
+    std::fs::copy(source, &dest)?;
+
+    if json_output_enabled() {
+        println!("{}", serde_json::json!({"name": name, "path": dest.to_string_lossy()}));
+    } else {
+        println!("Published agent '{}' to {}", name, dest.display());
+    }
+    Ok(())
+}
+
+fn run_mcp_connect(server_filter: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let tachy_dir = env::current_dir()?.join(".tachy");
+    let config_path = tachy_dir.join("config.json");
+
+    // Load MCP server configs from .tachy/config.json
+    let configs: Vec<daemon::McpServerConfig> = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        let parsed: serde_json::Value = serde_json::from_str(&content)?;
+        if let Some(servers) = parsed.get("mcp_servers").and_then(|v| v.as_array()) {
+            servers.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .filter(|s: &daemon::McpServerConfig| {
+                    server_filter.map_or(true, |f| s.name == f)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    if configs.is_empty() {
+        if server_filter.is_some() {
+            println!("No MCP server matching '{}' found in .tachy/config.json", server_filter.unwrap());
+        } else {
+            println!("No MCP servers configured. Add to .tachy/config.json:");
+            println!(r#"  "mcp_servers": [{{"name": "example", "command": "uvx", "args": ["mcp-server-example"]}}]"#);
+        }
+        return Ok(());
+    }
+
+    println!("Connecting to {} MCP server(s)...\n", configs.len());
+    let mgr = daemon::McpClientManager::connect_all(&configs);
+    let tools = mgr.all_tools();
+
+    if tools.is_empty() {
+        println!("Connected but no tools discovered.");
+    } else {
+        println!("Discovered {} tool(s):\n", tools.len());
+        for tool in &tools {
+            println!("  {} — {}", tool.qualified_name(), tool.description);
+        }
+    }
+    println!("\nMCP connection test complete.");
+    Ok(())
 }
 
 fn verify_audit() -> Result<(), Box<dyn std::error::Error>> {
@@ -1106,6 +1221,20 @@ fn show_license_status() -> Result<(), Box<dyn std::error::Error>> {
 
 fn list_agents() {
     let config = PlatformConfig::default();
+    if json_output_enabled() {
+        let agents: Vec<serde_json::Value> = config.agent_templates.iter().map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "model": t.model,
+                "max_iterations": t.max_iterations,
+                "requires_approval": t.requires_approval,
+                "allowed_tools": t.allowed_tools,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&agents).unwrap_or_default());
+        return;
+    }
     println!("Built-in agent templates:\n");
     for template in &config.agent_templates {
         println!("  {}", template.name);

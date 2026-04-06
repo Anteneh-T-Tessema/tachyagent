@@ -11,6 +11,8 @@ use crate::openai_compat::OpenAiCompatBackend;
 #[serde(rename_all = "snake_case")]
 pub enum BackendKind {
     Ollama,
+    /// OpenAI-compatible local server (vLLM, LM Studio, llama.cpp).
+    /// Configured via .tachy/config.json — not used by default.
     OpenAiCompat,
 }
 
@@ -38,15 +40,16 @@ pub struct ModelEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTier {
-    /// Frontier-class local model (Gemma 4 31B, Qwen3-coder:30b)
+    /// Frontier-class local model (Gemma 4 31B, Qwen3-coder:30b).
     Frontier,
-    /// Strong general-purpose (Gemma 4 26B MoE, Qwen3:8b)
+    /// Strong general-purpose model (Gemma 4 26B MoE, Qwen3:8b, Mistral:7b).
     #[default]
     Standard,
-    /// Fast/small for simple tasks (Gemma 4 E4B, Qwen3.5:4b, Llama3.2:3b)
+    /// Fast/small edge model (Gemma 4 E4B, Llama3.2:3b).
     Fast,
 }
 
+#[derive(Clone)]
 pub struct BackendRegistry {
     configs: BTreeMap<String, BackendConfig>,
     models: Vec<ModelEntry>,
@@ -143,8 +146,9 @@ impl BackendRegistry {
         }
     }
 
-    /// Build a default registry optimized for local-first agentic coding.
-    /// All models run via Ollama on your own hardware. No cloud dependencies.
+    /// Build a default registry — all models run locally via Ollama.
+    /// No cloud, no Gemini API. Families: Gemma 4, Qwen3, Llama 3, Mistral.
+    /// Default model: gemma4:26b  (recommended — 256K ctx, MoE fast).
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
@@ -159,8 +163,7 @@ impl BackendRegistry {
             },
         );
 
-        // Optional: OpenAI-compatible backend for vLLM, LM Studio, etc.
-        // Users configure via .tachy/config.json
+        // OpenAI-compatible local server — disabled by default, opt-in via config.
         registry.register_backend(
             "openai-compat",
             BackendConfig {
@@ -171,15 +174,14 @@ impl BackendRegistry {
             },
         );
 
-        // ── Tier 1: Frontier local models ──────────────────────────────
-        // Best quality for complex coding, planning, multi-step reasoning.
+        // ── Frontier ───────────────────────────────────────────────────
 
         registry.register_model(ModelEntry {
             name: "gemma4:31b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 256_000,
-            notes: Some("Gemma 4 31B Dense — frontier local, LiveCodeBench 80%".to_string()),
+            notes: Some("Gemma 4 31B Dense — best quality, 256K ctx".to_string()),
             tier: ModelTier::Frontier,
         });
 
@@ -188,19 +190,36 @@ impl BackendRegistry {
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 32_768,
-            notes: Some("Qwen3 Coder 30B MoE — strong coding specialist".to_string()),
+            notes: Some("Qwen3 Coder 30B MoE — coding specialist".to_string()),
             tier: ModelTier::Frontier,
         });
 
-        // ── Tier 2: Standard local models ──────────────────────────────
-        // Good balance of quality and speed for everyday tasks.
+        registry.register_model(ModelEntry {
+            name: "qwen2.5-coder:32b".to_string(),
+            backend: BackendKind::Ollama,
+            supports_tool_use: true,
+            context_window: 32_768,
+            notes: Some("Qwen2.5 Coder 32B — strong coding, needs ~20GB".to_string()),
+            tier: ModelTier::Frontier,
+        });
+
+        registry.register_model(ModelEntry {
+            name: "llama3.1:70b".to_string(),
+            backend: BackendKind::Ollama,
+            supports_tool_use: true,
+            context_window: 131_072,
+            notes: Some("Llama 3.1 70B — needs 40GB+ RAM".to_string()),
+            tier: ModelTier::Frontier,
+        });
+
+        // ── Standard ───────────────────────────────────────────────────
 
         registry.register_model(ModelEntry {
             name: "gemma4:26b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 256_000,
-            notes: Some("Gemma 4 26B MoE (4B active) — fast frontier, recommended default".to_string()),
+            notes: Some("Gemma 4 26B MoE — recommended default, 256K ctx".to_string()),
             tier: ModelTier::Standard,
         });
 
@@ -214,30 +233,12 @@ impl BackendRegistry {
         });
 
         registry.register_model(ModelEntry {
-            name: "mistral:7b".to_string(),
+            name: "qwen2.5-coder:14b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 32_768,
             notes: None,
             tier: ModelTier::Standard,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "llama3.1:8b".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: true,
-            context_window: 131_072,
-            notes: None,
-            tier: ModelTier::Standard,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "llama3.1:70b".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: true,
-            context_window: 131_072,
-            notes: Some("Llama 3.1 70B — needs 40GB+ RAM".to_string()),
-            tier: ModelTier::Frontier,
         });
 
         registry.register_model(ModelEntry {
@@ -250,21 +251,12 @@ impl BackendRegistry {
         });
 
         registry.register_model(ModelEntry {
-            name: "qwen2.5-coder:14b".to_string(),
+            name: "mistral:7b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 32_768,
             notes: None,
             tier: ModelTier::Standard,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "qwen2.5-coder:32b".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: true,
-            context_window: 32_768,
-            notes: None,
-            tier: ModelTier::Frontier,
         });
 
         registry.register_model(ModelEntry {
@@ -272,21 +264,12 @@ impl BackendRegistry {
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 32_768,
-            notes: None,
+            notes: Some("Mistral code model — strong at fill-in-the-middle".to_string()),
             tier: ModelTier::Standard,
         });
 
         registry.register_model(ModelEntry {
-            name: "mistral:latest".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: true,
-            context_window: 32_768,
-            notes: None,
-            tier: ModelTier::Standard,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "llama3.1:latest".to_string(),
+            name: "llama3.1:8b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 131_072,
@@ -294,15 +277,14 @@ impl BackendRegistry {
             tier: ModelTier::Standard,
         });
 
-        // ── Tier 3: Fast models ────────────────────────────────────────
-        // Small, fast models for simple tool calls and quick responses.
+        // ── Fast / Edge ────────────────────────────────────────────────
 
         registry.register_model(ModelEntry {
             name: "gemma4:e4b".to_string(),
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 128_000,
-            notes: Some("Gemma 4 E4B — fast edge model, native tool calling".to_string()),
+            notes: Some("Gemma 4 E4B — fast edge model, 128K ctx".to_string()),
             tier: ModelTier::Fast,
         });
 
@@ -311,7 +293,7 @@ impl BackendRegistry {
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 128_000,
-            notes: Some("Gemma 4 E2B — ultra-fast edge model".to_string()),
+            notes: Some("Gemma 4 E2B — ultra-fast, minimal RAM, 128K ctx".to_string()),
             tier: ModelTier::Fast,
         });
 
@@ -320,33 +302,6 @@ impl BackendRegistry {
             backend: BackendKind::Ollama,
             supports_tool_use: true,
             context_window: 131_072,
-            notes: None,
-            tier: ModelTier::Fast,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "llama3:latest".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: true,
-            context_window: 8_192,
-            notes: None,
-            tier: ModelTier::Fast,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "deepseek-coder:latest".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: false,
-            context_window: 16_384,
-            notes: None,
-            tier: ModelTier::Fast,
-        });
-
-        registry.register_model(ModelEntry {
-            name: "codellama:7b".to_string(),
-            backend: BackendKind::Ollama,
-            supports_tool_use: false,
-            context_window: 16_384,
             notes: None,
             tier: ModelTier::Fast,
         });
@@ -389,42 +344,59 @@ mod tests {
         assert!(registry.find_model("gemma4:31b").is_some());
         assert!(registry.find_model("qwen3-coder:30b").is_some());
         assert!(registry.find_model("llama3.1:8b").is_some());
+        assert!(registry.find_model("mistral:7b").is_some());
     }
 
     #[test]
-    fn gemma4_is_default_recommended() {
+    fn all_models_use_ollama_backend() {
+        let registry = BackendRegistry::with_defaults();
+        for model in registry.list_models() {
+            assert_eq!(
+                model.backend,
+                BackendKind::Ollama,
+                "model {} must use Ollama — no cloud backends allowed",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn gemma4_26b_is_default() {
         let registry = BackendRegistry::with_defaults();
         let config = registry.configs.get("ollama").unwrap();
         assert_eq!(config.default_model.as_deref(), Some("gemma4:26b"));
     }
 
     #[test]
-    fn frontier_models_identified() {
+    fn frontier_model_is_gemma4_31b() {
         let registry = BackendRegistry::with_defaults();
         let frontier = registry.best_frontier_model().unwrap();
         assert_eq!(frontier.name, "gemma4:31b");
+        assert_eq!(frontier.context_window, 256_000);
     }
 
     #[test]
-    fn fast_models_identified() {
+    fn fast_model_is_gemma4_e4b() {
         let registry = BackendRegistry::with_defaults();
         let fast = registry.best_fast_model().unwrap();
         assert_eq!(fast.name, "gemma4:e4b");
     }
 
     #[test]
-    fn unknown_model_returns_error() {
+    fn no_cloud_backends_registered() {
         let registry = BackendRegistry::with_defaults();
-        let result = registry.create_client("nonexistent", false);
-        assert!(result.is_err());
+        // No Gemini or external cloud backend should exist
+        assert!(registry.configs.get("gemini").is_none());
+        // Every registered model must be Ollama-backed
+        for model in registry.list_models() {
+            assert_eq!(model.backend, BackendKind::Ollama,
+                "cloud model {} must not be registered", model.name);
+        }
     }
 
     #[test]
-    fn all_local_models_use_ollama_backend() {
+    fn unknown_model_returns_error() {
         let registry = BackendRegistry::with_defaults();
-        for model in registry.list_models() {
-            assert_eq!(model.backend, BackendKind::Ollama,
-                "model {} should use Ollama backend", model.name);
-        }
+        assert!(registry.create_client("nonexistent", false).is_err());
     }
 }

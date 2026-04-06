@@ -2,7 +2,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::indexer::{CodebaseIndex, FileEntry};
+use backend::EmbeddingClient;
+use crate::indexer::{CodebaseIndex, FileEntry, semantic_score};
 
 /// Configuration for context selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +61,9 @@ pub struct ContextSelector;
 
 impl ContextSelector {
     /// Select relevant context for a user prompt.
+    ///
+    /// Uses semantic embedding (cosine similarity) when `nomic-embed-text` is
+    /// available in Ollama. Falls back to keyword scoring otherwise.
     pub fn select_context(
         prompt: &str,
         index: &CodebaseIndex,
@@ -70,11 +74,19 @@ impl ContextSelector {
         let keywords = Self::extract_keywords(prompt);
         let budget = (model_context_window as f32 * config.max_context_percentage) as usize;
 
-        // Score and rank files
+        // Attempt to embed the prompt for semantic retrieval.
+        // If Ollama is not running, query_embedding is None and we fall back to keywords.
+        let query_embedding: Option<Vec<f32>> = EmbeddingClient::try_new()
+            .and_then(|client| client.embed(prompt).ok());
+
+        // Score and rank files using semantic + structural signals
         let mut scored: Vec<(&FileEntry, f32)> = index
             .files
             .values()
-            .map(|entry| (entry, Self::score_file(entry, &keywords, prompt)))
+            .map(|entry| {
+                let score = semantic_score(entry, query_embedding.as_deref(), &keywords, prompt);
+                (entry, score)
+            })
             .filter(|(_, score)| *score >= config.min_relevance)
             .collect();
 
@@ -194,47 +206,6 @@ impl ContextSelector {
         keywords
     }
 
-    fn score_file(entry: &FileEntry, keywords: &[String], prompt: &str) -> f32 {
-        let mut score = 0.0f32;
-        let prompt_lower = prompt.to_lowercase();
-
-        // Direct path mention
-        if prompt_lower.contains(&entry.path.to_lowercase()) {
-            score += 1.0;
-        }
-
-        // Filename match
-        if let Some(filename) = entry.path.rsplit('/').next() {
-            if prompt_lower.contains(&filename.to_lowercase()) {
-                score += 0.7;
-            }
-        }
-
-        // Export name match
-        for export in &entry.exports {
-            if keywords.iter().any(|k| k.eq_ignore_ascii_case(export)) {
-                score += 0.5;
-            }
-        }
-
-        // Summary keyword overlap
-        let summary_lower = entry.summary.to_lowercase();
-        for keyword in keywords {
-            if summary_lower.contains(keyword.as_str()) {
-                score += 0.2;
-            }
-        }
-
-        // Penalize very large files
-        if entry.lines > 500 {
-            score *= 0.8;
-        }
-        if entry.lines > 1000 {
-            score *= 0.6;
-        }
-
-        score
-    }
 
     fn estimate_tokens(text: &str) -> usize {
         text.len() / 4
@@ -267,6 +238,7 @@ mod tests {
             exports: vec!["authenticate".to_string(), "verify_token".to_string()],
             summary: "Authentication module with JWT handling".to_string(),
             content_hash: "abc123".to_string(),
+            embedding: None,
         });
         files.insert("src/db.rs".to_string(), FileEntry {
             path: "src/db.rs".to_string(),
@@ -276,6 +248,7 @@ mod tests {
             exports: vec!["Pool".to_string(), "query".to_string()],
             summary: "Database connection pool".to_string(),
             content_hash: "def456".to_string(),
+            embedding: None,
         });
         CodebaseIndex {
             version: 1,
@@ -289,32 +262,6 @@ mod tests {
                 total_files: 2,
                 total_lines: 205,
             },
-        }
-    }
-
-    #[test]
-    fn score_file_direct_path_mention() {
-        let index = test_index();
-        let entry = index.files.get("src/auth.rs").unwrap();
-        let score = ContextSelector::score_file(entry, &["auth".to_string()], "check src/auth.rs");
-        assert!(score >= 1.0);
-    }
-
-    #[test]
-    fn score_file_export_match() {
-        let index = test_index();
-        let entry = index.files.get("src/auth.rs").unwrap();
-        let score = ContextSelector::score_file(entry, &["authenticate".to_string()], "fix authenticate");
-        assert!(score >= 0.5);
-    }
-
-    #[test]
-    fn score_is_non_negative() {
-        let index = test_index();
-        for entry in index.files.values() {
-            let score = ContextSelector::score_file(entry, &["xyz".to_string()], "xyz");
-            assert!(score >= 0.0);
-            assert!(!score.is_nan());
         }
     }
 

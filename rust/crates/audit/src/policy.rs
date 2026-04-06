@@ -47,6 +47,9 @@ pub struct GovernancePolicy {
     /// File path patterns that require human approval before writing.
     #[serde(default)]
     pub approval_required_paths: Vec<String>,
+    /// Global override: every write/destructive operation requires human approval.
+    #[serde(default)]
+    pub enforce_all_approvals: bool,
 }
 
 impl GovernancePolicy {
@@ -96,6 +99,7 @@ impl GovernancePolicy {
                 "**/Dockerfile".to_string(),
                 "**/.github/**".to_string(),
             ],
+            enforce_all_approvals: false,
         }
     }
 
@@ -186,6 +190,9 @@ impl GovernancePolicy {
     /// Check if a file path requires human approval before writing.
     #[must_use]
     pub fn requires_approval(&self, file_path: &str) -> bool {
+        if self.enforce_all_approvals {
+            return true;
+        }
         for pattern in &self.approval_required_paths {
             let clean = pattern.trim_matches('*');
             if !clean.is_empty() && file_path.contains(clean) {

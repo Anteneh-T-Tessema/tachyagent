@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService};
+use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
 use backend::BackendRegistry;
 use platform::{
     AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace,
@@ -23,6 +23,9 @@ struct PersistedState {
     agent_counter: u64,
     task_counter: u64,
     conv_counter: u64,
+    patch_counter: u64,
+    pending_patches: Vec<PendingPatch>,
+    inference_stats: InferenceStats,
 }
 
 /// A server-side conversation.
@@ -64,6 +67,29 @@ pub struct PendingPatch {
     pub created_at: String,
 }
 
+/// Statistics for inference performance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InferenceStats {
+    pub total_requests: u64,
+    pub total_tokens: u64,
+    pub last_ttft_ms: u32,
+    pub last_tokens_per_sec: f32,
+    pub avg_ttft_ms: f32,
+    pub avg_tokens_per_sec: f32,
+}
+
+impl InferenceStats {
+    pub fn record(&mut self, ttft_ms: u32, tps: f32, tokens: u64) {
+        let count = self.total_requests as f32;
+        self.avg_ttft_ms = (self.avg_ttft_ms * count + ttft_ms as f32) / (count + 1.0);
+        self.avg_tokens_per_sec = (self.avg_tokens_per_sec * count + tps) / (count + 1.0);
+        self.total_requests += 1;
+        self.total_tokens += tokens;
+        self.last_ttft_ms = ttft_ms;
+        self.last_tokens_per_sec = tps;
+    }
+}
+
 /// Shared daemon state, wrapped in Arc<Mutex<>> for thread safety.
 pub struct DaemonState {
     pub workspace_root: PathBuf,
@@ -94,12 +120,16 @@ pub struct DaemonState {
     pub mcp_client: McpClientManager,
     /// Usage metering service.
     pub metering: MeteringService,
+    /// Stripe billing connector (None if no Stripe API key configured).
+    pub billing: Option<StripeBillingConnector>,
     /// Team workspace manager.
     pub team_manager: TeamManager,
     /// Agent marketplace.
     pub marketplace: Marketplace,
     /// SaaS platform (None if not in SaaS mode).
     pub saas: Option<SaaSPlatform>,
+    /// Real-time inference performance tracking.
+    pub inference_stats: InferenceStats,
 }
 
 impl DaemonState {
@@ -126,7 +156,7 @@ impl DaemonState {
         let state_path = workspace_root.join(".tachy").join("state.json");
         let persisted = load_persisted_state(&state_path);
 
-        let (agents, conversations, agent_counter, task_counter, conv_counter) = match persisted {
+        let (agents, conversations, agent_counter, task_counter, conv_counter, patch_counter, pending_patches, inference_stats) = match persisted {
             Some(p) => {
                 let count = p.agents.len();
                 audit_logger.log(&AuditEvent::new(
@@ -134,15 +164,15 @@ impl DaemonState {
                     AuditEventKind::SessionStart,
                     format!("restored {count} agents, {} conversations from disk", p.conversations.len()),
                 ));
-                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter)
+                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter, p.patch_counter, p.pending_patches, p.inference_stats)
             }
-            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0),
+            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0, 0, Vec::new(), InferenceStats::default()),
         };
 
         // Load webhooks from config
         let webhooks: Vec<WebhookConfig> = Vec::new(); // loaded from config if present
 
-        Ok(Self {
+        let mut state = Self {
             workspace_root,
             config: ws.config,
             registry,
@@ -157,16 +187,34 @@ impl DaemonState {
             webhooks,
             file_locks: FileLockManager::new(),
             policy_engine: PolicyEngine::enterprise_default(),
-            pending_patches: Vec::new(),
-            patch_counter: 0,
+            pending_patches,
+            patch_counter,
             sso_manager: SsoManager::new(SsoConfig::default()),
             user_store: audit::UserStore::new(),
             mcp_client: McpClientManager::new(),
             metering: MeteringService::new(AuditLogger::new()),
+            billing: None,
             team_manager: TeamManager::new(),
             marketplace: Marketplace::new(),
             saas: None,
-        })
+            inference_stats,
+        };
+
+        // Auto-select Gemma 4 if no model is configured
+        if state.config.agent_templates.iter().all(|t| t.model.is_empty() || t.model == "gemma4:26b") {
+            let report = backend::run_health_check("http://localhost:11434");
+            if let Some(model) = report.recommended_model {
+                if model.contains("gemma4") {
+                    for t in &mut state.config.agent_templates {
+                        if t.model.is_empty() || t.model == "gemma4:26b" {
+                            t.model = model.clone();
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(state)
     }
 
     pub fn next_agent_id(&mut self) -> String {
@@ -181,16 +229,26 @@ impl DaemonState {
 
     /// Persist current state to disk.
     pub fn save(&self) {
-        let state_path = self.workspace_root.join(".tachy").join("state.json");
+        let state_dir = self.workspace_root.join(".tachy");
+        let state_path = state_dir.join("state.json");
+        let tmp_path = state_dir.join("state.json.tmp");
+
         let persisted = PersistedState {
             agents: self.agents.clone(),
             conversations: self.conversations.clone(),
             agent_counter: self.agent_counter,
             task_counter: self.task_counter,
             conv_counter: self.conv_counter,
+            patch_counter: self.patch_counter,
+            pending_patches: self.pending_patches.clone(),
+            inference_stats: self.inference_stats.clone(),
         };
+
         if let Ok(json) = serde_json::to_string_pretty(&persisted) {
-            let _ = std::fs::write(&state_path, json);
+            // Atomic rewrite: write to .tmp and rename
+            if std::fs::write(&tmp_path, json).is_ok() {
+                let _ = std::fs::rename(tmp_path, state_path);
+            }
         }
     }
 
@@ -362,6 +420,19 @@ impl DaemonState {
         self.scheduler.add_task(task);
         self.save();
         Ok(task_id)
+    }
+
+    pub fn record_inference(&mut self, ttft_ms: u32, tokens_per_sec: f32, tokens: u64) {
+        let s = &mut self.inference_stats;
+        s.total_requests += 1;
+        s.total_tokens += tokens;
+        s.last_ttft_ms = ttft_ms;
+        s.last_tokens_per_sec = tokens_per_sec;
+
+        // Simple moving average
+        let n = s.total_requests as f32;
+        s.avg_ttft_ms = (s.avg_ttft_ms * (n - 1.0) + ttft_ms as f32) / n;
+        s.avg_tokens_per_sec = (s.avg_tokens_per_sec * (n - 1.0) + tokens_per_sec) / n;
     }
 }
 

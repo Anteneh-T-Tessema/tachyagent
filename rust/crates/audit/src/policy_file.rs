@@ -73,6 +73,7 @@ impl PolicyFile {
             block_destructive_shell: self.rules.block_destructive_shell,
             protected_paths: self.rules.protected_paths.clone(),
             approval_required_paths: Vec::new(),
+            enforce_all_approvals: false,
         }
     }
 

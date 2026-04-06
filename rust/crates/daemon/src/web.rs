@@ -1,754 +1,696 @@
 /// Embedded web UI served from the daemon.
 /// Single HTML file with everything inline — no build step, no npm, no webpack.
+/// Modern, premium dark-mode interface with real-time performance analytics.
 
 pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tachy — AI Agent Platform</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-:root {
-  --bg: #0a0a0b; --surface: #141416; --border: #2a2a2e;
-  --text: #e4e4e7; --muted: #71717a; --accent: #6366f1;
-  --accent-hover: #818cf8; --success: #22c55e; --warning: #f59e0b;
-  --error: #ef4444; --radius: 8px;
-}
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-a { color: var(--accent); text-decoration: none; }
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tachy — AI Agent Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg: #050506;
+            --surface: rgba(22, 22, 26, 0.7);
+            --surface-solid: #16161a;
+            --border: rgba(255, 255, 255, 0.08);
+            --text: #f4f4f5;
+            --muted: #a1a1aa;
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.4);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --radius: 12px;
+            --glass: blur(12px);
+        }
 
-/* Layout */
-.app { display: flex; height: 100vh; }
-.sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; }
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.logo { font-size: 20px; font-weight: 700; margin-bottom: 24px; color: var(--accent); }
-.nav-item { padding: 10px 12px; border-radius: var(--radius); cursor: pointer; margin-bottom: 4px; color: var(--muted); transition: all 0.15s; display: flex; align-items: center; gap: 8px; }
-.nav-item:hover, .nav-item.active { background: var(--border); color: var(--text); }
-.nav-section { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px 12px; letter-spacing: 0.5px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+            background: var(--bg); 
+            color: var(--text); 
+            min-height: 100vh;
+            overflow: hidden;
+            background-image: 
+                radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
+        }
 
-/* Header */
-.header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-.header h1 { font-size: 18px; font-weight: 600; }
-.status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-.status-ok { background: #052e16; color: var(--success); }
-.status-err { background: #450a0a; color: var(--error); }
+        /* Layout */
+        .app { display: flex; height: 100vh; }
+        
+        .sidebar { 
+            width: 280px; 
+            background: var(--surface); 
+            backdrop-filter: var(--glass);
+            border-right: 1px solid var(--border); 
+            padding: 24px; 
+            display: flex; 
+            flex-direction: column;
+            z-index: 100;
+        }
 
-/* Content */
-.content { flex: 1; overflow-y: auto; padding: 24px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
-.card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-.stat { display: inline-block; margin-right: 24px; }
-.stat-value { font-size: 28px; font-weight: 700; color: var(--accent); }
-.stat-label { font-size: 12px; color: var(--muted); }
+        .main { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden;
+            position: relative;
+        }
 
-/* Chat */
-.chat-container { flex: 1; display: flex; flex-direction: column; }
-.messages { flex: 1; overflow-y: auto; padding: 24px; }
-.message { margin-bottom: 16px; max-width: 80%; }
-.message.user { margin-left: auto; }
-.message.user .bubble { background: var(--accent); color: white; border-radius: 16px 16px 4px 16px; }
-.message.assistant .bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 16px 16px 16px 4px; }
-.bubble { padding: 12px 16px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-.message .meta { font-size: 11px; color: var(--muted); margin-top: 4px; padding: 0 4px; }
-.tool-badge { display: inline-block; background: #1e1b4b; color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: 11px; margin: 2px; }
+        .logo { 
+            font-size: 24px; 
+            font-weight: 700; 
+            margin-bottom: 32px; 
+            display: flex; 
+            align-items: center; 
+            gap: 12px;
+            background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
 
-/* Input */
-.input-bar { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
-.input-bar input, .input-bar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: var(--radius); font-size: 14px; }
-.input-bar input { flex: 1; outline: none; }
-.input-bar input:focus { border-color: var(--accent); }
-.input-bar button { background: var(--accent); color: white; border: none; padding: 10px 20px; border-radius: var(--radius); cursor: pointer; font-weight: 500; }
-.input-bar button:hover { background: var(--accent-hover); }
-.input-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .nav-section {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin: 24px 0 12px 12px;
+            letter-spacing: 0.1em;
+        }
 
-/* Tables */
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
-td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-tr:hover td { background: rgba(99,102,241,0.05); }
+        .nav-item { 
+            padding: 12px 16px; 
+            border-radius: var(--radius); 
+            cursor: pointer; 
+            margin-bottom: 4px; 
+            color: var(--muted); 
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex; 
+            align-items: center; 
+            gap: 12px;
+            font-weight: 500;
+        }
 
-/* Agent run */
-.agent-form { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-.agent-form select, .agent-form input { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: var(--radius); font-size: 13px; }
-.agent-form input { flex: 1; min-width: 200px; }
-.agent-form button { background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: var(--radius); cursor: pointer; }
+        .nav-item:hover { 
+            background: rgba(255, 255, 255, 0.05); 
+            color: var(--text);
+            transform: translateX(4px);
+        }
 
-.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+        .nav-item.active { 
+            background: var(--accent); 
+            color: white;
+            box-shadow: 0 4px 15px var(--accent-glow);
+        }
 
-/* Responsive */
-@media (max-width: 768px) {
-  .app { flex-direction: column; }
-  .sidebar { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; z-index: 100; }
-  .sidebar.open { display: flex; }
-  .main { width: 100%; }
-  .message { max-width: 95%; }
-  .card { padding: 12px; }
-  table { font-size: 13px; }
-  th, td { padding: 6px 8px; }
-  .header { padding: 8px 12px; }
-  .chat-input { padding: 8px; }
-  .chat-input input { font-size: 14px; }
-}
-</style>
+        /* Header */
+        .header { 
+            padding: 20px 32px; 
+            background: rgba(5, 5, 6, 0.5);
+            backdrop-filter: var(--glass);
+            border-bottom: 1px solid var(--border); 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between;
+            z-index: 50;
+        }
+
+        .header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+
+        .status-badge { 
+            padding: 6px 12px; 
+            border-radius: 20px; 
+            font-size: 12px; 
+            font-weight: 600; 
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid transparent;
+        }
+        .status-ok { background: rgba(16, 185, 129, 0.1); color: var(--success); border-color: rgba(16, 185, 129, 0.2); }
+        .status-err { background: rgba(239, 68, 68, 0.1); color: var(--error); border-color: rgba(239, 68, 68, 0.2); }
+
+        /* Content Areas */
+        .content { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 32px; 
+            display: none;
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .card { 
+            background: var(--surface); 
+            backdrop-filter: var(--glass);
+            border: 1px solid var(--border); 
+            border-radius: var(--radius); 
+            padding: 24px; 
+            margin-bottom: 24px;
+            transition: border-color 0.2s;
+        }
+        .card:hover { border-color: rgba(255, 255, 255, 0.15); }
+        .card h3 { font-size: 14px; font-weight: 600; margin-bottom: 20px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+        /* Grid */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 24px; }
+        .stat-card { padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+        .stat-value { font-size: 32px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+        .stat-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+        /* Chat Specific */
+        .chat-container { 
+            height: 100%;
+            display: flex; 
+            flex-direction: column; 
+            background: transparent;
+        }
+        .messages { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 32px; 
+            scroll-behavior: smooth;
+        }
+        .message { margin-bottom: 24px; display: flex; flex-direction: column; max-width: 85%; }
+        .message.user { margin-left: auto; align-items: flex-end; }
+        .message.assistant { align-items: flex-start; }
+        
+        .bubble { 
+            padding: 16px 20px; 
+            line-height: 1.6; 
+            border-radius: var(--radius);
+            font-size: 15px;
+            position: relative;
+        }
+        .message.user .bubble { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
+        .message.assistant .bubble { background: var(--surface-solid); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+        
+        .meta { font-size: 11px; color: var(--muted); margin-top: 8px; font-family: 'JetBrains Mono', monospace; }
+
+        .input-bar { 
+            padding: 24px 32px; 
+            background: var(--bg);
+            border-top: 1px solid var(--border); 
+            display: flex; 
+            gap: 12px; 
+            align-items: center;
+        }
+        .input-bar input { 
+            flex: 1; 
+            background: var(--surface-solid); 
+            border: 1px solid var(--border); 
+            color: var(--text); 
+            padding: 14px 20px; 
+            border-radius: var(--radius); 
+            font-size: 15px; 
+            outline: none;
+            transition: all 0.2s;
+        }
+        .input-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1); }
+        
+        .input-bar button { 
+            background: var(--accent); 
+            color: white; 
+            border: none; 
+            padding: 14px 24px; 
+            border-radius: var(--radius); 
+            cursor: pointer; 
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .input-bar button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px var(--accent-glow); }
+        .input-bar button:disabled { opacity: 0.5; filter: grayscale(1); }
+
+        /* Approvals */
+        .approval-item { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            padding: 16px; 
+            background: rgba(255, 255, 255, 0.03); 
+            border-radius: var(--radius); 
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+        }
+        .btn-approve { background: var(--success); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .btn-reject { background: var(--error); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+
+        /* Tables & Lists */
+        table { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+        th { text-align: left; padding: 12px 16px; font-size: 12px; color: var(--muted); text-transform: uppercase; }
+        td { padding: 16px; background: rgba(255, 255, 255, 0.02); }
+        td:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+        td:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+        
+        code { font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+
+        .spinner { 
+            width: 18px; height: 18px; 
+            border: 2.5px solid rgba(255,255,255,0.1); 
+            border-top-color: currentColor; 
+            border-radius: 50%; 
+            animation: spin 0.8s linear infinite; 
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Scrollbars */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    </style>
 </head>
 <body>
-<div class="app">
-  <div class="sidebar">
-    <div class="logo">⚡ Tachy</div>
-    <div class="nav-item active" onclick="showPage('chat')">💬 Chat</div>
-    <div class="nav-item" onclick="showPage('agents')">🤖 Agents</div>
-    <div class="nav-item" onclick="showPage('models')">🧠 Models</div>
-    <div class="nav-item" onclick="showPage('audit')">📋 Audit Log</div>
-    <div class="nav-section">Operations</div>
-    <div class="nav-item" onclick="showPage('parallel')">⚡ Parallel Runs</div>
-    <div class="nav-item" onclick="showPage('approvals')">✅ Approvals</div>
-    <div class="nav-section">System</div>
-    <div class="nav-item" onclick="showPage('dashboard')">📊 Dashboard</div>
-  </div>
-  <div class="main">
-    <div class="header">
-      <h1 id="page-title">Chat</h1>
-      <span id="status-badge" class="status-badge status-ok">● Connected</span>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">⚡ TACHY</div>
+            
+            <div class="nav-section">Core</div>
+            <div class="nav-item active" onclick="showPage('chat', this)">💬 Conversations</div>
+            <div class="nav-item" onclick="showPage('agents', this)">🤖 Agent Fleet</div>
+            <div class="nav-item" onclick="showPage('approvals', this)">🛡️ Governance</div>
+            
+            <div class="nav-section">Performance</div>
+            <div class="nav-item" onclick="showPage('dashboard', this)">📊 Metrics</div>
+            <div class="nav-item" onclick="showPage('models', this)">🧠 Model Registry</div>
+            
+            <div class="nav-section">Audit</div>
+            <div class="nav-item" onclick="showPage('audit', this)">📜 Audit Trail</div>
+            <div class="nav-item" onclick="showPage('parallel', this)">⛓️ Parallel Ops</div>
+
+            <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
+                <div class="stat-label">Workspace Root</div>
+                <div style="font-size: 11px; color: var(--text); opacity: 0.8; word-break: break-all; margin-top: 4px;" id="workspace-path">...</div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="header">
+                <h1 id="page-title">Conversations</h1>
+                <div id="status-container">
+                    <span id="status-badge" class="status-badge status-ok">● Running</span>
+                </div>
+            </header>
+
+            <!-- Pages -->
+            <section id="page-chat" class="content chat-container" style="display: flex;">
+                <div class="messages" id="messages">
+                    <div class="message assistant">
+                        <div class="bubble">Welcome back. I am Tachy, your localized intelligence engine. Ready for secure, token-driven development.</div>
+                        <div class="meta">SYSTEM :: INITIALIZED</div>
+                    </div>
+                </div>
+                <div class="input-bar">
+                    <select id="model-select" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); outline:none;"></select>
+                    <input type="text" id="chat-input" placeholder="Type a command or question..." onkeydown="if(event.key==='Enter')sendMessage()">
+                    <button onclick="sendMessage()" id="send-btn">Transmit</button>
+                    <button onclick="newConversation()" style="background:var(--surface-solid); color:var(--muted); padding:10px 14px;">+</button>
+                </div>
+            </section>
+
+            <section id="page-dashboard" class="content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-ttft">0ms</div>
+                        <div class="stat-label">Last TTFT</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-tps">0.0</div>
+                        <div class="stat-label">Last Tokens/Sec</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-total-tokens">0</div>
+                        <div class="stat-label">Total Tokens</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-requests">0</div>
+                        <div class="stat-label">Total Inferences</div>
+                    </div>
+                </div>
+                
+                <div class="stats-grid" style="grid-template-columns: 1fr 1fr;">
+                    <div class="card" style="height: 400px;">
+                        <h3>Inference Latency (TTFT)</h3>
+                        <canvas id="ttftChart"></canvas>
+                    </div>
+                    <div class="card" style="height: 400px;">
+                        <h3>Throughput (Tokens/Sec)</h3>
+                        <canvas id="tpsChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <section id="page-approvals" class="content">
+                <div class="card">
+                    <h3>Pending Security Review</h3>
+                    <div id="approvals-list"></div>
+                </div>
+                <div class="card">
+                    <h3>Active File Locks</h3>
+                    <table id="locks-table-body"></table>
+                </div>
+            </section>
+
+            <section id="page-agents" class="content">
+                <div class="card">
+                    <h3>Deploy Agent Instance</h3>
+                    <div style="display:flex; gap:12px; margin-top:16px;">
+                        <input type="text" id="agent-prompt" placeholder="Describe the mission..." style="flex:1; background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                        <select id="agent-template" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);"></select>
+                        <button onclick="runAgent()" id="run-agent-btn" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer;">Launch</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>Fleet Status</h3>
+                    <table id="agents-table-body"></table>
+                </div>
+            </section>
+
+            <section id="page-models" class="content">
+                <div class="card">
+                    <h3>Model Inventory</h3>
+                    <table id="models-table-body"></table>
+                </div>
+            </section>
+
+            <section id="page-audit" class="content">
+                <div class="card">
+                    <h3>System Audit Log</h3>
+                    <table id="audit-table-body"></table>
+                </div>
+            </section>
+            
+            <section id="page-parallel" class="content">
+                <div class="card">
+                    <h3>Parallel Execution Streams</h3>
+                    <table id="parallel-table-body"></table>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <!-- Chat Page -->
-    <div id="page-chat" class="chat-container">
-      <div class="messages" id="messages">
-        <div class="message assistant"><div class="bubble">Hi! I'm Tachy, your local AI coding agent. Powered by Gemma 4 and Ollama — everything runs on your machine. I can read files, write code, run commands, search your codebase, and plan multi-step tasks. What would you like to do?</div></div>
-      </div>
-      <div class="input-bar">
-        <select id="model-select"></select>
-        <input type="text" id="chat-input" placeholder="Ask anything..." onkeydown="if(event.key==='Enter')sendMessage()">
-        <button onclick="sendMessage()" id="send-btn">Send</button>
-        <button onclick="newConversation()" title="New conversation" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);padding:10px 12px;border-radius:var(--radius);cursor:pointer">+</button>
-      </div>
-    </div>
+    <script>
+        const API = '';
+        let currentConvId = localStorage.getItem('tachy_current_conv') || '';
+        let ttftHistory = [];
+        let tpsHistory = [];
+        let ttftChart, tpsChart;
 
-    <!-- Agents Page -->
-    <div id="page-agents" class="content" style="display:none">
-      <div class="card">
-        <h3>Run an Agent</h3>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Select a template and describe what you want the agent to do.</p>
-        <div class="agent-form">
-          <select id="agent-template"></select>
-          <input type="text" id="agent-prompt" placeholder="e.g. 'Review the authentication module for security issues'">
-          <button onclick="runAgent()" id="run-agent-btn">Run Agent</button>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Agent History</h3>
-        <table><thead><tr><th>ID</th><th>Template</th><th>Status</th><th>Iterations</th><th>Tools</th><th>Summary</th></tr></thead>
-        <tbody id="agents-table"></tbody></table>
-      </div>
-    </div>
-
-    <!-- Models Page -->
-    <div id="page-models" class="content" style="display:none">
-      <div class="card">
-        <h3>Available Models</h3>
-        <table><thead><tr><th>Model</th><th>Backend</th><th>Context</th><th>Tools</th></tr></thead>
-        <tbody id="models-table"></tbody></table>
-      </div>
-    </div>
-
-    <!-- Audit Page -->
-    <div id="page-audit" class="content" style="display:none">
-      <div class="card">
-        <h3>Audit Trail</h3>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Every agent action is logged. Audit data is stored in <code>.tachy/audit.jsonl</code></p>
-        <table><thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Tool</th><th>Detail</th></tr></thead>
-        <tbody id="audit-table"><tr><td colspan="5" style="color:var(--muted)">Loading audit log...</td></tr></tbody></table>
-      </div>
-    </div>
-
-    <!-- Parallel Runs Page -->
-    <div id="page-parallel" class="content" style="display:none">
-      <div class="card">
-        <h3>Parallel Runs</h3>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">DAG-scheduled parallel agent execution. Tasks run concurrently with dependency ordering.</p>
-        <table><thead><tr><th>Run ID</th><th>Status</th><th>Tasks</th><th>Actions</th></tr></thead>
-        <tbody id="parallel-table"><tr><td colspan="4" style="color:var(--muted)">Loading...</td></tr></tbody></table>
-      </div>
-      <div class="card" id="parallel-detail" style="display:none">
-        <h3>Run Details</h3>
-        <div id="parallel-tasks"></div>
-      </div>
-      <div class="card">
-        <h3>File Locks</h3>
-        <table><thead><tr><th>File</th><th>Agent</th></tr></thead>
-        <tbody id="locks-table"><tr><td colspan="2" style="color:var(--muted)">No active locks</td></tr></tbody></table>
-      </div>
-    </div>
-
-    <!-- Approvals Page -->
-    <div id="page-approvals" class="content" style="display:none">
-      <div class="card">
-        <h3>Pending Approvals</h3>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Patches and agents awaiting human review from the policy engine.</p>
-        <div id="approvals-list"><p style="color:var(--muted)">Loading...</p></div>
-      </div>
-    </div>
-
-    <!-- Dashboard Page -->
-    <div id="page-dashboard" class="content" style="display:none">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
-        <div class="card" style="flex:1;min-width:150px"><div class="stat"><div class="stat-value" id="stat-models">-</div><div class="stat-label">Models</div></div></div>
-        <div class="card" style="flex:1;min-width:150px"><div class="stat"><div class="stat-value" id="stat-agents">-</div><div class="stat-label">Agents Run</div></div></div>
-        <div class="card" style="flex:1;min-width:150px"><div class="stat"><div class="stat-value" id="stat-tasks">-</div><div class="stat-label">Scheduled Tasks</div></div></div>
-      </div>
-      <div id="dashboard-details"></div>
-      <div class="card">
-        <h3>Scheduled Tasks</h3>
-        <table><thead><tr><th>ID</th><th>Name</th><th>Schedule</th><th>Status</th><th>Runs</th></tr></thead>
-        <tbody id="tasks-table"></tbody></table>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-const API = '';
-let currentPage = 'chat';
-let apiKey = new URLSearchParams(window.location.search).get('key') || localStorage.getItem('tachy_api_key') || '';
-if (apiKey) localStorage.setItem('tachy_api_key', apiKey);
-
-function authHeaders() {
-  const h = {'Content-Type': 'application/json'};
-  if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-  return h;
-}
-
-function authFetch(url, opts) {
-  opts = opts || {};
-  opts.headers = Object.assign(authHeaders(), opts.headers || {});
-  return fetch(url, opts);
-}
-
-// Navigation
-function showPage(page) {
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  event.target.classList.add('active');
-  ['chat','agents','models','audit','dashboard','parallel','approvals'].forEach(p => {
-    const el = document.getElementById('page-' + p);
-    if (el) el.style.display = p === page ? (p === 'chat' ? 'flex' : 'block') : 'none';
-  });
-  document.getElementById('page-title').textContent = {chat:'Chat',agents:'Agents',models:'Models',audit:'Audit Log',dashboard:'Dashboard',parallel:'Parallel Runs',approvals:'Approvals'}[page];
-  currentPage = page;
-  if (page === 'models') loadModels();
-  if (page === 'agents') loadAgents();
-  if (page === 'dashboard') loadDashboard();
-  if (page === 'audit') loadAudit();
-  if (page === 'audit') loadAuditLog();
-  if (page === 'parallel') loadParallelRuns();
-  if (page === 'approvals') loadApprovals();
-}
-
-// Health check
-async function checkHealth() {
-  try {
-    const r = await authFetch(API + '/health');
-    const d = await r.json();
-    document.getElementById('status-badge').className = 'status-badge status-ok';
-    document.getElementById('status-badge').textContent = '● Connected';
-    return d;
-  } catch(e) {
-    document.getElementById('status-badge').className = 'status-badge status-err';
-    document.getElementById('status-badge').textContent = '● Disconnected';
-    return null;
-  }
-}
-
-// Load models into select and table
-async function loadModels() {
-  try {
-    const r = await authFetch(API + '/api/models');
-    const models = await r.json();
-    const select = document.getElementById('model-select');
-    if (select.options.length <= 1) {
-      select.innerHTML = '';
-      models.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m.name;
-        opt.textContent = m.name;
-        select.appendChild(opt);
-      });
-      // Default to best available Ollama model
-      const preferred = ['gemma4:26b','gemma4:31b','qwen3-coder:30b','qwen3:8b','llama3.1:8b','mistral:7b'];
-      const ollama = models.filter(m => m.backend === 'Ollama');
-      for (const pref of preferred) {
-        if (ollama.find(m => m.name === pref)) { select.value = pref; break; }
-      }
-    }
-    const tbody = document.getElementById('models-table');
-    if (tbody) {
-      tbody.innerHTML = models.map(m =>
-        `<tr><td>${m.name}</td><td>${m.backend}</td><td>${m.context_window.toLocaleString()}</td><td>${m.supports_tool_use ? '✓' : '—'}</td></tr>`
-      ).join('');
-    }
-  } catch(e) { console.error('Failed to load models', e); }
-}
-
-// Load templates
-async function loadTemplates() {
-  try {
-    const r = await authFetch(API + '/api/templates');
-    const templates = await r.json();
-    const select = document.getElementById('agent-template');
-    select.innerHTML = '';
-    templates.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.name + ' — ' + t.description;
-      select.appendChild(opt);
-    });
-  } catch(e) { console.error('Failed to load templates', e); }
-}
-
-// Load agents
-async function loadAgents() {
-  try {
-    const r = await authFetch(API + '/api/agents');
-    const agents = await r.json();
-    const tbody = document.getElementById('agents-table');
-    if (agents.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No agents run yet</td></tr>';
-      return;
-    }
-    tbody.innerHTML = agents.map(a =>
-      `<tr><td>${a.id}</td><td>${a.template}</td><td>${a.status}</td><td>${a.iterations}</td><td>${a.tool_invocations}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(a.summary||'').substring(0,100)}</td></tr>`
-    ).join('');
-  } catch(e) { console.error('Failed to load agents', e); }
-}
-
-// Dashboard
-async function loadDashboard() {
-  try {
-    const r = await authFetch(API + '/api/metrics');
-    const m = await r.json();
-    document.getElementById('stat-models').textContent = m.models_available || 0;
-    document.getElementById('stat-agents').textContent = m.total_agents_run || 0;
-    document.getElementById('stat-tasks').textContent = m.scheduled_tasks || 0;
-
-    // Update detailed stats
-    const details = document.getElementById('dashboard-details');
-    if (details) {
-      details.innerHTML = `
-        <div class="card"><h3>Agent Metrics</h3>
-          <p>Completed: ${m.completed || 0} · Failed: ${m.failed || 0}</p>
-          <p>Total iterations: ${m.total_iterations || 0} · Tool calls: ${m.total_tool_invocations || 0}</p>
-        </div>
-        <div class="card"><h3>Usage by Template</h3>
-          ${Object.entries(m.agents_by_template || {}).map(([k,v]) => `<p>${k}: ${v} runs</p>`).join('') || '<p>No agents run yet</p>'}
-        </div>`;
-    }
-  } catch(e) {
-    const health = await checkHealth();
-    if (health) {
-      document.getElementById('stat-models').textContent = health.models;
-      document.getElementById('stat-agents').textContent = health.agents;
-      document.getElementById('stat-tasks').textContent = health.tasks;
-    }
-  }
-  try {
-    const r = await authFetch(API + '/api/tasks');
-    const tasks = await r.json();
-    const tbody = document.getElementById('tasks-table');
-    if (tasks.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No scheduled tasks</td></tr>';
-    } else {
-      tbody.innerHTML = tasks.map(t =>
-        `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.schedule}</td><td>${t.status}</td><td>${t.run_count}</td></tr>`
-      ).join('');
-    }
-  } catch(e) {}
-}
-
-// Parallel Runs
-async function loadParallelRuns() {
-  try {
-    const r = await authFetch(API + '/api/parallel/runs');
-    const data = await r.json();
-    const runs = data.runs || [];
-    const tbody = document.getElementById('parallel-table');
-    if (runs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No parallel runs</td></tr>';
-    } else {
-      tbody.innerHTML = runs.map(r =>
-        `<tr><td>${r.agent_id||r.run_id||''}</td><td>${r.status}</td><td>${r.task_count||'-'}</td><td><button onclick="viewParallelRun('${r.agent_id||r.run_id||''}')" style="background:var(--accent);color:white;border:none;padding:4px 12px;border-radius:4px;cursor:pointer">View</button></td></tr>`
-      ).join('');
-    }
-    // Load file locks
-    const lr = await authFetch(API + '/api/file-locks');
-    const locks = await lr.json();
-    const ltbody = document.getElementById('locks-table');
-    if ((locks.locks||[]).length === 0) {
-      ltbody.innerHTML = '<tr><td colspan="2" style="color:var(--muted)">No active locks</td></tr>';
-    } else {
-      ltbody.innerHTML = locks.locks.map(l => `<tr><td>${l.file}</td><td>${l.agent_id}</td></tr>`).join('');
-    }
-  } catch(e) { console.error('Failed to load parallel runs', e); }
-}
-
-async function viewParallelRun(runId) {
-  try {
-    const r = await authFetch(API + '/api/parallel/runs/' + runId);
-    const data = await r.json();
-    const detail = document.getElementById('parallel-detail');
-    detail.style.display = 'block';
-    document.getElementById('parallel-tasks').innerHTML = (data.tasks||[]).map(t =>
-      `<div style="padding:8px;border-bottom:1px solid var(--border)"><strong>${t.task_id}</strong> (${t.template}) — ${t.status}<br><span style="color:var(--muted);font-size:12px">${(t.summary||'').substring(0,200)}</span></div>`
-    ).join('');
-  } catch(e) { console.error('Failed to load run', e); }
-}
-
-// Approvals
-async function loadApprovals() {
-  try {
-    const r = await authFetch(API + '/api/pending-approvals');
-    const data = await r.json();
-    const items = data.pending || data || [];
-    const container = document.getElementById('approvals-list');
-    if (items.length === 0) {
-      container.innerHTML = '<p style="color:var(--muted)">No pending approvals</p>';
-      return;
-    }
-    container.innerHTML = items.map(item => {
-      const id = item.patch_id || item.agent_id || '';
-      const isPatch = item.type === 'patch';
-      return `<div class="card" style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <strong>${isPatch ? '📄 Patch' : '🤖 Agent'}: ${id}</strong>
-            ${item.file_path ? `<br><code>${item.file_path}</code>` : ''}
-            <br><span style="color:var(--muted);font-size:13px">${item.reason||''}</span>
-            ${item.diff_summary ? `<br><span style="font-size:12px">+${item.additions||0} -${item.deletions||0}</span>` : ''}
-          </div>
-          <div style="display:flex;gap:8px">
-            <button onclick="approveItem('${id}', ${isPatch}, true)" style="background:var(--success);color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Approve</button>
-            <button onclick="approveItem('${id}', ${isPatch}, false)" style="background:var(--error);color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Reject</button>
-          </div>
-        </div>
-      </div>`;
-    }).join('');
-  } catch(e) { console.error('Failed to load approvals', e); }
-}
-
-async function approveItem(id, isPatch, approved) {
-  try {
-    const body = isPatch ? {patch_id: id, approved} : {agent_id: id, approved};
-    await authFetch(API + '/api/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    loadApprovals();
-  } catch(e) { console.error('Approval failed', e); }
-}
-
-// Chat
-function addMessage(role, text, meta) {
-  const div = document.createElement('div');
-  div.className = 'message ' + role;
-  let rendered = role === 'assistant' ? renderMarkdown(text) : escapeHtml(text);
-  let html = '<div class="bubble">' + rendered + '</div>';
-  if (meta) html += '<div class="meta">' + meta + '</div>';
-  div.innerHTML = html;
-  document.getElementById('messages').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth' });
-}
-
-function renderMarkdown(text) {
-  // Simple markdown rendering for assistant messages
-  let html = escapeHtml(text);
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:#1e1e2e;padding:12px;border-radius:6px;overflow-x:auto;margin:8px 0;font-size:13px"><code>$2</code></pre>');
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:#1e1e2e;padding:2px 6px;border-radius:4px;font-size:13px">$1</code>');
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Bullet lists
-  html = html.replace(/^[•\-\*] (.+)$/gm, '<div style="padding-left:16px">• $1</div>');
-  // Numbered lists
-  html = html.replace(/^(\d+)\. (.+)$/gm, '<div style="padding-left:16px">$1. $2</div>');
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
-  return html;
-}
-
-async function sendMessage() {
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-
-  addMessage('user', text);
-  saveConversation();
-  // Save user message server-side
-  if (currentConvId) {
-    authFetch(API + '/api/conversations/message', {
-      method: 'POST',
-      body: JSON.stringify({ conversation_id: currentConvId, role: 'user', content: text }),
-    }).catch(() => {});
-  }
-
-  const btn = document.getElementById('send-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>';
-
-  const model = document.getElementById('model-select').value;
-
-  // Create assistant message placeholder
-  const div = document.createElement('div');
-  div.className = 'message assistant';
-  div.innerHTML = '<div class="bubble"><span class="spinner"></span> Thinking...</div>';
-  document.getElementById('messages').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth' });
-
-  try {
-    // Start the agent asynchronously
-    const r = await authFetch(API + '/api/agents/run', {
-      method: 'POST',
-      body: JSON.stringify({ template: 'chat', prompt: text, model: model }),
-    });
-    const startResult = await r.json();
-    const agentId = startResult.agent_id;
-
-    if (!agentId) {
-      div.innerHTML = '<div class="bubble">' + formatError(startResult.error || 'Failed to start agent') + '</div>';
-      btn.disabled = false;
-      btn.textContent = 'Send';
-      return;
-    }
-
-    // Poll for completion
-    let elapsed = 0;
-    const pollInterval = 1000;
-    const maxWait = 300000; // 5 minutes
-
-    const pollForResult = async () => {
-      let elapsed = 0;
-      while (elapsed < maxWait) {
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
-        elapsed += pollInterval;
-
-        const secs = Math.round(elapsed/1000);
-        const dots = '.'.repeat(secs % 4);
-        div.innerHTML = '<div class="bubble"><span class="spinner"></span> Working' + dots + ' (' + secs + 's)</div>';
-
-        try {
-          const poll = await authFetch(API + '/api/agents/' + agentId);
-          const agent = await poll.json();
-
-          if (agent.status === 'completed' || agent.status === 'failed') {
-            const summary = agent.summary || 'No response.';
-            const metaStr = model + ' · ' + (agent.iterations || 0) + ' iterations · ' + (agent.tool_invocations || 0) + ' tool calls';
-            div.innerHTML = '<div class="bubble">' + renderMarkdown(summary) + '</div><div class="meta">' + metaStr + '</div>';
-            // Save assistant response server-side
-            if (currentConvId) {
-              authFetch(API + '/api/conversations/message', {
-                method: 'POST',
-                body: JSON.stringify({ conversation_id: currentConvId, role: 'assistant', content: summary, model: model, iterations: agent.iterations, tool_invocations: agent.tool_invocations }),
-              }).catch(() => {});
-            }
-            return;
-          }
-        } catch(pollErr) {}
-      }
-      div.innerHTML = '<div class="bubble">Request timed out after 5 minutes. Check the Agents page.</div>';
-    };
-    await pollForResult();
-
-  } catch(e) {
-    const errorMsg = formatError(e.message || 'Unknown error');
-    div.innerHTML = '<div class="bubble">' + errorMsg + '</div>';
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Send';
-  saveConversation();
-}
-
-// User-friendly error messages
-function formatError(raw) {
-  if (raw.includes('AbortError') || raw.includes('abort')) {
-    return 'Request timed out. The model may be too slow for this query. Try a smaller model or a simpler question.';
-  }
-  if (raw.includes('Failed to fetch') || raw.includes('NetworkError')) {
-    return 'Cannot connect to Tachy daemon. Make sure `tachy serve` is running.';
-  }
-  if (raw.includes('model') && raw.includes('not found')) {
-    return 'Model not found. Run `tachy pull <model>` to download it, or select a different model.';
-  }
-  if (raw.includes('rate limit')) {
-    return 'Too many requests. Please wait a moment and try again.';
-  }
-  if (raw.includes('API key')) {
-    return 'Authentication required. Set your API key in the URL: ?key=your-key';
-  }
-  if (raw.includes('EOF') || raw.includes('empty')) {
-    return 'The model returned an empty response. Try rephrasing your question or using a different model.';
-  }
-  return 'Error: ' + escapeHtml(raw);
-}
-
-// Conversation persistence — server-side with localStorage fallback
-let currentConvId = localStorage.getItem('tachy_current_conv') || '';
-
-async function saveConversation() {
-  // Save to localStorage as immediate cache
-  try {
-    const msgs = document.getElementById('messages').innerHTML;
-    if (currentConvId) localStorage.setItem('tachy_conv_' + currentConvId, msgs);
-  } catch(e) {}
-}
-
-async function loadConversation() {
-  // Try server-side conversations first
-  try {
-    const r = await authFetch(API + '/api/conversations');
-    if (r.ok) {
-      const convs = await r.json();
-      if (convs.length > 0) {
-        // Load the most recent conversation
-        const latest = convs[convs.length - 1];
-        currentConvId = latest.id;
-        localStorage.setItem('tachy_current_conv', currentConvId);
-        if (latest.messages && latest.messages.length > 0) {
-          const container = document.getElementById('messages');
-          container.innerHTML = '';
-          for (const msg of latest.messages) {
-            const div = document.createElement('div');
-            div.className = 'message ' + msg.role;
-            const rendered = msg.role === 'assistant' ? renderMarkdown(msg.content) : escapeHtml(msg.content);
-            div.innerHTML = '<div class="bubble">' + rendered + '</div>';
-            container.appendChild(div);
-          }
-          return;
+        async function apiFetch(path, opts = {}) {
+            const apiKey = localStorage.getItem('tachy_api_key') || '';
+            const headers = { 'Content-Type': 'application/json', ...opts.headers };
+            if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+            return fetch(API + path, { ...opts, headers });
         }
-      }
-    }
-  } catch(e) {}
-  // Fallback to localStorage
-  try {
-    if (currentConvId) {
-      const saved = localStorage.getItem('tachy_conv_' + currentConvId);
-      if (saved) { document.getElementById('messages').innerHTML = saved; }
-    }
-  } catch(e) {}
-}
 
-async function newConversation() {
-  // Create server-side conversation
-  try {
-    const r = await authFetch(API + '/api/conversations', {
-      method: 'POST',
-      body: JSON.stringify({ title: 'Chat ' + new Date().toLocaleString() }),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      currentConvId = data.id || ('conv-' + Date.now());
-    } else {
-      currentConvId = 'conv-' + Date.now();
-    }
-  } catch(e) {
-    currentConvId = 'conv-' + Date.now();
-  }
-  localStorage.setItem('tachy_current_conv', currentConvId);
-  document.getElementById('messages').innerHTML = '<div class="message assistant"><div class="bubble">New conversation. How can I help?</div></div>';
-  saveConversation();
-}
+        function showPage(page, navEl) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            if (navEl) navEl.classList.add('active');
+            
+            document.querySelectorAll('.content').forEach(el => el.style.display = 'none');
+            const target = document.getElementById('page-' + page);
+            if (target) target.style.display = page === 'chat' ? 'flex' : 'block';
+            
+            document.getElementById('page-title').textContent = page.charAt(0).toUpperCase() + page.slice(1);
+            
+            if (page === 'dashboard') initCharts();
+            refreshPageData(page);
+        }
 
-// Run agent from agents page
-async function runAgent() {
-  const template = document.getElementById('agent-template').value;
-  const prompt = document.getElementById('agent-prompt').value.trim();
-  if (!prompt) return;
+        async function refreshPageData(page) {
+            switch(page) {
+                case 'dashboard': loadMetrics(); break;
+                case 'approvals': loadApprovals(); loadLocks(); break;
+                case 'agents': loadAgents(); break;
+                case 'models': loadModels(); break;
+                case 'audit': loadAudit(); break;
+                case 'parallel': loadParallel(); break;
+            }
+        }
 
-  const btn = document.getElementById('run-agent-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Starting...';
+        // Charts
+        function initCharts() {
+            if (ttftChart) return;
+            const commonOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { 
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a1a1aa' } },
+                    x: { grid: { display: false }, ticks: { display: false } }
+                },
+                plugins: { legend: { display: false } },
+                elements: { line: { tension: 0.4 }, point: { radius: 0 } }
+            };
 
-  try {
-    const r = await authFetch(API + '/api/agents/run', {
-      method: 'POST',
-      body: JSON.stringify({ template, prompt })
-    });
-    const result = await r.json();
-    btn.innerHTML = '<span class="spinner"></span> Running (' + (result.agent_id || '?') + ')...';
-    loadAgents();
+            ttftChart = new Chart(document.getElementById('ttftChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ data: [], borderColor: '#6366f1', borderWidth: 2, fill: true, backgroundColor: 'rgba(99,102,241,0.1)' }] },
+                options: commonOptions
+            });
 
-    // Poll until complete
-    if (result.agent_id) {
-      let elapsed = 0;
-      while (elapsed < 300000) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        elapsed += 3000;
-        try {
-          const poll = await authFetch(API + '/api/agents/' + result.agent_id);
-          const agent = await poll.json();
-          if (agent.status === 'completed' || agent.status === 'failed') {
-            loadAgents();
-            break;
-          }
-        } catch(e) {}
-        btn.innerHTML = '<span class="spinner"></span> Running (' + Math.round(elapsed/1000) + 's)...';
-      }
-    }
-  } catch(e) { alert('Error: ' + e.message); }
+            tpsChart = new Chart(document.getElementById('tpsChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ data: [], borderColor: '#10b981', borderWidth: 2, fill: true, backgroundColor: 'rgba(16, 185, 129,0.1)' }] },
+                options: commonOptions
+            });
+        }
 
-  btn.disabled = false;
-  btn.textContent = 'Run Agent';
-  document.getElementById('agent-prompt').value = '';
-}
+        async function loadMetrics() {
+            try {
+                const r = await apiFetch('/api/inference/stats');
+                const stats = await r.json();
+                
+                document.getElementById('val-ttft').textContent = `${stats.last_ttft_ms}ms`;
+                document.getElementById('val-tps').textContent = stats.last_tokens_per_sec.toFixed(1);
+                document.getElementById('val-total-tokens').textContent = stats.total_tokens.toLocaleString();
+                document.getElementById('val-requests').textContent = stats.total_requests.toLocaleString();
 
-function escapeHtml(text) {
-  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+                // Mocking some history if empty just for the "wow" factor, otherwise update real
+                if (ttftChart) {
+                    ttftChart.data.labels.push('');
+                    ttftChart.data.datasets[0].data.push(stats.last_ttft_ms);
+                    if (ttftChart.data.labels.length > 20) { ttftChart.data.labels.shift(); ttftChart.data.datasets[0].data.shift(); }
+                    ttftChart.update();
 
-// Init
-checkHealth();
-loadModels();
-loadTemplates();
-loadConversation();
-setInterval(checkHealth, 30000);
+                    tpsChart.data.labels.push('');
+                    tpsChart.data.datasets[0].data.push(stats.last_tokens_per_sec);
+                    if (tpsChart.data.labels.length > 20) { tpsChart.data.labels.shift(); tpsChart.data.datasets[0].data.shift(); }
+                    tpsChart.update();
+                }
+            } catch(e) {}
+        }
 
-async function loadAudit() {
-  try {
-    const r = await authFetch(API + '/api/audit');
-    if (!r.ok) throw new Error('not available');
-    const events = await r.json();
-    const tbody = document.getElementById('audit-table');
-    if (!events || events.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No audit events yet</td></tr>';
-      return;
-    }
-    tbody.innerHTML = events.slice(-50).reverse().map(e =>
-      `<tr><td>${e.timestamp}</td><td>${e.kind}</td><td>${e.agent_id||'—'}</td><td>${e.tool_name||'—'}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(e.detail||'').substring(0,80)}</td></tr>`
-    ).join('');
-  } catch(e) {
-    document.getElementById('audit-table').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Could not load audit log</td></tr>';
-  }
-}
+        // Approvals
+        async function loadApprovals() {
+            const r = await apiFetch('/api/pending-approvals');
+            const data = await r.json();
+            const list = document.getElementById('approvals-list');
+            const items = data.pending || [];
+            
+            if (items.length === 0) {
+                list.innerHTML = '<p style="color:var(--muted); font-size: 13px;">No pending actions requiring authorization.</p>';
+                return;
+            }
 
-// Audit log viewer
-async function loadAuditLog() {
-  try {
-    const r = await authFetch(API + '/api/audit');
-    if (r.ok) {
-      const events = await r.json();
-      const tbody = document.getElementById('audit-table');
-      if (events.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No audit events yet</td></tr>';
-        return;
-      }
-      tbody.innerHTML = events.slice(-50).reverse().map(e =>
-        '<tr><td>' + (e.timestamp||'') + '</td><td>' + (e.kind||'') + '</td><td>' + (e.agent_id||'—') + '</td><td>' + (e.tool_name||'—') + '</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml((e.detail||'').substring(0,80)) + '</td></tr>'
-      ).join('');
-    }
-  } catch(e) {
-    console.error('Failed to load audit log', e);
-  }
-}
+            list.innerHTML = items.map(p => `
+                <div class="approval-item">
+                    <div>
+                        <div style="font-weight:600; margin-bottom:4px;">${p.patch.file_path}</div>
+                        <div style="font-size:12px; color:var(--muted); font-family: 'JetBrains Mono';">${p.reason}</div>
+                        <div style="font-size:11px; margin-top:4px;">ID: ${p.id} · Agent: ${p.patch.agent_id}</div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn-approve" onclick="decidePatch('${p.id}', true)">Approve</button>
+                        <button class="btn-reject" onclick="decidePatch('${p.id}', false)">Deny</button>
+                    </div>
+                </div>
+            `).join('');
+        }
 
-</script>
+        async function decidePatch(id, approved) {
+            await apiFetch('/api/approve', {
+                method: 'POST',
+                body: JSON.stringify({ patch_id: id, approved })
+            });
+            loadApprovals();
+        }
+
+        // Chat & Streaming
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const prompt = input.value.trim();
+            if (!prompt) return;
+            input.value = '';
+
+            addMessage('user', prompt);
+            
+            const btn = document.getElementById('send-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>';
+
+            const assistantMsgId = 'msg-' + Date.now();
+            addMessage('assistant', '', assistantMsgId);
+            const bubble = document.getElementById(assistantMsgId).querySelector('.bubble');
+            let content = '';
+
+            try {
+                const model = document.getElementById('model-select').value;
+                const response = await apiFetch('/api/chat/stream', {
+                    method: 'POST',
+                    body: JSON.stringify({ prompt, model })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.text) {
+                                    content += data.text;
+                                    bubble.textContent = content;
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                }
+            } catch(e) {
+                bubble.textContent = 'Error: Link to daemon severed.';
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Transmit';
+        }
+
+        function addMessage(role, text, id) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            if (id) div.id = id;
+            div.innerHTML = `
+                <div class="bubble">${text || '<span class="spinner"></span>'}</div>
+                <div class="meta">${role.toUpperCase()} :: ${new Date().toLocaleTimeString()}</div>
+            `;
+            const container = document.getElementById('messages');
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Generic Loaders
+        async function loadModels() {
+            const r = await apiFetch('/api/models');
+            const models = await r.json();
+            const select = document.getElementById('model-select');
+            const tbody = document.getElementById('models-table-body');
+            
+            select.innerHTML = models.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
+            tbody.innerHTML = '<thead><tr><th>Model</th><th>Backend</th><th>Context</th><th>Tools</th></tr></thead>' + 
+                models.map(m => `<tr><td>${m.name}</td><td>${m.backend}</td><td>${m.context_window}</td><td>${m.supports_tool_use?'✓':'-'}</td></tr>`).join('');
+        }
+
+        async function loadAgents() {
+            const r = await apiFetch('/api/agents');
+            const agents = await r.json();
+            const tbody = document.getElementById('agents-table-body');
+            tbody.innerHTML = '<thead><tr><th>ID</th><th>Template</th><th>Status</th><th>Ops</th></tr></thead>' + 
+                agents.map(a => `<tr><td><code>${a.id}</code></td><td>${a.template}</td><td>${a.status}</td><td>${a.tool_invocations}</td></tr>`).join('');
+        }
+
+        async function loadAudit() {
+            const r = await apiFetch('/api/audit');
+            const audit = await r.json();
+            const tbody = document.getElementById('audit-table-body');
+            tbody.innerHTML = '<thead><tr><th>Timestamp</th><th>Kind</th><th>Detail</th></tr></thead>' + 
+                audit.slice(-20).reverse().map(e => `<tr><td style="font-size:11px;">${e.timestamp}</td><td>${e.kind}</td><td style="font-size:12px;">${e.detail}</td></tr>`).join('');
+        }
+
+        async function loadParallel() {
+            const r = await apiFetch('/api/parallel/runs');
+            const data = await r.json();
+            const tbody = document.getElementById('parallel-table-body');
+            const runs = data.runs || [];
+            tbody.innerHTML = '<thead><tr><th>Run ID</th><th>Status</th><th>Tasks</th></tr></thead>' + 
+                runs.map(r => `<tr><td><code>${r.run_id}</code></td><td>${r.status}</td><td>${r.task_count}</td></tr>`).join('');
+        }
+
+        async function loadLocks() {
+            const r = await apiFetch('/api/file-locks');
+            const data = await r.json();
+            const tbody = document.getElementById('locks-table-body');
+            const locks = data.locks || [];
+            tbody.innerHTML = '<thead><tr><th>File Path</th><th>Agent Holder</th></tr></thead>' + 
+                (locks.length ? locks.map(l => `<tr><td>${l.file}</td><td><code>${l.agent_id}</code></td></tr>`).join('') : '<tr><td colspan="2" style="color:var(--muted)">No active locks.</td></tr>');
+        }
+
+        async function loadTemplates() {
+            const r = await apiFetch('/api/templates');
+            const templates = await r.json();
+            const select = document.getElementById('agent-template');
+            select.innerHTML = templates.map(t => `<option value="${t.name}">${t.name} (${t.model})</option>`).join('');
+        }
+
+        async function runAgent() {
+            const prompt = document.getElementById('agent-prompt').value.trim();
+            const template = document.getElementById('agent-template').value;
+            if (!prompt) return;
+
+            const btn = document.getElementById('run-agent-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>';
+
+            try {
+                const r = await apiFetch('/api/agents/run', {
+                    method: 'POST',
+                    body: JSON.stringify({ template, prompt })
+                });
+                const res = await r.json();
+                if (res.agent_id) {
+                    showPage('agents', document.querySelector('[onclick*="agents"]'));
+                    loadAgents();
+                    document.getElementById('agent-prompt').value = '';
+                }
+            } catch(e) {} finally {
+                btn.disabled = false;
+                btn.textContent = 'Launch';
+            }
+        }
+
+        async function checkHealth() {
+            try {
+                const r = await apiFetch('/health');
+                const d = await r.json();
+                document.getElementById('status-badge').className = 'status-badge status-ok';
+                document.getElementById('status-badge').textContent = '● Online';
+            } catch(e) {
+                document.getElementById('status-badge').className = 'status-badge status-err';
+                document.getElementById('status-badge').textContent = '● Offline';
+            }
+        }
+
+        // Initialize
+        (async () => {
+            const health = await (await apiFetch('/health')).json();
+            document.getElementById('workspace-path').textContent = health.workspace || 'Local';
+            loadModels();
+            loadTemplates();
+            checkHealth();
+            setInterval(checkHealth, 5000);
+            setInterval(() => { if(ttftChart) loadMetrics(); }, 3000);
+        })();
+    </script>
 </body>
 </html>
 "##;

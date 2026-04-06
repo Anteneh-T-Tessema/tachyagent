@@ -53,7 +53,7 @@ impl std::fmt::Display for MarketplaceError {
 }
 
 /// Result of an install operation, including the template and any warnings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InstallResult {
     pub template: AgentTemplate,
     pub warnings: Vec<String>,

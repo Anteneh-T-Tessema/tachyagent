@@ -324,6 +324,7 @@ fn execute_single_task(
         &s.config.intelligence,
         &workspace_root,
         Some(file_locks.clone()),
+        Some(Arc::clone(state)),
     );
 
     // Release all file locks held by this agent on completion

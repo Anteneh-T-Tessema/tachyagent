@@ -15,6 +15,22 @@ export interface CompletionRequest {
   maxTokens: number;
 }
 
+export interface AgentRunResult {
+  agent_id: string;
+  success: boolean;
+  iterations: number;
+  tool_invocations: number;
+  summary: string;
+}
+
+export interface ModelInfo {
+  name: string;
+  backend: string;
+  context_window: number;
+  tier: string;
+  notes?: string;
+}
+
 export class TachyClient {
   private endpoint: string;
   private apiKey: string;
@@ -34,9 +50,84 @@ export class TachyClient {
     this.model = config.get<string>("model", "gemma4:26b");
   }
 
+  getModel(): string {
+    return this.model;
+  }
+
   async health(): Promise<HealthResponse> {
     const data = await this.get("/health");
     return JSON.parse(data);
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const data = await this.get("/api/models");
+      const parsed = JSON.parse(data);
+      return parsed.models ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Run an agent task and poll until it completes.
+   * Calls progressCallback with elapsed seconds while waiting.
+   * This is the primary method used by the chat panel.
+   */
+  async runAndPoll(
+    template: string,
+    prompt: string,
+    model: string,
+    progressCallback?: (elapsedSecs: number) => void
+  ): Promise<AgentRunResult> {
+    const body = JSON.stringify({
+      template,
+      prompt,
+      model: model || this.model,
+    });
+
+    const data = await this.post("/api/agents/run", body);
+    const parsed = JSON.parse(data);
+    const agentId: string = parsed.agent_id;
+
+    if (!agentId) {
+      throw new Error("Daemon did not return an agent_id");
+    }
+
+    const start = Date.now();
+    const timeoutMs = 300_000; // 5 minutes
+
+    while (Date.now() - start < timeoutMs) {
+      await sleep(500);
+
+      const elapsedSecs = Math.floor((Date.now() - start) / 1000);
+      progressCallback?.(elapsedSecs);
+
+      try {
+        const agentData = await this.get(`/api/agents/${agentId}`);
+        const agent = JSON.parse(agentData);
+        const status: string = agent.status ?? "";
+
+        if (
+          status === "Completed" ||
+          status === "completed" ||
+          status === "Failed" ||
+          status === "failed"
+        ) {
+          return {
+            agent_id: agentId,
+            success: status === "Completed" || status === "completed",
+            iterations: agent.iterations ?? 0,
+            tool_invocations: agent.tool_invocations ?? 0,
+            summary: agent.result_summary ?? agent.summary ?? "",
+          };
+        }
+      } catch {
+        // transient polling error — keep waiting
+      }
+    }
+
+    throw new Error("Agent run timed out after 5 minutes");
   }
 
   async complete(req: CompletionRequest): Promise<string> {
@@ -49,9 +140,8 @@ export class TachyClient {
     });
 
     try {
-      // Try streaming endpoint first for progressive display
+      // Try streaming endpoint first
       const data = await this.post("/api/complete/stream", body);
-      // Parse SSE events and concatenate token texts
       const tokens: string[] = [];
       for (const line of data.split("\n")) {
         if (line.startsWith("data: ")) {
@@ -68,31 +158,24 @@ export class TachyClient {
       if (tokens.length > 0) {
         return tokens.join("");
       }
-      // Fallback: try synchronous endpoint
+      // Fallback: synchronous endpoint
       const syncData = await this.post("/api/complete", body);
       const syncParsed = JSON.parse(syncData);
       return syncParsed.completion || "";
     } catch {
-      // Final fallback to agent run + poll
+      // Final fallback: run a short agent task
       return this.completeViaAgent(req);
     }
   }
 
   private async completeViaAgent(req: CompletionRequest): Promise<string> {
     const prompt = this.buildPrompt(req);
-    const body = JSON.stringify({
-      template: "chat-assistant",
-      prompt,
-      model: this.model,
-    });
-
-    const data = await this.post("/api/agents/run", body);
-    const parsed = JSON.parse(data);
-
-    if (parsed.agent_id) {
-      return this.pollForResult(parsed.agent_id, 10_000);
+    try {
+      const result = await this.runAndPoll("chat-assistant", prompt, this.model);
+      return result.summary;
+    } catch {
+      return "";
     }
-    return "";
   }
 
   private buildPrompt(req: CompletionRequest): string {
@@ -101,7 +184,7 @@ export class TachyClient {
       "",
       "```" + req.language,
       req.prefix,
-      "█", // cursor marker
+      "█",
     ];
     if (req.suffix) {
       lines.push(req.suffix);
@@ -112,31 +195,6 @@ export class TachyClient {
       `Respond with ONLY the code that replaces █. Maximum ${req.maxTokens} tokens. No markdown fences.`
     );
     return lines.join("\n");
-  }
-
-  private async pollForResult(
-    agentId: string,
-    timeoutMs: number
-  ): Promise<string> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      try {
-        const data = await this.get(`/api/agents/${agentId}`);
-        const agent = JSON.parse(data);
-        if (
-          agent.status === "Completed" ||
-          agent.status === "completed" ||
-          agent.status === "Failed" ||
-          agent.status === "failed"
-        ) {
-          return agent.summary || "";
-        }
-      } catch {
-        // ignore polling errors
-      }
-      await sleep(200);
-    }
-    return "";
   }
 
   private get(path: string): Promise<string> {
@@ -160,7 +218,7 @@ export class TachyClient {
       const options: http.RequestOptions = {
         hostname: url.hostname,
         port: url.port,
-        path: url.pathname,
+        path: url.pathname + url.search,
         method,
         headers: {
           "Content-Type": "application/json",
@@ -169,7 +227,7 @@ export class TachyClient {
             : {}),
           ...(body ? { "Content-Length": Buffer.byteLength(body) } : {}),
         },
-        timeout: 15_000,
+        timeout: 30_000,
       };
 
       const req = lib.request(options, (res) => {
@@ -193,6 +251,69 @@ export class TachyClient {
       if (body) {
         req.write(body);
       }
+      req.end();
+    });
+  }
+
+  /**
+   * Stream a chat prompt from the daemon.
+   * Calls onToken with each new chunk of text.
+   */
+  async streamChat(
+    prompt: string,
+    model: string,
+    onToken: (token: string) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const url = new URL("/api/chat/stream", this.endpoint);
+      const isHttps = url.protocol === "https:";
+      const lib = isHttps ? https : http;
+
+      const body = JSON.stringify({ prompt, model: model || this.model });
+
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+      };
+
+      const req = lib.request(options, (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          let errData = "";
+          res.on("data", (c) => (errData += c));
+          res.on("end", () => reject(new Error(`HTTP ${res.statusCode}: ${errData}`)));
+          return;
+        }
+
+        res.on("data", (chunk: Buffer) => {
+          const lines = chunk.toString().split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.text) {
+                  onToken(data.text);
+                }
+              } catch {
+                // partial JSON or non-token data
+              }
+            } else if (line.startsWith("event: done")) {
+                // Done
+            }
+          }
+        });
+
+        res.on("end", resolve);
+        res.on("error", reject);
+      });
+
+      req.on("error", reject);
+      req.write(body);
       req.end();
     });
   }

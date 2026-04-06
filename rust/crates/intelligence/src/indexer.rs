@@ -4,6 +4,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// Import embedding support — graceful fallback when Ollama is unavailable.
+use backend::{cosine_similarity, EmbeddingClient};
+
 /// Configuration for the codebase indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexerConfig {
@@ -55,6 +58,12 @@ pub struct FileEntry {
     pub exports: Vec<String>,
     pub summary: String,
     pub content_hash: String,
+    /// Semantic embedding of the summary, produced by the local embedding model.
+    /// `None` when Ollama is not running or the embedding model is not installed.
+    /// When present, used for cosine-similarity-based context retrieval instead
+    /// of keyword scoring.
+    #[serde(default)]
+    pub embedding: Option<Vec<f32>>,
 }
 
 /// Errors from the indexer
@@ -128,6 +137,11 @@ impl CodebaseIndexer {
             .unwrap_or_default()
             .as_secs();
 
+        // Attempt semantic embedding of all summaries in one pass.
+        // If Ollama / nomic-embed-text is not available, skip silently —
+        // context selection falls back to keyword scoring.
+        embed_summaries(&mut files);
+
         Ok(CodebaseIndex {
             version: 1,
             workspace_root: workspace_root.to_string_lossy().to_string(),
@@ -135,6 +149,12 @@ impl CodebaseIndexer {
             files,
             project,
         })
+    }
+
+    /// Embed all file summaries using the local Ollama embedding model.
+    /// Silently skips if the model is unavailable — callers handle `None` embeddings.
+    fn embed_summaries_impl(files: &mut BTreeMap<String, FileEntry>) {
+        embed_summaries(files);
     }
 
     fn walk_directory(
@@ -208,6 +228,7 @@ impl CodebaseIndexer {
                         exports,
                         summary,
                         content_hash,
+                        embedding: None,
                     },
                 );
             }
@@ -370,7 +391,7 @@ fn is_binary_extension(ext: &str) -> bool {
     )
 }
 
-fn extract_summary(_path: &str, content: &str, language: &str) -> (Vec<String>, String) {
+fn extract_summary(path: &str, content: &str, language: &str) -> (Vec<String>, String) {
     let mut exports = Vec::new();
 
     for line in content.lines().take(500) {
@@ -403,23 +424,230 @@ fn extract_summary(_path: &str, content: &str, language: &str) -> (Vec<String>, 
         }
     }
 
-    // Summary: first doc comment or first non-empty line
-    let summary = content
+    let summary = build_rich_summary(path, content, language, &exports);
+    (exports, summary)
+}
+
+/// Build a meaningful summary from doc comments, module descriptions, and
+/// path semantics — never just an import line.
+fn build_rich_summary(path: &str, content: &str, language: &str, exports: &[String]) -> String {
+    // 1. Try to extract the module-level doc comment (most informative)
+    if let Some(doc) = extract_module_doc(content, language) {
+        let module_hint = path_to_module_hint(path);
+        if module_hint.is_empty() {
+            return truncate_summary(&doc, 160);
+        }
+        return truncate_summary(&format!("{module_hint}: {doc}"), 160);
+    }
+
+    // 2. No doc comment — build a structural description from path + exports
+    let module_hint = path_to_module_hint(path);
+    if !exports.is_empty() {
+        let top: Vec<&str> = exports.iter().take(6).map(String::as_str).collect();
+        let export_list = top.join(", ");
+        if module_hint.is_empty() {
+            return truncate_summary(&format!("defines {export_list}"), 160);
+        }
+        return truncate_summary(&format!("{module_hint}: defines {export_list}"), 160);
+    }
+
+    // 3. Fall back to module hint alone
+    if !module_hint.is_empty() {
+        return module_hint;
+    }
+
+    // 4. Last resort: first non-import, non-comment content line
+    let fallback = content
         .lines()
         .find(|line| {
             let t = line.trim();
-            !t.is_empty() && !t.starts_with('#') && !t.starts_with("//!") && t != "//"
+            !t.is_empty()
+                && !t.starts_with("//")
+                && !t.starts_with('#')
+                && !t.starts_with("use ")
+                && !t.starts_with("import ")
+                && !t.starts_with("from ")
+                && !t.starts_with("package ")
+                && !t.starts_with("mod ")
+                && !t.starts_with("pub mod ")
         })
         .unwrap_or("")
         .trim();
 
-    let summary = if summary.len() > 120 {
-        format!("{}…", &summary[..119])
-    } else {
-        summary.to_string()
-    };
+    truncate_summary(fallback, 120)
+}
 
-    (exports, summary)
+/// Extract the module-level doc comment for the language.
+/// Returns the first meaningful doc block as a single cleaned string.
+fn extract_module_doc(content: &str, language: &str) -> Option<String> {
+    match language {
+        "rust" => {
+            // //! inner doc comments at the top of the file
+            let doc_lines: Vec<&str> = content
+                .lines()
+                .take(30)
+                .filter(|l| l.trim_start().starts_with("//!"))
+                .map(|l| l.trim_start().trim_start_matches("//!").trim())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if doc_lines.is_empty() {
+                // Also try /// on the first pub item
+                let triple_lines: Vec<&str> = content
+                    .lines()
+                    .take(60)
+                    .filter(|l| l.trim_start().starts_with("/// "))
+                    .map(|l| l.trim_start().trim_start_matches("/// ").trim())
+                    .filter(|l| !l.is_empty())
+                    .take(3)
+                    .collect();
+                if triple_lines.is_empty() {
+                    return None;
+                }
+                return Some(triple_lines.join(" "));
+            }
+            Some(doc_lines.join(" "))
+        }
+        "python" => {
+            // Module docstring: first string literal after optional shebang/encoding
+            let mut in_doc = false;
+            let mut doc_lines = Vec::new();
+            let mut delimiter = "";
+            for line in content.lines().take(40) {
+                let t = line.trim();
+                if !in_doc {
+                    if t.starts_with("\"\"\"") || t.starts_with("'''") {
+                        delimiter = if t.starts_with("\"\"\"") { "\"\"\"" } else { "'''" };
+                        let rest = t.trim_start_matches(delimiter);
+                        // Single-line docstring
+                        if let Some(end) = rest.find(delimiter) {
+                            let single = rest[..end].trim();
+                            if !single.is_empty() {
+                                return Some(single.to_string());
+                            }
+                            return None;
+                        }
+                        if !rest.trim().is_empty() {
+                            doc_lines.push(rest.trim());
+                        }
+                        in_doc = true;
+                    } else if t.starts_with('#') || t.is_empty()
+                        || t.starts_with("import ") || t.starts_with("from ") {
+                        continue;
+                    } else {
+                        break; // hit code, no module docstring
+                    }
+                } else {
+                    if t.contains(delimiter) {
+                        let before = t.split(delimiter).next().unwrap_or("").trim();
+                        if !before.is_empty() {
+                            doc_lines.push(before);
+                        }
+                        break;
+                    }
+                    if !t.is_empty() {
+                        doc_lines.push(t);
+                    }
+                    if doc_lines.len() >= 4 {
+                        break;
+                    }
+                }
+            }
+            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+        }
+        "typescript" | "javascript" => {
+            // /** ... */ JSDoc at top of file
+            let mut in_block = false;
+            let mut doc_lines = Vec::new();
+            for line in content.lines().take(30) {
+                let t = line.trim();
+                if !in_block {
+                    if t.starts_with("/**") {
+                        in_block = true;
+                        let rest = t.trim_start_matches("/**").trim_end_matches("*/").trim();
+                        if !rest.is_empty() {
+                            doc_lines.push(rest.to_string());
+                        }
+                    } else if t.starts_with("//") {
+                        let rest = t.trim_start_matches("//").trim();
+                        if !rest.is_empty() {
+                            doc_lines.push(rest.to_string());
+                        }
+                        if doc_lines.len() >= 3 {
+                            break;
+                        }
+                    } else if !t.is_empty() && !t.starts_with("import") && !t.starts_with("'use") {
+                        break;
+                    }
+                } else {
+                    if t.contains("*/") {
+                        let before = t.split("*/").next().unwrap_or("")
+                            .trim_start_matches('*').trim();
+                        if !before.is_empty() {
+                            doc_lines.push(before.to_string());
+                        }
+                        break;
+                    }
+                    let rest = t.trim_start_matches('*').trim();
+                    if !rest.is_empty() {
+                        doc_lines.push(rest.to_string());
+                    }
+                    if doc_lines.len() >= 4 {
+                        break;
+                    }
+                }
+            }
+            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+        }
+        "go" => {
+            // Package comment: lines starting with // before `package`
+            let mut doc_lines = Vec::new();
+            for line in content.lines().take(30) {
+                let t = line.trim();
+                if t.starts_with("package ") {
+                    break;
+                }
+                if let Some(rest) = t.strip_prefix("//") {
+                    let rest = rest.trim();
+                    if !rest.is_empty() {
+                        doc_lines.push(rest);
+                    }
+                } else if !t.is_empty() {
+                    doc_lines.clear(); // reset on non-comment before package
+                }
+            }
+            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+        }
+        _ => None,
+    }
+}
+
+/// Convert a file path into readable semantic tokens.
+/// "audit/src/security.rs" → "audit security"
+/// "daemon/src/http.rs"    → "daemon http"
+fn path_to_module_hint(path: &str) -> String {
+    let without_ext = path.rsplit('.').nth(1).map_or(path, |_| {
+        path.rsplit_once('.').map(|(l, _)| l).unwrap_or(path)
+    });
+    let parts: Vec<&str> = without_ext
+        .split('/')
+        .filter(|p| !matches!(*p, "src" | "lib" | "mod" | "index" | "main" | "." | ".."))
+        .collect();
+    parts.join(" ")
+}
+
+fn truncate_summary(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        // find a char boundary
+        let boundary = s.char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i < max.saturating_sub(1))
+            .last()
+            .unwrap_or(0);
+        format!("{}…", &s[..boundary])
+    }
 }
 
 fn extract_rust_export(line: &str) -> Option<String> {
@@ -508,6 +736,76 @@ fn search_score(entry: &FileEntry, keywords: &[&str]) -> f32 {
             score += 0.2;
         }
     }
+
+    score
+}
+
+/// Embed all file summaries in the index using the local Ollama embedding model.
+/// Files that already have embeddings (loaded from disk) are skipped.
+/// Silently does nothing if Ollama / the embedding model is unavailable.
+pub fn embed_summaries(files: &mut BTreeMap<String, FileEntry>) {
+    // Collect paths whose summaries need embedding
+    let to_embed: Vec<(String, String)> = files
+        .iter()
+        .filter(|(_, e)| e.embedding.is_none())
+        .map(|(path, e)| (path.clone(), e.summary.clone()))
+        .collect();
+
+    if to_embed.is_empty() {
+        return;
+    }
+
+    // Only attempt if Ollama is reachable
+    let Some(client) = EmbeddingClient::try_new() else {
+        return;
+    };
+
+    for (path, summary) in &to_embed {
+        if let Ok(emb) = client.embed(summary) {
+            if let Some(entry) = files.get_mut(path) {
+                entry.embedding = Some(emb);
+            }
+        }
+    }
+}
+
+/// Compute a semantic score for a file given a pre-embedded query vector.
+/// Falls back to keyword scoring when embeddings are unavailable.
+pub fn semantic_score(entry: &FileEntry, query_embedding: Option<&[f32]>, keywords: &[String], prompt: &str) -> f32 {
+    let mut score = 0.0f32;
+
+    // Semantic similarity — dominant signal when available
+    if let (Some(file_emb), Some(query_emb)) = (&entry.embedding, query_embedding) {
+        let sim = cosine_similarity(file_emb, query_emb);
+        score += sim * 3.0;
+    }
+
+    let prompt_lower = prompt.to_lowercase();
+
+    // Structural signals — always applied as tiebreakers
+    if prompt_lower.contains(&entry.path.to_lowercase()) {
+        score += 1.0;
+    }
+    if let Some(filename) = entry.path.rsplit('/').next() {
+        if prompt_lower.contains(&filename.to_lowercase()) {
+            score += 0.7;
+        }
+    }
+    for export in &entry.exports {
+        if keywords.iter().any(|k| k.eq_ignore_ascii_case(export)) {
+            score += 0.5;
+        }
+    }
+    // Summary keyword overlap (kept as weak signal even with embeddings)
+    let summary_lower = entry.summary.to_lowercase();
+    for keyword in keywords {
+        if summary_lower.contains(keyword.as_str()) {
+            score += 0.1;
+        }
+    }
+    // Penalise very large files slightly
+    if entry.lines > 500 { score *= 0.9; }
+    if entry.lines > 1000 { score *= 0.8; }
 
     score
 }
@@ -665,6 +963,7 @@ mod tests {
                     exports: vec!["test".to_string()],
                     summary: "test file".to_string(),
                     content_hash: format!("{i:016x}"),
+                    embedding: None,
                 },
             );
         }

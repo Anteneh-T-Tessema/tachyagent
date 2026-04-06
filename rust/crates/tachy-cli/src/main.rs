@@ -955,6 +955,7 @@ fn run_doctor() {
                 let request = runtime::ApiRequest {
                     system_prompt: vec!["You are a helpful assistant. Use the bash tool to run: echo tachy-ok".to_string()],
                     messages: vec![runtime::ConversationMessage::user_text("Run echo tachy-ok")],
+                    format: runtime::ResponseFormat::default(),
                 };
                 let start = std::time::Instant::now();
                 match client.stream(request) {
@@ -1154,6 +1155,7 @@ fn warmup_model(model: &str) -> Result<(), Box<dyn std::error::Error>> {
     let request = runtime::ApiRequest {
         system_prompt: vec!["You are helpful.".to_string()],
         messages: vec![runtime::ConversationMessage::user_text("hi")],
+        format: runtime::ResponseFormat::default(),
     };
 
     match client.stream(request) {
@@ -1294,6 +1296,7 @@ fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result<(), Box<dy
         &state.config.intelligence,
         &state.workspace_root,
         None, // No shared file locks in single-agent CLI mode
+        None, // No shared daemon state in CLI direct mode
     );
 
     if result.success {

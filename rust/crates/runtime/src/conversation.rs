@@ -8,10 +8,28 @@ use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
+/// Constrain the model's output format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseFormat {
+    /// No constraint — free-form text (default).
+    Text,
+    /// Force the model to emit valid JSON. Supported by Ollama via `"format": "json"`.
+    Json,
+}
+
+impl Default for ResponseFormat {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRequest {
     pub system_prompt: Vec<String>,
     pub messages: Vec<ConversationMessage>,
+    /// When `Json`, the backend is asked to produce JSON-only output.
+    /// The caller is responsible for parsing the result.
+    pub format: ResponseFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +178,7 @@ where
             let request = ApiRequest {
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
+                format: ResponseFormat::default(),
             };
 
             // API call with error recovery

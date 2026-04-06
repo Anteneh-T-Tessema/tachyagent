@@ -184,7 +184,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
 - [x] 9. Checkpoint — Marketplace and SaaS core
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 10. Extend DaemonState (`daemon/src/state.rs`)
+- [x] 10. Extend DaemonState (`daemon/src/state.rs`)
   - [x] 10.1 Add `metering`, `billing`, `team_manager`, `marketplace`, and `saas` fields to `DaemonState`
     - `metering: MeteringService` — always present
     - `billing: Option<StripeBillingConnector>` — initialized only when Stripe API key is configured
@@ -196,45 +196,45 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Add `proptest` dev-dependency to `daemon/Cargo.toml` and `audit/Cargo.toml`
     - _Requirements: 1.1, 2.1, 3.2, 6.3, 8.1_
 
-- [ ] 11. Implement HTTP API extensions (`daemon/src/http.rs`)
-  - [ ] 11.1 Add usage and billing endpoints
+- [x] 11. Implement HTTP API extensions (`daemon/src/http.rs`)
+  - [x] 11.1 Add usage and billing endpoints
     - `GET /api/usage` → `handle_usage` returning per-user and per-team totals for a time range
     - `GET /api/billing/status` → `handle_billing_status` returning billing period, reported usage, Stripe sync status
     - _Requirements: 1.5, 2.6_
 
-  - [ ] 11.2 Add team management endpoints
+  - [x] 11.2 Add team management endpoints
     - `POST /api/teams` → `handle_create_team`
     - `POST /api/teams/:id/invite` → `handle_invite`
     - `POST /api/teams/join` → `handle_join_team`
     - `PUT /api/teams/:id/members/:uid` → `handle_update_member`
     - _Requirements: 3.1, 3.3, 3.4, 4.3_
 
-  - [ ] 11.3 Add team shared resource endpoints
+  - [x] 11.3 Add team shared resource endpoints
     - `GET /api/teams/:id/agents` → `handle_team_agents`
     - `GET /api/teams/:id/audit` → `handle_team_audit`
     - `GET /api/teams/:id/policy` → `handle_team_policy`
     - All endpoints scoped to team via `check_team_permission`
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-  - [ ] 11.4 Add marketplace endpoints
+  - [x] 11.4 Add marketplace endpoints
     - `POST /api/marketplace/publish` → `handle_publish`
     - `GET /api/marketplace` → `handle_marketplace_list` with pagination and search
     - `POST /api/marketplace/install` → `handle_install`
     - `POST /api/marketplace/:id/rate` → `handle_rate`
     - _Requirements: 6.1, 7.1, 7.2, 7.3_
 
-  - [ ] 11.5 Add SaaS dashboard endpoint
+  - [x] 11.5 Add SaaS dashboard endpoint
     - `GET /api/dashboard` → `handle_dashboard` returning tenant usage summary
     - JWT validation middleware for SaaS endpoints
     - 503 with Retry-After when Ollama is unreachable
     - _Requirements: 8.4, 8.5, 8.6_
 
-  - [ ] 11.6 Wire route matching in `handle_request` for all 14 new endpoints
+  - [x] 11.6 Wire route matching in `handle_request` for all 14 new endpoints
     - Add path matching and method dispatch for each new route
     - Return proper HTTP status codes and error responses per the design error handling table
     - _Requirements: 1.5, 2.6, 3.1, 3.3, 3.4, 4.3, 5.4, 6.1, 7.1, 7.2, 7.3, 8.4_
 
-- [ ] 12. Checkpoint — HTTP API wiring
+- [x] 12. Checkpoint — HTTP API wiring
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 13. Implement SSO pen tests (`audit/tests/sso_pen_test.rs`)
@@ -297,11 +297,11 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - **Validates: Requirements 10.6**
     - Test file: `rust/crates/runtime/tests/filelock_prop_test.rs`
 
-- [ ] 15. Checkpoint — Pen tests and property tests
+- [x] 15. Checkpoint — Pen tests and property tests
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Extend E2E smoke tests (`daemon/tests/e2e_smoke.rs`)
-  - [ ] 16.1 Add E2E smoke tests for full agent pipeline
+- [x] 16. Extend E2E smoke tests (`daemon/tests/e2e_smoke.rs`)
+  - [x] 16.1 Add E2E smoke tests for full agent pipeline
     - Add test: agent with "chat" template reads a file and references its content
     - Add test: agent with "code-reviewer" template produces non-empty review summary
     - Add test: agent creates, reads, and modifies a file on disk (tool use exercise)
@@ -326,7 +326,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Test: `release_all(agent_id)` releases only that agent's locks while other agents' locks remain intact, under 8 concurrent agents
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
-- [x] 18. Final checkpoint — All tests pass
+- [x] 18. Final checkpoint — All tests pass ✓
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

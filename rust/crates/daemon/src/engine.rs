@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, AuditSeverity, GovernancePolicy};
 use backend::{BackendRegistry, DynBackend};
@@ -28,7 +29,6 @@ pub struct AgentRunResult {
 pub struct AgentEngine;
 
 impl AgentEngine {
-    /// Run an agent to completion with intelligence features.
     pub fn run_agent(
         agent_id: &str,
         config: &AgentConfig,
@@ -39,6 +39,7 @@ impl AgentEngine {
         intelligence_config: &IntelligenceConfig,
         workspace_root: &Path,
         file_locks: Option<runtime::FileLockManager>,
+        daemon_state: Option<Arc<Mutex<crate::state::DaemonState>>>,
     ) -> AgentRunResult {
         let model = &config.template.model;
         let enable_tools = !config.template.allowed_tools.is_empty();
@@ -207,19 +208,19 @@ impl AgentEngine {
         }
         let permission_policy = build_permission_policy(&allowed);
 
-        // Build tool executor with git tools, custom tools, and memory
+        // Build tool executor with git tools, custom tools, memory, and sub-agent support
         let tool_executor = IntelligentToolExecutor {
             allowed_tools: allowed,
             git_enabled: intelligence_config.git_enabled,
             custom_tools,
             workspace_root: workspace_root.to_path_buf(),
-            registry: None, // Set below for call_agent support
+            registry: Some(Arc::new(registry.clone())),
             governance: Some(governance.clone()),
-            audit_logger: None,
+            audit_logger: Some(Arc::new(AuditLogger::new())),
             intelligence_config: Some(intelligence_config.clone()),
-            file_locks,
+            file_locks: file_locks.clone(),
             agent_id: agent_id.to_string(),
-            daemon_state: None,
+            daemon_state: daemon_state.clone(),
         };
 
         let mut runtime = ConversationRuntime::new(
@@ -247,7 +248,8 @@ impl AgentEngine {
         if use_planning {
             Self::run_with_planning(
                 agent_id, config, prompt, &mut runtime, intelligence_config,
-                workspace_root, &index, governance, audit_logger,
+                workspace_root, &index, governance, audit_logger, registry,
+                file_locks, daemon_state,
             )
         } else {
             Self::run_simple(agent_id, config, prompt, &mut runtime, governance, audit_logger)
@@ -339,6 +341,9 @@ impl AgentEngine {
         index: &Option<CodebaseIndex>,
         governance: &GovernancePolicy,
         audit_logger: &AuditLogger,
+        registry: &BackendRegistry,
+        file_locks: Option<runtime::FileLockManager>,
+        daemon_state: Option<Arc<Mutex<crate::state::DaemonState>>>,
     ) -> AgentRunResult {
         let model = &config.template.model;
 
@@ -412,36 +417,105 @@ impl AgentEngine {
             }
         }
 
-        // Step 3: Execute each plan step
+        // Step 3: Execute each plan step with a FRESH session per step.
+        //
+        // Why fresh sessions? Each step has a focused context window:
+        //   - Full max_iterations budget (not split across all steps)
+        //   - No accumulated noise from prior steps' tool outputs
+        //   - Step-specific system prompt pre-loading relevant files
+        //
+        // The previous step's *result text* is passed as the first user message
+        // in the next step so the agent knows what was accomplished, without
+        // carrying the full conversation history forward.
         let mut total_iterations = 1usize; // count the planning turn
         let mut total_tool_invocations = 0u32;
         let mut all_results = Vec::new();
         let mut steps_completed = 0usize;
+        let mut prior_step_result: Option<String> = None;
 
         for step in &plan.steps {
             audit_logger.log(
                 &AuditEvent::new(
                     &config.session_id,
                     AuditEventKind::SessionStart,
-                    format!("executing step {}: {}", step.number, step.description),
+                    format!("executing step {}/{}: {}", step.number, plan.steps.len(), step.description),
                 )
                 .with_agent(agent_id),
             );
 
-            match runtime.run_turn(&step.instruction, None) {
+            // Build a step-specific system prompt that pre-loads the expected files
+            let step_system_prompt = build_step_system_prompt(
+                config, step, index, workspace_root, intelligence_config, model,
+            );
+
+            // Build a fresh backend client for this step
+            let enable_tools = !config.template.allowed_tools.is_empty();
+            let step_client = match registry.create_client(model, enable_tools) {
+                Ok(c) => DynBackend::new(c),
+                Err(e) => {
+                    all_results.push(format!("Step {} FAILED: backend error: {e}", step.number));
+                    break;
+                }
+            };
+
+            // Override governance if template requires approval
+            let mut step_governance = governance.clone();
+            if config.template.requires_approval {
+                step_governance.enforce_all_approvals = true;
+            }
+
+            // Fresh tool executor for this step (same config, clean state)
+            let step_tool_executor = IntelligentToolExecutor {
+                allowed_tools: config.template.allowed_tools.clone(),
+                git_enabled: intelligence_config.git_enabled,
+                custom_tools: tools::CustomToolRegistry::load(&workspace_root.join(".tachy")),
+                workspace_root: workspace_root.to_path_buf(),
+                registry: Some(Arc::new(registry.clone())),
+                governance: Some(step_governance),
+                audit_logger: Some(Arc::new(AuditLogger::new())),
+                intelligence_config: Some(intelligence_config.clone()),
+                file_locks: file_locks.clone(),
+                agent_id: format!("{agent_id}-step{}", step.number),
+                daemon_state: daemon_state.clone(),
+            };
+
+            let permission_policy = build_permission_policy(&config.template.allowed_tools);
+            let mut step_runtime = ConversationRuntime::new(
+                Session::new(),
+                step_client,
+                step_tool_executor,
+                permission_policy,
+                step_system_prompt,
+            ).with_max_iterations(config.template.max_iterations);
+
+            // Compose the step instruction, optionally prefixed with prior step outcome
+            let step_prompt = if let Some(ref prior) = prior_step_result {
+                format!(
+                    "Context from previous step:\n{prior}\n\n---\n\nYour task for this step:\n{}",
+                    step.instruction
+                )
+            } else {
+                step.instruction.clone()
+            };
+
+            match step_runtime.run_turn(&step_prompt, None) {
                 Ok(summary) => {
                     total_iterations += summary.iterations;
                     total_tool_invocations += summary.tool_results.len() as u32;
                     let step_text = extract_text_summary(&summary.assistant_messages);
                     all_results.push(format!("Step {}: {}\n{}", step.number, step.description, step_text));
+                    // Pass concise result to next step
+                    prior_step_result = Some(if step_text.len() > 800 {
+                        format!("{}…", &step_text[..800])
+                    } else {
+                        step_text
+                    });
                     steps_completed += 1;
 
                     // Edit-test-fix: if the step edited files and ETF is enabled
                     if intelligence_config.edit_test_fix_enabled && !step.expected_files.is_empty() {
                         if let Some(test_cmd) = intelligence::EditTestFix::detect_test_command(workspace_root, index.as_ref()) {
                             let targeted = intelligence::EditTestFix::targeted_test_command(&test_cmd, &step.expected_files);
-
-                            // Phase 1+2: Run diagnostics first, then tests
                             let lsp_enabled = intelligence_config.edit_test_fix.lsp_diagnostics_enabled;
                             let check = intelligence::EditTestFix::run_diagnostic_then_test(
                                 workspace_root,
@@ -459,92 +533,61 @@ impl AgentEngine {
                                     );
                                 }
                                 intelligence::CycleCheckResult::DiagnosticErrors(diag_result) => {
-                                    // LSP found errors — fix without running tests
                                     audit_logger.log(
                                         &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
                                             format!("LSP diagnostics: {} errors, {} warnings — attempting fix",
                                                 diag_result.error_count, diag_result.warning_count))
                                             .with_agent(agent_id),
                                     );
-
-                                    let fix_prompt = intelligence::EditTestFix::build_diagnostic_fix_prompt(
-                                        &diag_result, &step.expected_files,
-                                    );
-
+                                    let fix_prompt = intelligence::EditTestFix::build_diagnostic_fix_prompt(&diag_result, &step.expected_files);
                                     for retry in 0..intelligence_config.edit_test_fix.max_retries {
-                                        if let Ok(fix_summary) = runtime.run_turn(&fix_prompt, None) {
+                                        if let Ok(fix_summary) = step_runtime.run_turn(&fix_prompt, None) {
                                             total_iterations += fix_summary.iterations;
                                             total_tool_invocations += fix_summary.tool_results.len() as u32;
                                         }
-                                        // Re-check: diagnostics then tests
                                         let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
-                                            workspace_root,
-                                            &step.expected_files,
-                                            &targeted,
-                                            intelligence_config.edit_test_fix.test_timeout_secs,
-                                            lsp_enabled,
+                                            workspace_root, &step.expected_files, &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
                                         );
                                         match recheck {
                                             intelligence::CycleCheckResult::Passed => {
-                                                audit_logger.log(
-                                                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                                        format!("diagnostics + tests fixed after {} retries", retry + 1))
-                                                        .with_agent(agent_id),
-                                                );
+                                                audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                                    format!("fixed after {} retries", retry + 1)).with_agent(agent_id));
                                                 break;
                                             }
-                                            intelligence::CycleCheckResult::DiagnosticErrors(_) => {
-                                                // Still has diagnostic errors, loop continues
-                                            }
                                             intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                                // Diagnostics clean but tests fail — switch to test fix prompt
-                                                let test_fix = intelligence::EditTestFix::build_fix_prompt(
-                                                    &targeted, &test_result, &step.expected_files,
-                                                );
-                                                if let Ok(fix_summary) = runtime.run_turn(&test_fix, None) {
-                                                    total_iterations += fix_summary.iterations;
-                                                    total_tool_invocations += fix_summary.tool_results.len() as u32;
+                                                let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files);
+                                                if let Ok(s) = step_runtime.run_turn(&fix, None) {
+                                                    total_iterations += s.iterations;
+                                                    total_tool_invocations += s.tool_results.len() as u32;
                                                 }
                                                 break;
                                             }
-                                            intelligence::CycleCheckResult::TestExecutionError => break,
+                                            _ => {}
                                         }
                                     }
                                 }
                                 intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                    // Diagnostics clean but tests failed — use original fix flow
                                     let fix_prompt = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files);
-                                    audit_logger.log(
-                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart, "tests failed (diagnostics clean), attempting fix")
-                                            .with_agent(agent_id),
-                                    );
-
+                                    audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                                        "tests failed, attempting fix").with_agent(agent_id));
                                     for retry in 0..intelligence_config.edit_test_fix.max_retries {
-                                        if let Ok(fix_summary) = runtime.run_turn(&fix_prompt, None) {
-                                            total_iterations += fix_summary.iterations;
-                                            total_tool_invocations += fix_summary.tool_results.len() as u32;
+                                        if let Ok(s) = step_runtime.run_turn(&fix_prompt, None) {
+                                            total_iterations += s.iterations;
+                                            total_tool_invocations += s.tool_results.len() as u32;
                                         }
-                                        // Re-check with diagnostics + tests
                                         let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
-                                            workspace_root,
-                                            &step.expected_files,
-                                            &targeted,
-                                            intelligence_config.edit_test_fix.test_timeout_secs,
-                                            lsp_enabled,
+                                            workspace_root, &step.expected_files, &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
                                         );
                                         if matches!(recheck, intelligence::CycleCheckResult::Passed) {
-                                            audit_logger.log(
-                                                &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                                    format!("tests fixed after {} retries", retry + 1))
-                                                    .with_agent(agent_id),
-                                            );
+                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                                format!("tests fixed after {} retries", retry + 1)).with_agent(agent_id));
                                             break;
                                         }
                                     }
                                 }
-                                intelligence::CycleCheckResult::TestExecutionError => {
-                                    // Test execution failed, continue
-                                }
+                                intelligence::CycleCheckResult::TestExecutionError => {}
                             }
                         }
                     }
@@ -554,12 +597,10 @@ impl AgentEngine {
                         if intelligence::GitTools::is_git_repo() {
                             let msg = format!("tachy: step {} — {}", step.number, step.description);
                             match intelligence::GitTools::commit(&msg) {
-                                Ok(result) => {
-                                    audit_logger.log(
-                                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd, format!("committed: {}", result.hash))
-                                            .with_agent(agent_id),
-                                    );
-                                }
+                                Ok(result) => audit_logger.log(
+                                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                        format!("committed: {}", result.hash)).with_agent(agent_id),
+                                ),
                                 Err(_) => {} // nothing to commit is fine
                             }
                         }
@@ -567,7 +608,8 @@ impl AgentEngine {
                 }
                 Err(error) => {
                     audit_logger.log(
-                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd, format!("step {} failed: {error}", step.number))
+                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                            format!("step {} failed: {error}", step.number))
                             .with_severity(AuditSeverity::Warning)
                             .with_agent(agent_id),
                     );
@@ -608,6 +650,70 @@ impl AgentEngine {
             summary: result_summary,
         }
     }
+}
+
+/// Build a focused system prompt for a single plan step.
+///
+/// Pre-loads the content of `step.expected_files` into the prompt so the
+/// model has the relevant file context immediately — no read_file tool call
+/// needed for files the plan already knows about.
+fn build_step_system_prompt(
+    config: &platform::AgentConfig,
+    step: &intelligence::PlanStep,
+    index: &Option<CodebaseIndex>,
+    workspace_root: &Path,
+    intelligence_config: &IntelligenceConfig,
+    model: &str,
+) -> Vec<String> {
+    let mut sections = build_optimized_prompt(model, &config.template.system_prompt, None);
+
+    // Inject step metadata
+    sections.push(format!(
+        "## Current Task\nYou are executing step {} of a plan.\nGoal: {}\n\nFocus only on this step. Do not implement other parts of the plan.",
+        step.number, step.description
+    ));
+
+    // Pre-load expected files
+    if !step.expected_files.is_empty() {
+        let mut file_section = String::from("## Files for this step\n");
+        for file_path in &step.expected_files {
+            let abs = workspace_root.join(file_path);
+            match std::fs::read_to_string(&abs) {
+                Ok(content) => {
+                    // Estimate rough token budget: 4 chars per token, max 3000 tokens per file
+                    let max_chars = 12_000;
+                    let (content, truncated) = if content.len() > max_chars {
+                        (&content[..max_chars], true)
+                    } else {
+                        (content.as_str(), false)
+                    };
+                    let lang = intelligence::indexer::detect_language(file_path);
+                    file_section.push_str(&format!(
+                        "\n### {file_path}{}\n```{lang}\n{content}\n```\n",
+                        if truncated { " (truncated)" } else { "" }
+                    ));
+                }
+                Err(_) => {
+                    file_section.push_str(&format!("\n### {file_path}\n(file not yet created)\n"));
+                }
+            }
+        }
+        sections.push(file_section);
+    } else if let Some(idx) = index {
+        // No expected files specified — inject a short project summary
+        if let Some(lang) = &idx.project.primary_language {
+            sections.push(format!(
+                "Project: {} files, primary language: {lang}{}",
+                idx.project.total_files,
+                idx.project.test_command.as_deref()
+                    .map(|c| format!(", test command: {c}"))
+                    .unwrap_or_default()
+            ));
+        }
+        let _ = intelligence_config; // suppress unused warning
+    }
+
+    sections
 }
 
 fn check_governance(governance: &GovernancePolicy, tool_count: u32, session_id: &str, agent_id: &str, audit_logger: &AuditLogger) {
@@ -734,12 +840,16 @@ impl ToolExecutor for IntelligentToolExecutor {
                 let sub_agent_id = format!("sub-{}", std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
 
-                // Find the template
-                let config = platform::PlatformConfig::default();
-                let agent_template = config.agent_templates.iter()
+                // Find the template — check loaded config first, fall back to defaults
+                let default_config = platform::PlatformConfig::default();
+                let agent_template = default_config.agent_templates.iter()
                     .find(|t| t.name == template)
                     .cloned()
-                    .ok_or_else(|| ToolError::new(format!("unknown agent template: {template}")))?;
+                    .ok_or_else(|| ToolError::new(format!(
+                        "unknown agent template: '{}'. Available: {}",
+                        template,
+                        default_config.agent_templates.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+                    )))?;
 
                 let agent_config = platform::AgentConfig {
                     template: agent_template,
@@ -749,8 +859,16 @@ impl ToolExecutor for IntelligentToolExecutor {
                 };
 
                 let result = AgentEngine::run_agent(
-                    &sub_agent_id, &agent_config, prompt, reg, gov, audit, intel, &self.workspace_root,
+                    &sub_agent_id,
+                    &agent_config,
+                    prompt,
+                    reg,
+                    gov,
+                    audit,
+                    intel,
+                    &self.workspace_root,
                     self.file_locks.clone(),
+                    self.daemon_state.clone(),
                 );
 
                 return Ok(format!(

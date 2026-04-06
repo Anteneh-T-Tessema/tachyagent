@@ -94,10 +94,8 @@ impl EmbeddingClient {
 
     /// Embed a text string. Returns a 768-dimensional float vector.
     ///
-    /// Uses `curl` as the HTTP client to avoid adding a new dependency on
-    /// `reqwest` in this crate (reqwest is already available in `backend`
-    /// via `ollama.rs`, but we keep embedding calls explicitly synchronous
-    /// and self-contained).
+    /// Uses the integrated reqwest client. We keep embedding calls
+    /// explicitly synchronous to simplify indexing logic.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         // Sanitize input — strip newlines, limit length to avoid Ollama OOM
         let text = text.replace('\n', " ");

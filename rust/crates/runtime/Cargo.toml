@@ -13,5 +13,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
 walkdir = "2"
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

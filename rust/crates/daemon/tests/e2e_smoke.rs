@@ -66,6 +66,7 @@ fn agent_run_with_real_model() {
         &state.config.intelligence,
         &root,
         None,
+        None,
     );
 
     eprintln!("Result: success={}, iterations={}, tools={}", result.success, result.iterations, result.tool_invocations);
@@ -151,6 +152,7 @@ fn chat_template_reads_file_and_references_content() {
         &state.config.intelligence,
         &root,
         None,
+        None,
     );
 
     eprintln!("Summary: {}", &result.summary[..result.summary.len().min(300)]);
@@ -204,6 +206,7 @@ fn code_reviewer_template_produces_review_summary() {
         &state.config.intelligence,
         &root,
         None,
+        None,
     );
 
     eprintln!("Review summary: {}", &result.summary[..result.summary.len().min(300)]);
@@ -250,6 +253,7 @@ fn agent_creates_reads_and_modifies_file() {
         &state.audit_logger,
         &state.config.intelligence,
         &root,
+        None,
         None,
     );
 
@@ -385,6 +389,7 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         &logger,
         &ws.config.intelligence,
         &root,
+        None,
         None,
     );
 

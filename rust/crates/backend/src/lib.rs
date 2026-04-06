@@ -9,6 +9,6 @@ pub use discovery::{
     detect_system_ram_gb_public, HealthReport, LocalModel,
 };
 pub use embeddings::{cosine_similarity, EmbeddingClient, EmbeddingError};
-pub use ollama::OllamaBackend;
+pub use ollama::{OllamaBackend, OllamaChatRequest, OllamaGenerateRequest, OllamaMessage, BackendEvent};
 pub use openai_compat::OpenAiCompatBackend;
 pub use registry::{BackendConfig, BackendKind, BackendRegistry, DynBackend, ModelEntry, ModelTier};

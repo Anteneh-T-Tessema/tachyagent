@@ -9,8 +9,6 @@ use crate::engine::AgentEngine;
 use crate::parallel::{self, AgentTask, ParallelRun, RunStatus, TaskStatus};
 use crate::state::DaemonState;
 use crate::web;
-use platform::ScheduleRule;
-use runtime::ApiClient;
 
 // ---------------------------------------------------------------------------
 // Request/response types
@@ -512,17 +510,48 @@ async fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> 
     let (response, tx) = Response::sse();
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        let (mut ollama_backend, _metrics_tx) = {
+        let (v_backend, err_msg) = {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
             let model_name = req.model.as_deref().unwrap_or(&s.config.agent_templates[0].model);
-            let tx_inner = tx.clone();
-            let mut b = backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), true).expect("backend fail");
-            b.set_stream_callback(move |token| { let _ = tx_inner.blocking_send(format!("data: {{\"text\":\"{}\"}}\n\n", token.replace('\"', "\\\""))); });
-            (b, Arc::clone(&state))
+            match backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), false) {
+                Ok(b) => (Some(b), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
         };
-        if let Ok((_tokens, metrics)) = ollama_backend.generate(&req.prefix, req.suffix.as_deref().unwrap_or(""), req.max_tokens.unwrap_or(128)) {
-            let mut s = _metrics_tx.lock().unwrap_or_else(|e| e.into_inner());
-            s.inference_stats.record(metrics.ttft_ms, metrics.tokens_per_sec, metrics.total_tokens);
+
+        if let Some(mut ollama_backend) = v_backend {
+            let (t_tx, mut t_rx) = tokio::sync::mpsc::channel(100);
+            ollama_backend.set_token_tx(t_tx);
+            
+            let tx_inner = tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = t_rx.recv().await {
+                    match event {
+                        backend::BackendEvent::Text(t) => {
+                            let _ = tx_inner.send(format!("data: {{\"text\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
+                        }
+                        backend::BackendEvent::Thinking(t) => {
+                            let _ = tx_inner.send(format!("data: {{\"thinking\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
+                        }
+                    }
+                }
+            });
+
+            let (pre, suf, mid) = ollama_backend.get_fim_tokens();
+            if let Ok((_tokens, metrics)) = ollama_backend.send_streaming_generate(backend::OllamaGenerateRequest {
+                model: ollama_backend.model().to_string(),
+                prompt: format!("{pre}{}{suf}{}{mid}", req.prefix, req.suffix.as_deref().unwrap_or("")),
+                stream: true,
+                raw: true,
+                options: None,
+            }).await {
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                s.inference_stats.record(metrics.ttft_ms, metrics.tokens_per_sec, metrics.total_tokens);
+            }
+        }
+
+        if let Some(msg) = err_msg {
+            let _ = tx.send(format!("data: {{\"error\":\"Backend fail: {}\"}}\n\n", msg)).await;
         }
         let _ = tx.send("event: done\ndata: {}\n\n".to_string()).await;
     });
@@ -536,23 +565,50 @@ async fn handle_chat_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> Resp
     let (response, tx) = Response::sse();
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        let mut ollama_backend = {
+        let (v_backend, err_msg) = {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
             let model_name = req.model.as_deref().unwrap_or(&s.config.agent_templates[0].model);
-            let tx_inner = tx.clone();
-            let mut b = backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), true).expect("backend fail");
-            b.set_stream_callback(move |token| { let _ = tx_inner.blocking_send(format!("data: {{\"text\":\"{}\"}}\n\n", token.replace('\"', "\\\""))); });
-            b
+            match backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), false) {
+                Ok(b) => (Some(b), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
         };
-        let _ = ollama_backend.stream(runtime::ApiRequest { 
-            system_prompt: vec![],
-            messages: vec![runtime::ConversationMessage { 
-                role: runtime::MessageRole::User, 
-                blocks: vec![runtime::ContentBlock::Text { text: req.prompt }],
-                usage: None,
-            }],
-            format: runtime::ResponseFormat::default(),
-        });
+
+        if let Some(mut ollama_backend) = v_backend {
+            let (t_tx, mut t_rx) = tokio::sync::mpsc::channel(100);
+            ollama_backend.set_token_tx(t_tx);
+
+            let tx_inner = tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = t_rx.recv().await {
+                    match event {
+                        backend::BackendEvent::Text(t) => {
+                            let _ = tx_inner.send(format!("data: {{\"text\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
+                        }
+                        backend::BackendEvent::Thinking(t) => {
+                            let _ = tx_inner.send(format!("data: {{\"thinking\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
+                        }
+                    }
+                }
+            });
+
+            if let Ok((_tokens, metrics)) = ollama_backend.send_streaming(backend::OllamaChatRequest {
+                model: ollama_backend.model().to_string(),
+                messages: vec![backend::OllamaMessage { role: "user".to_string(), content: req.prompt, tool_calls: None }],
+                stream: true,
+                tools: None,
+                options: None,
+                format: None,
+            }).await {
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                s.inference_stats.record(metrics.ttft_ms, metrics.tokens_per_sec, metrics.total_tokens);
+            }
+        } 
+        
+        if let Some(msg) = err_msg {
+            let _ = tx.send(format!("data: {{\"text\":\"Error: {} check if model is installed in ollama.\"}}\n\n", msg)).await;
+        }
+
         let _ = tx.send("event: done\ndata: {}\n\n".to_string()).await;
     });
     response
@@ -721,12 +777,17 @@ fn truncate_completion(text: &str, max_tokens: usize) -> String {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn health_endpoint_works() {
         let root = std::env::temp_dir().join(format!("tachy-test-{}", chrono_now_secs()));
-        let state = Arc::new(Mutex::new(DaemonState::init(root.clone()).expect("init")));
+        // DaemonState::init calls reqwest::blocking which creates a runtime internally.
+        // spawn_blocking runs it on a dedicated thread where blocking is allowed.
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
         let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
         let res = handle_request("GET /health HTTP/1.1\r\n\r\n", &state, &limiter, "127.0.0.1").await;
-        if let Response::Full { body, .. } = res { assert!(body.contains("\"status\": \"ok\"")); } else { panic!("not full"); }
+        if let Response::Full { body, .. } = res { assert!(body.contains("\"status\":\"ok\"") || body.contains("\"status\": \"ok\"")); } else { panic!("not full"); }
     }
 }

@@ -14,17 +14,17 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export the new module from `audit/src/lib.rs`
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.6_
 
-  - [ ]* 1.2 Write property test for usage event field preservation
+  - [x]* 1.2 Write property test for usage event field preservation
     - **Property 1: Usage event recording preserves all fields and produces audit entry**
     - **Validates: Requirements 1.1, 1.2, 1.3**
     - Test file: `rust/crates/audit/tests/metering_test.rs`
 
-  - [ ]* 1.3 Write property test for usage counter consistency
+  - [x]* 1.3 Write property test for usage counter consistency
     - **Property 2: Counter consistency**
     - **Validates: Requirements 1.4**
     - Test file: `rust/crates/audit/tests/metering_test.rs`
 
-  - [ ]* 1.4 Write property test for invalid event rejection
+  - [x]* 1.4 Write property test for invalid event rejection
     - **Property 3: Invalid usage events are rejected**
     - **Validates: Requirements 1.6**
     - Test file: `rust/crates/audit/tests/metering_test.rs`
@@ -39,7 +39,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export from `audit/src/lib.rs`
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_
 
-  - [ ]* 2.2 Write property test for billing aggregation
+  - [x]* 2.2 Write property test for billing aggregation
     - **Property 4: Billing aggregation reports correct totals per user across all three dimensions**
     - **Validates: Requirements 2.1, 2.4**
     - Test file: `rust/crates/audit/tests/billing_test.rs`
@@ -55,22 +55,22 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export the new module from `daemon/src/lib.rs`
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
 
-  - [ ]* 4.2 Write property test for team creation round-trip
+  - [x]* 4.2 Write property test for team creation round-trip
     - **Property 5: Team creation and persistence round-trip**
     - **Validates: Requirements 3.1, 3.2**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-  - [ ]* 4.3 Write property test for invitation-join round-trip
+  - [x]* 4.3 Write property test for invitation-join round-trip
     - **Property 6: Invitation-join round-trip preserves role**
     - **Validates: Requirements 3.3, 3.4**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-  - [ ]* 4.4 Write property test for expired/used invitation rejection
+  - [x]* 4.4 Write property test for expired/used invitation rejection
     - **Property 7: Expired or used invitations are rejected**
     - **Validates: Requirements 3.5**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-  - [ ]* 4.5 Write property test for last-admin invariant
+  - [x]* 4.5 Write property test for last-admin invariant
     - **Property 8: Last-admin invariant**
     - **Validates: Requirements 3.6**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
@@ -83,17 +83,17 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export the new function from `audit/src/lib.rs`
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ]* 5.2 Write property test for team-scoped permission isolation
+  - [x]* 5.2 Write property test for team-scoped permission isolation
     - **Property 9: Team-scoped permission isolation**
     - **Validates: Requirements 4.1, 4.5**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-  - [ ]* 5.3 Write property test for role changes auditing
+  - [x]* 5.3 Write property test for role changes auditing
     - **Property 10: Role changes are applied and audited**
     - **Validates: Requirements 4.3, 4.4**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
 
-  - [ ]* 5.4 Write property test for agent-team association
+  - [x]* 5.4 Write property test for agent-team association
     - **Property 11: Agent-team association**
     - **Validates: Requirements 5.1**
     - Test file: `rust/crates/daemon/tests/teams_test.rs`
@@ -110,42 +110,42 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export from `daemon/src/lib.rs`
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 7.1, 7.2, 7.3, 7.4, 7.5_
 
-  - [ ]* 7.2 Write property test for publish field preservation
+  - [x]* 7.2 Write property test for publish field preservation
     - **Property 12: Marketplace publish preserves all listing fields**
     - **Validates: Requirements 6.1, 6.3**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.3 Write property test for semver validation
+  - [x]* 7.3 Write property test for semver validation
     - **Property 13: Semver validation**
     - **Validates: Requirements 6.2**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.4 Write property test for version history append-only
+  - [x]* 7.4 Write property test for version history append-only
     - **Property 14: Version history is append-only with latest as default**
     - **Validates: Requirements 6.4**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.5 Write property test for duplicate conflict detection
+  - [x]* 7.5 Write property test for duplicate conflict detection
     - **Property 15: Duplicate name+version conflict detection**
     - **Validates: Requirements 6.5**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.6 Write property test for search sort order
+  - [x]* 7.6 Write property test for search sort order
     - **Property 16: Marketplace search results are sorted by rating descending**
     - **Validates: Requirements 7.1**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.7 Write property test for install round-trip
+  - [x]* 7.7 Write property test for install round-trip
     - **Property 17: Marketplace install round-trip**
     - **Validates: Requirements 7.2**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.8 Write property test for rating average correctness
+  - [x]* 7.8 Write property test for rating average correctness
     - **Property 18: Rating average correctness with idempotent per-user updates**
     - **Validates: Requirements 7.3, 7.4**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
 
-  - [ ]* 7.9 Write property test for missing tools detection
+  - [x]* 7.9 Write property test for missing tools detection
     - **Property 19: Missing tools detection on install**
     - **Validates: Requirements 7.5**
     - Test file: `rust/crates/daemon/tests/marketplace_test.rs`
@@ -161,22 +161,22 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Export from `daemon/src/lib.rs`
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-  - [ ]* 8.2 Write property test for tenant data isolation
+  - [x]* 8.2 Write property test for tenant data isolation
     - **Property 20: Tenant data isolation**
     - **Validates: Requirements 8.1**
     - Test file: `rust/crates/daemon/tests/saas_test.rs`
 
-  - [ ]* 8.3 Write property test for tenant signup resource creation
+  - [x]* 8.3 Write property test for tenant signup resource creation
     - **Property 21: Tenant signup creates all required resources**
     - **Validates: Requirements 8.2**
     - Test file: `rust/crates/daemon/tests/saas_test.rs`
 
-  - [ ]* 8.4 Write property test for JWT authentication round-trip
+  - [x]* 8.4 Write property test for JWT authentication round-trip
     - **Property 22: JWT authentication round-trip**
     - **Validates: Requirements 8.3**
     - Test file: `rust/crates/daemon/tests/saas_test.rs`
 
-  - [ ]* 8.5 Write property test for resource limit enforcement
+  - [x]* 8.5 Write property test for resource limit enforcement
     - **Property 23: Resource limit enforcement**
     - **Validates: Requirements 8.5**
     - Test file: `rust/crates/daemon/tests/saas_test.rs`
@@ -250,49 +250,49 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - Test CDATA sections wrapping NameID
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 11.10_
 
-  - [ ]* 13.2 Write property test for malicious NameID handling
+  - [x]* 13.2 Write property test for malicious NameID handling
     - **Property 28: Malicious NameID content is handled safely**
     - **Validates: Requirements 11.2, 11.5**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-  - [ ]* 13.3 Write property test for forged issuer rejection
+  - [x]* 13.3 Write property test for forged issuer rejection
     - **Property 29: Forged issuer rejection**
     - **Validates: Requirements 11.3**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-  - [ ]* 13.4 Write property test for session token replay
+  - [x]* 13.4 Write property test for session token replay
     - **Property 30: Session token replay after invalidation**
     - **Validates: Requirements 11.4**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-  - [ ]* 13.5 Write property test for expired session rejection
+  - [x]* 13.5 Write property test for expired session rejection
     - **Property 31: Expired session rejection**
     - **Validates: Requirements 11.6**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-  - [ ]* 13.6 Write property test for base64 decoder robustness
+  - [x]* 13.6 Write property test for base64 decoder robustness
     - **Property 32: Base64 decoder rejects invalid input**
     - **Validates: Requirements 11.7**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-  - [ ]* 13.7 Write property test for SAML assertion round-trip
+  - [x]* 13.7 Write property test for SAML assertion round-trip
     - **Property 33: SAML assertion round-trip**
     - **Validates: Requirements 11.9**
     - Test file: `rust/crates/audit/tests/sso_pen_test.rs`
 
-- [ ] 14. Implement file lock property tests (`runtime/tests/filelock_prop_test.rs`)
-  - [ ]* 14.1 Write property test for file lock mutual exclusion
+- [x] 14. Implement file lock property tests (`runtime/tests/filelock_prop_test.rs`)
+  - [x]* 14.1 Write property test for file lock mutual exclusion
     - **Property 25: File lock mutual exclusion under contention**
     - **Validates: Requirements 10.3**
     - Add `proptest` dev-dependency to `runtime/Cargo.toml`
     - Test file: `rust/crates/runtime/tests/filelock_prop_test.rs`
 
-  - [ ]* 14.2 Write property test for file lock TTL expiry
+  - [x]* 14.2 Write property test for file lock TTL expiry
     - **Property 26: File lock TTL expiry**
     - **Validates: Requirements 10.5**
     - Test file: `rust/crates/runtime/tests/filelock_prop_test.rs`
 
-  - [ ]* 14.3 Write property test for release_all selectivity
+  - [x]* 14.3 Write property test for release_all selectivity
     - **Property 27: release_all is selective**
     - **Validates: Requirements 10.6**
     - Test file: `rust/crates/runtime/tests/filelock_prop_test.rs`
@@ -311,7 +311,7 @@ Implements usage-based billing metering, team workspaces, agent marketplace, hos
     - All tests must complete within 300 seconds with 8B model or smaller
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7_
 
-  - [ ]* 16.2 Write property test for DAG dependency order
+  - [x]* 16.2 Write property test for DAG dependency order
     - **Property 24: DAG execution respects dependency order**
     - **Validates: Requirements 10.2**
     - Test file: `rust/crates/daemon/tests/load_test.rs`

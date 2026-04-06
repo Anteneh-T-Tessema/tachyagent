@@ -1442,10 +1442,19 @@ impl LiveCli {
             let mut ollama = backend::OllamaBackend::new(model.clone(), base_url, enable_tools)
                 .map_err(|e| e.to_string())?;
             // Enable real-time token streaming to stdout
-            ollama.set_stream_callback(|token| {
+            let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+            ollama.set_token_tx(tx);
+            tokio::spawn(async move {
+                use backend::BackendEvent;
                 use std::io::Write;
-                let _ = io::stdout().write_all(token.as_bytes());
-                let _ = io::stdout().flush();
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        BackendEvent::Text(t) | BackendEvent::Thinking(t) => {
+                            let _ = std::io::stdout().write_all(t.as_bytes());
+                            let _ = std::io::stdout().flush();
+                        }
+                    }
+                }
             });
             DynBackend::new(Box::new(ollama))
         } else {

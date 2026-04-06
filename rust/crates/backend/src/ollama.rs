@@ -6,9 +6,6 @@ use runtime::{
 use serde::{Deserialize, Serialize};
 use tools::mvp_tool_specs;
 
-/// Maximum size of tool output to feed back to the model (bytes).
-const MAX_TOOL_OUTPUT_CHARS: usize = 8_000;
-
 /// Maximum retries for transient Ollama failures.
 const MAX_RETRIES: u32 = 3;
 
@@ -24,7 +21,13 @@ pub struct OllamaBackend {
     model: String,
     enable_tools: bool,
     model_options: ModelOptions,
-    stream_callback: Option<Box<dyn Fn(&str) + Send + Sync>>,
+    token_tx: Option<tokio::sync::mpsc::Sender<BackendEvent>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BackendEvent {
+    Text(String),
+    Thinking(String),
 }
 
 struct ModelOptions {
@@ -97,12 +100,29 @@ impl OllamaBackend {
             model,
             enable_tools,
             model_options,
-            stream_callback: None,
+            token_tx: None,
         })
     }
 
-    pub fn set_stream_callback(&mut self, callback: impl Fn(&str) + Send + Sync + 'static) {
-        self.stream_callback = Some(Box::new(callback));
+    pub fn set_token_tx(&mut self, tx: tokio::sync::mpsc::Sender<BackendEvent>) {
+        self.token_tx = Some(tx);
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Return the correct FIM (Fill-in-the-Middle) tokens for this model.
+    pub fn get_fim_tokens(&self) -> (&str, &str, &str) {
+        let m = self.model.to_lowercase();
+        if m.contains("codellama") || m.contains("llama-2") {
+            ("<PRE>", "<SUF>", "<MID>")
+        } else if m.contains("starcoder") || m.contains("stablecode") {
+            ("<fim_prefix>", "<fim_suffix>", "<fim_middle>")
+        } else {
+            // Default to Gemma / DeepSeek / Llama 3 format
+            ("<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>")
+        }
     }
 }
 
@@ -110,7 +130,7 @@ impl ApiClient for OllamaBackend {
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         let messages = convert_to_ollama_messages(&request);
         let tools = if self.enable_tools { Some(build_ollama_tools()) } else { None };
-        let use_streaming = self.stream_callback.is_some() && tools.is_none();
+        let use_streaming = self.token_tx.is_some() && tools.is_none();
 
         let body = OllamaChatRequest {
             model: self.model.clone(),
@@ -162,7 +182,7 @@ impl OllamaBackend {
         let body = OllamaGenerateRequest {
             model: self.model.clone(),
             prompt,
-            stream: self.stream_callback.is_some(),
+            stream: self.token_tx.is_some(),
             raw: is_gemma4,
             options: Some(OllamaOptions {
                 num_ctx: Some(self.model_options.num_ctx),
@@ -207,11 +227,11 @@ impl OllamaBackend {
         Err(RuntimeError::new(format!("ollama failed after attempts: {last_error}")))
     }
 
-    async fn send_streaming(
+    pub async fn send_streaming(
         &self,
         body: OllamaChatRequest,
     ) -> Result<(Vec<AssistantEvent>, InferenceMetrics), RuntimeError> {
-        let response = self.client.post(format!("{}/api/chat", self.base_url)).json(&body).send().await.map_err(|e| RuntimeError::new(format!("ollama request failed: {e}")))?;
+        let mut response = self.client.post(format!("{}/api/chat", self.base_url)).json(&body).send().await.map_err(|e| RuntimeError::new(format!("ollama request failed: {e}")))?;
         if !response.status().is_success() { return Err(RuntimeError::new(format!("ollama returned {}", response.status()))); }
 
         let start = std::time::Instant::now();
@@ -220,24 +240,37 @@ impl OllamaBackend {
         let mut p_tokens = 0;
         let mut e_tokens = 0;
 
-        let body_text = response.text().await.map_err(|e| RuntimeError::new(e.to_string()))?;
-        for line in body_text.lines() {
-            if line.trim().is_empty() { continue; }
-            if let Ok(chunk) = serde_json::from_str::<OllamaStreamChunk>(line) {
-                if !chunk.message.content.is_empty() {
-                    if ttft.is_none() { ttft = Some(start.elapsed()); }
-                    if let Some(cb) = &self.stream_callback { cb(&chunk.message.content); }
-                    content.push_str(&chunk.message.content);
-                }
-                if chunk.done {
-                    p_tokens = chunk.prompt_eval_count.unwrap_or(0);
-                    e_tokens = chunk.eval_count.unwrap_or(0);
+        let mut buffer = Vec::new();
+
+        while let Ok(Some(chunk)) = response.chunk().await {
+            buffer.extend_from_slice(&chunk);
+
+            while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                let line = buffer.drain(..=pos).collect::<Vec<u8>>();
+                if let Ok(chunk_data) = serde_json::from_slice::<OllamaStreamChunk>(&line) {
+                    let is_thinking = chunk_data.message.thinking.is_some();
+                    let text = chunk_data.message.thinking.unwrap_or_else(|| chunk_data.message.content.clone());
+                    if !text.is_empty() {
+                        if ttft.is_none() { ttft = Some(start.elapsed()); }
+                        if let Some(tx) = &self.token_tx { 
+                            let event = if is_thinking { BackendEvent::Thinking(text.clone()) } else { BackendEvent::Text(text.clone()) };
+                            let _ = tx.send(event).await; 
+                        }
+                        content.push_str(&text);
+                    }
+                    if chunk_data.done {
+                        p_tokens = chunk_data.prompt_eval_count.unwrap_or(0);
+                        e_tokens = chunk_data.eval_count.unwrap_or(0);
+                    }
+                } else if !line.is_empty() {
+                    // Log or handle malformed JSON line if needed
                 }
             }
         }
 
         let ttft_ms = ttft.unwrap_or(start.elapsed()).as_millis() as u32;
-        let tps = if start.elapsed().as_secs_f32() > 0.0 { e_tokens as f32 / start.elapsed().as_secs_f32() } else { 0.0 };
+        let elapsed = start.elapsed().as_secs_f32();
+        let tps = if elapsed > 0.0 { e_tokens as f32 / elapsed } else { 0.0 };
         let clean = strip_thinking_blocks(&content);
         
         let mut events = Vec::new();
@@ -251,36 +284,44 @@ impl OllamaBackend {
         Ok((events, InferenceMetrics { ttft_ms, tokens_per_sec: tps, total_tokens: (p_tokens + e_tokens) as u64 }))
     }
 
-    async fn send_streaming_generate(
+    pub async fn send_streaming_generate(
         &self,
         body: OllamaGenerateRequest,
     ) -> Result<(Vec<AssistantEvent>, InferenceMetrics), RuntimeError> {
-        let response = self.client.post(format!("{}/api/generate", self.base_url)).json(&body).send().await.map_err(|e| RuntimeError::new(e.to_string()))?;
+        let mut response = self.client.post(format!("{}/api/generate", self.base_url)).json(&body).send().await.map_err(|e| RuntimeError::new(e.to_string()))?;
+        if !response.status().is_success() { return Err(RuntimeError::new(format!("ollama prompt failed: {}", response.status()))); }
+
         let start = std::time::Instant::now();
         let mut ttft = None;
         let mut content = String::new();
         let mut p_tokens = 0;
         let mut e_tokens = 0;
 
-        let body_text = response.text().await.map_err(|e| RuntimeError::new(e.to_string()))?;
-        for line in body_text.lines() {
-            if line.trim().is_empty() { continue; }
-            #[derive(Deserialize)] struct GenChunk { response: String, done: bool, prompt_eval_count: Option<u32>, eval_count: Option<u32> }
-            if let Ok(chunk) = serde_json::from_str::<GenChunk>(line) {
-                if !chunk.response.is_empty() {
-                    if ttft.is_none() { ttft = Some(start.elapsed()); }
-                    if let Some(cb) = &self.stream_callback { cb(&chunk.response); }
-                    content.push_str(&chunk.response);
-                }
-                if chunk.done {
-                    p_tokens = chunk.prompt_eval_count.unwrap_or(0);
-                    e_tokens = chunk.eval_count.unwrap_or(0);
+        let mut buffer = Vec::new();
+
+        while let Ok(Some(chunk)) = response.chunk().await {
+            buffer.extend_from_slice(&chunk);
+
+            while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                let line = buffer.drain(..=pos).collect::<Vec<u8>>();
+                #[derive(Deserialize)] struct GenChunk { response: String, done: bool, prompt_eval_count: Option<u32>, eval_count: Option<u32> }
+                if let Ok(chunk_data) = serde_json::from_slice::<GenChunk>(&line) {
+                    if !chunk_data.response.is_empty() {
+                        if ttft.is_none() { ttft = Some(start.elapsed()); }
+                        if let Some(tx) = &self.token_tx { let _ = tx.send(BackendEvent::Text(chunk_data.response.clone())).await; }
+                        content.push_str(&chunk_data.response);
+                    }
+                    if chunk_data.done {
+                        p_tokens = chunk_data.prompt_eval_count.unwrap_or(0);
+                        e_tokens = chunk_data.eval_count.unwrap_or(0);
+                    }
                 }
             }
         }
 
         let ttft_ms = ttft.unwrap_or(start.elapsed()).as_millis() as u32;
-        let tps = if start.elapsed().as_secs_f32() > 0.0 { e_tokens as f32 / start.elapsed().as_secs_f32() } else { 0.0 };
+        let elapsed = start.elapsed().as_secs_f32();
+        let tps = if elapsed > 0.0 { e_tokens as f32 / elapsed } else { 0.0 };
         let mut events = Vec::new();
         if !content.is_empty() { events.push(AssistantEvent::TextDelta(content)); }
         events.push(AssistantEvent::Usage(TokenUsage { input_tokens: p_tokens, output_tokens: e_tokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }));
@@ -381,73 +422,73 @@ fn build_ollama_tools() -> Vec<OllamaTool> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OllamaChatRequest {
-    model: String,
-    messages: Vec<OllamaMessage>,
-    stream: bool,
+pub struct OllamaChatRequest {
+    pub model: String,
+    pub messages: Vec<OllamaMessage>,
+    pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OllamaTool>>,
+    pub tools: Option<Vec<OllamaTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<OllamaOptions>,
+    pub options: Option<OllamaOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<String>,
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OllamaGenerateRequest {
-    model: String,
-    prompt: String,
-    stream: bool,
-    raw: bool,
+pub struct OllamaGenerateRequest {
+    pub model: String,
+    pub prompt: String,
+    pub stream: bool,
+    pub raw: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<OllamaOptions>,
+    pub options: Option<OllamaOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OllamaOptions {
+pub struct OllamaOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
-    num_ctx: Option<u32>,
+    pub num_ctx: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
+    pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    top_p: Option<f32>,
+    pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    top_k: Option<u32>,
+    pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    num_predict: Option<u32>,
+    pub num_predict: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OllamaMessage {
-    role: String,
-    content: String,
+pub struct OllamaMessage {
+    pub role: String,
+    pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OllamaToolCall>>,
+    pub tool_calls: Option<Vec<OllamaToolCall>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OllamaToolCall {
-    id: Option<String>,
-    function: OllamaFunctionCall,
+pub struct OllamaToolCall {
+    pub id: Option<String>,
+    pub function: OllamaFunctionCall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OllamaFunctionCall {
-    name: String,
-    arguments: serde_json::Value,
+pub struct OllamaFunctionCall {
+    pub name: String,
+    pub arguments: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OllamaTool {
-    r#type: String,
-    function: OllamaToolFunction,
+pub struct OllamaTool {
+    pub r#type: String,
+    pub function: OllamaToolFunction,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct OllamaToolFunction {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
+pub struct OllamaToolFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,4 +520,6 @@ struct OllamaStreamChunk {
 #[derive(Debug, Deserialize)]
 struct OllamaStreamMessage {
     content: String,
+    #[serde(default)]
+    thinking: Option<String>,
 }

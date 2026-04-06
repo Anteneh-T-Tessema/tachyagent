@@ -29,6 +29,20 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             --glass: blur(12px);
         }
 
+        .thinking-block {
+            font-size: 13px;
+            color: var(--muted);
+            font-style: italic;
+            border-left: 2px solid var(--border);
+            padding-left: 12px;
+            margin-bottom: 12px;
+            white-space: pre-wrap;
+        }
+
+        .text-content {
+            white-space: pre-wrap;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: 'Inter', system-ui, -apple-system, sans-serif; 
@@ -321,8 +335,16 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <div class="stat-label">Last TTFT</div>
                     </div>
                     <div class="stat-card">
+                        <div class="stat-value" id="val-p50">0ms</div>
+                        <div class="stat-label">Median (P50)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-p95">0ms</div>
+                        <div class="stat-label">Tail Latency (P95)</div>
+                    </div>
+                    <div class="stat-card">
                         <div class="stat-value" id="val-tps">0.0</div>
-                        <div class="stat-label">Last Tokens/Sec</div>
+                        <div class="stat-label">Throughput /s</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-value" id="val-total-tokens">0</div>
@@ -467,6 +489,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 const stats = await r.json();
                 
                 document.getElementById('val-ttft').textContent = `${stats.last_ttft_ms}ms`;
+                document.getElementById('val-p50').textContent = `${stats.p50_ttft_ms.toFixed(0)}ms`;
+                document.getElementById('val-p95').textContent = `${stats.p95_ttft_ms.toFixed(0)}ms`;
                 document.getElementById('val-tps').textContent = stats.last_tokens_per_sec.toFixed(1);
                 document.getElementById('val-total-tokens').textContent = stats.total_tokens.toLocaleString();
                 document.getElementById('val-requests').textContent = stats.total_requests.toLocaleString();
@@ -562,7 +586,15 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                                 const data = JSON.parse(line.slice(6));
                                 if (data.text) {
                                     content += data.text;
-                                    bubble.textContent = content;
+                                    bubble.querySelector('.text-content').textContent = content;
+                                } else if (data.thinking) {
+                                    let thinkEl = bubble.querySelector('.thinking-block');
+                                    if (!thinkEl) {
+                                        thinkEl = document.createElement('div');
+                                        thinkEl.className = 'thinking-block';
+                                        bubble.insertBefore(thinkEl, bubble.firstChild);
+                                    }
+                                    thinkEl.textContent += data.thinking;
                                 }
                             } catch(e) {}
                         }
@@ -581,7 +613,9 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             div.className = `message ${role}`;
             if (id) div.id = id;
             div.innerHTML = `
-                <div class="bubble">${text || '<span class="spinner"></span>'}</div>
+                <div class="bubble">
+                    <div class="text-content">${text || (role==='assistant'?'<span class="spinner"></span>':'')}</div>
+                </div>
                 <div class="meta">${role.toUpperCase()} :: ${new Date().toLocaleTimeString()}</div>
             `;
             const container = document.getElementById('messages');

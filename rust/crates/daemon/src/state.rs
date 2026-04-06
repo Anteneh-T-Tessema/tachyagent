@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
@@ -76,6 +76,10 @@ pub struct InferenceStats {
     pub last_tokens_per_sec: f32,
     pub avg_ttft_ms: f32,
     pub avg_tokens_per_sec: f32,
+    pub p50_ttft_ms: f32,
+    pub p95_ttft_ms: f32,
+    #[serde(skip)]
+    pub ttft_history: VecDeque<u32>,
 }
 
 impl InferenceStats {
@@ -87,6 +91,21 @@ impl InferenceStats {
         self.total_tokens += tokens;
         self.last_ttft_ms = ttft_ms;
         self.last_tokens_per_sec = tps;
+
+        // Maintain p50/p95 over a sliding window
+        self.ttft_history.push_back(ttft_ms);
+        if self.ttft_history.len() > 100 {
+            self.ttft_history.pop_front();
+        }
+
+        let mut sorted = self.ttft_history.iter().copied().collect::<Vec<u32>>();
+        sorted.sort_unstable();
+        if !sorted.is_empty() {
+            let p50_idx = (sorted.len() as f32 * 0.50) as usize;
+            let p95_idx = (sorted.len() as f32 * 0.95) as usize;
+            self.p50_ttft_ms = sorted[p50_idx.min(sorted.len() - 1)] as f32;
+            self.p95_ttft_ms = sorted[p95_idx.min(sorted.len() - 1)] as f32;
+        }
     }
 }
 

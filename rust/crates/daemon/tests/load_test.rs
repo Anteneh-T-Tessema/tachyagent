@@ -5,6 +5,7 @@
 //!
 //! Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6
 
+use proptest::prelude::*;
 use daemon::parallel::{AgentTask, Orchestrator, ParallelRun, RunStatus, TaskResult, TaskStatus};
 use runtime::FileLockManager;
 use std::sync::{Arc, Mutex};
@@ -498,5 +499,101 @@ fn load_release_all_selective_under_concurrency() {
                 "file {file} should still be locked by sel-agent-{agent_idx}"
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Property 24: DAG execution respects dependency order
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// Property 24: In a chain of N tasks where each depends on the previous,
+    /// the execution order must always be strictly sequential (0 → 1 → 2 → … → N-1).
+    ///
+    /// Feature: product-hardening-v3, Property 24: DAG execution respects dependency order
+    #[test]
+    fn prop_dag_chain_respects_dependency_order(n in 2usize..8usize) {
+        let run_id = "prop-dag";
+        let mut tasks = Vec::new();
+
+        // Build a linear dependency chain: task-0 ← task-1 ← task-2 ← … ← task-(n-1)
+        for i in 0..n {
+            let mut task = make_task(&format!("dag-{i}"), run_id);
+            if i > 0 {
+                task.deps = vec![format!("dag-{}", i - 1)];
+            }
+            tasks.push(task);
+        }
+
+        let run = ParallelRun {
+            id: run_id.into(),
+            tasks,
+            status: RunStatus::Running,
+            created_at: 0,
+            max_concurrency: n, // allow all tasks concurrently — deps enforce order
+        };
+
+        let mut orch = Orchestrator::new(n);
+        orch.submit(run);
+
+        let mut execution_order = Vec::new();
+        for _ in 0..n * 10 {
+            match orch.next_task() {
+                Some(t) => {
+                    execution_order.push(t.id.clone());
+                    orch.complete_task(&t.id, ok_result());
+                }
+                None => {
+                    if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+
+        let expected: Vec<String> = (0..n).map(|i| format!("dag-{i}")).collect();
+        prop_assert_eq!(execution_order, expected);
+    }
+
+    /// Property 24b: Independent tasks (no deps) can be dispatched in any order
+    /// but all must eventually complete.
+    #[test]
+    fn prop_independent_tasks_all_complete(n in 2usize..10usize) {
+        // Feature: product-hardening-v3, Property 24: DAG execution respects dependency order
+        let run_id = "prop-indep";
+        let tasks: Vec<AgentTask> = (0..n)
+            .map(|i| make_task(&format!("indep-{i}"), run_id))
+            .collect();
+
+        let run = ParallelRun {
+            id: run_id.into(),
+            tasks,
+            status: RunStatus::Running,
+            created_at: 0,
+            max_concurrency: n,
+        };
+
+        let mut orch = Orchestrator::new(n);
+        orch.submit(run);
+
+        let mut completed = 0;
+        for _ in 0..n * 10 {
+            match orch.next_task() {
+                Some(t) => {
+                    orch.complete_task(&t.id, ok_result());
+                    completed += 1;
+                }
+                None => {
+                    if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+
+        prop_assert_eq!(completed, n);
+
+        let run = orch.get_run(run_id).unwrap();
+        prop_assert_eq!(run.status.clone(), RunStatus::Completed);
     }
 }

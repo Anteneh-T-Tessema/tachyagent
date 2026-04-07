@@ -373,9 +373,102 @@ impl TerminalRenderer {
     }
 }
 
+/// Colorize a unified diff string for terminal display.
+///
+/// Lines starting with `---`/`+++` are rendered in grey, `@@` hunk headers in
+/// cyan, `-` removals in red, and `+` additions in green.  Context lines are
+/// left unchanged.  The function is pure (no I/O) so it can be used anywhere.
+#[must_use]
+pub fn render_diff(unified_diff: &str) -> String {
+    use crossterm::style::Stylize;
+    let mut out = String::new();
+    for line in unified_diff.lines() {
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            out.push_str(&format!("{}", line.dark_grey()));
+        } else if line.starts_with("@@ ") {
+            out.push_str(&format!("{}", line.cyan()));
+        } else if line.starts_with('-') {
+            out.push_str(&format!("{}", line.red()));
+        } else if line.starts_with('+') {
+            out.push_str(&format!("{}", line.green()));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Choice returned by [`approval_prompt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalChoice {
+    Yes,
+    No,
+}
+
+/// Show a colored `[y/n/d]` prompt for a pending file change.
+///
+/// * `y` / Enter — apply the change  
+/// * `n`         — skip / reject  
+/// * `d`         — print the full `diff_text` and ask again
+///
+/// Reads from stdin; writes the prompt to stdout.  Returns
+/// [`ApprovalChoice::Yes`] or [`ApprovalChoice::No`].
+pub fn approval_prompt(
+    summary: &str,
+    diff_colored: &str,
+    diff_text: &str,
+    out: &mut impl Write,
+) -> ApprovalChoice {
+    let theme = ColorTheme::default();
+
+    // Show the colored diff
+    let _ = queue!(
+        out,
+        SetForegroundColor(theme.heading),
+        Print(format!("  ┌─ {summary}\n")),
+        ResetColor,
+    );
+    for line in diff_colored.lines() {
+        let _ = queue!(out, Print(format!("  │ {line}\n")));
+    }
+    let _ = queue!(
+        out,
+        SetForegroundColor(theme.heading),
+        Print("  └─\n"),
+        ResetColor,
+    );
+    let _ = out.flush();
+
+    // Interactive choice loop
+    loop {
+        let _ = execute!(
+            out,
+            SetForegroundColor(theme.spinner_active),
+            Print("  Apply this change? [y/n/d] "),
+            ResetColor,
+        );
+        let _ = out.flush();
+
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer).ok();
+        match answer.trim().to_lowercase().as_str() {
+            "y" | "yes" | "" => return ApprovalChoice::Yes,
+            "n" | "no" => return ApprovalChoice::No,
+            "d" | "diff" => {
+                // Print full unified diff then loop
+                let _ = execute!(out, Print(format!("{}\n", render_diff(diff_text))));
+            }
+            _ => {
+                let _ = execute!(out, Print("  Enter y (apply), n (skip), or d (full diff)\n"));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Spinner, TerminalRenderer};
+    use super::{render_diff, ApprovalChoice, Spinner, TerminalRenderer};
 
     fn strip_ansi(input: &str) -> String {
         let mut output = String::new();
@@ -437,5 +530,26 @@ mod tests {
 
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("Working"));
+    }
+
+    #[test]
+    fn render_diff_colorizes_additions_and_deletions() {
+        let diff = "--- a/foo.rs\n+++ b/foo.rs\n@@ -1,2 +1,2 @@\n-old line\n+new line\n context\n";
+        let output = render_diff(diff);
+        let stripped = strip_ansi(&output);
+        // All original text should still be present after stripping ANSI
+        assert!(stripped.contains("--- a/foo.rs"), "header present");
+        assert!(stripped.contains("+++ b/foo.rs"), "header present");
+        assert!(stripped.contains("@@ -1,2 +1,2 @@"), "hunk header present");
+        assert!(stripped.contains("-old line"), "deletion present");
+        assert!(stripped.contains("+new line"), "addition present");
+        assert!(stripped.contains("context"), "context line present");
+        // Colored output should have ANSI escape codes
+        assert!(output.contains('\u{1b}'), "ANSI color codes present");
+    }
+
+    #[test]
+    fn approval_choice_variants_are_distinct() {
+        assert_ne!(ApprovalChoice::Yes, ApprovalChoice::No);
     }
 }

@@ -1,0 +1,82 @@
+name: Tachy PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get diff
+        id: diff
+        run: |
+          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD --stat --unified=3 | head -500)
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run Tachy code review
+        uses: ./.github/actions/tachy-agent
+        id: review
+        with:
+          template: code-reviewer
+          prompt: |
+            Review the changes in this pull request.
+            Focus on:
+            1. Correctness — logic errors, off-by-one, null/error handling
+            2. Security — OWASP Top 10, injection, insecure defaults
+            3. Performance — unnecessary allocations, blocking calls, N+1
+            4. Style — idiomatic patterns, naming, dead code
+
+            PR diff summary:
+            ${{ steps.diff.outputs.diff }}
+
+      - name: Run Tachy security scan
+        uses: ./.github/actions/tachy-agent
+        id: security
+        with:
+          template: security-scanner
+          prompt: |
+            Scan the following PR changes for security vulnerabilities.
+            Report only confirmed or high-confidence findings.
+
+            ${{ steps.diff.outputs.diff }}
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const reviewSummary = `${{ steps.review.outputs.summary }}`;
+            const securitySummary = `${{ steps.security.outputs.summary }}`;
+
+            const body = [
+              '## \u26a1 Tachy AI Code Review',
+              '',
+              '### Code Review',
+              reviewSummary || '_No issues found._',
+              '',
+              '### Security Scan',
+              securitySummary || '_No security issues found._',
+              '',
+              '---',
+              '_Powered by [Tachy](https://tachy.dev) — Local AI Coding Agent_',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

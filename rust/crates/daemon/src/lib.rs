@@ -1,3 +1,4 @@
+pub mod internal_bus;
 pub mod channels;
 mod engine;
 mod http;
@@ -20,3 +21,5 @@ pub use parallel::{Orchestrator, ParallelRun, AgentTask, TaskStatus, RunStatus, 
 pub use saas::{DashboardSummary, ResourceLimits, SaaSError, SaaSPlatform, Tenant, TenantClaims};
 pub use state::{DaemonState, PendingPatch};
 pub use teams::{Team, TeamMember, TeamManager, TeamError, WorkspaceInvitation};
+pub mod batch_client;
+pub use batch_client::{BatchJob, BatchJobStatus, BatchClient};

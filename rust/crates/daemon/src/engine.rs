@@ -206,6 +206,13 @@ impl AgentEngine {
                 }
             }
         }
+        if intelligence_config.indexing_enabled {
+            for name in ["search_codebase", "expand_context", "swarm_refactor"] {
+                if !allowed.contains(&name.to_string()) {
+                    allowed.push(name.to_string());
+                }
+            }
+        }
         let permission_policy = build_permission_policy(&allowed);
 
         // Build tool executor with git tools, custom tools, memory, and sub-agent support
@@ -900,6 +907,88 @@ impl ToolExecutor for IntelligentToolExecutor {
                 }
                 _ => {}
             }
+        }
+
+        // Handle RAG (Direction A) tools
+        match tool_name {
+            "search_codebase" => {
+                let input_val = serde_json::from_str(input).map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+                return intelligence::execute_search_codebase(&input_val, &self.workspace_root).map_err(ToolError::new);
+            }
+            "expand_context" => {
+                let input_val = serde_json::from_str(input).map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+                return intelligence::execute_expand_context(&input_val, &self.workspace_root).map_err(ToolError::new);
+            }
+            "swarm_refactor" => {
+                let input_val = serde_json::from_str(input).map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+                return intelligence::execute_swarm_refactor(&input_val, &self.workspace_root).map_err(ToolError::new);
+            }
+            "broadcast_mission_status" => {
+                let input_val: intelligence::BroadcastStatusInput = serde_json::from_str(input)
+                    .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+                
+                if let Some(ref ds) = self.daemon_state {
+                    let s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                    
+                    let event = if let Some(discovery) = &input_val.discovery {
+                        crate::internal_bus::MissionEvent::Discovery {
+                            agent_id: self.agent_id.clone(),
+                            file_path: "all".to_string(), // context-wide
+                            summary: discovery.clone(),
+                        }
+                    } else {
+                        crate::internal_bus::MissionEvent::StatusUpdate {
+                            agent_id: self.agent_id.clone(),
+                            mission_id: "default".to_string(),
+                            status: input_val.status.clone(),
+                            percentage: input_val.percentage,
+                        }
+                    };
+
+                    // Broadcast to active peers
+                    let listeners = s.mission_control.broadcast(event.clone()).unwrap_or(0);
+                    
+                    // Persist to feed for dashboard
+                    {
+                        let mut feed = s.mission_feed.lock().unwrap_or_else(|e| e.into_inner());
+                        feed.push_front(event);
+                        if feed.len() > 100 { feed.pop_back(); }
+                    }
+
+                    return Ok(serde_json::to_string(&intelligence::BroadcastStatusResult {
+                        success: true,
+                        listeners,
+                    }).unwrap());
+                }
+                return Err(ToolError::new("Mission Control not available"));
+            }
+            "get_mission_feed" => {
+                let input_val: intelligence::GetMissionFeedInput = serde_json::from_str(input)
+                    .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
+                
+                if let Some(ref ds) = self.daemon_state {
+                    let s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                    let feed = s.mission_feed.lock().unwrap_or_else(|e| e.into_inner());
+                    
+                    let events = feed.iter().take(input_val.limit).map(|e| {
+                        intelligence::collaboration::MissionFeedEvent {
+                            agent_id: match e {
+                                crate::internal_bus::MissionEvent::StatusUpdate { agent_id, .. } => agent_id.clone(),
+                                crate::internal_bus::MissionEvent::Discovery { agent_id, .. } => agent_id.clone(),
+                                crate::internal_bus::MissionEvent::ConflictAlert { agent_id, .. } => agent_id.clone(),
+                                _ => "system".to_string(),
+                            },
+                            event_type: format!("{:?}", e).split('{').next().unwrap_or("unknown").trim().to_string(),
+                            payload: serde_json::to_value(e).unwrap(),
+                            timestamp: 0, // Should be actual time
+                        }
+                    }).collect();
+
+                    return Ok(serde_json::to_string(&intelligence::GetMissionFeedResult { events }).unwrap());
+                }
+                return Err(ToolError::new("Mission Control not available"));
+            }
+            _ => {}
         }
 
         // Handle custom tools

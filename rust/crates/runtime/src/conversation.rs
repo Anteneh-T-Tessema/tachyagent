@@ -44,6 +44,16 @@ pub enum AssistantEvent {
     MessageStop,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeEvent {
+    TextDelta(String),
+    ToolUse { id: String, name: String, input: String },
+    ToolResult { tool_name: String, output: String, is_error: bool },
+    Usage(TokenUsage),
+    Finished(TurnSummary),
+}
+
+
 pub trait ApiClient {
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError>;
 }
@@ -112,7 +122,9 @@ pub struct ConversationRuntime<C, T> {
     system_prompt: Vec<String>,
     max_iterations: usize,
     usage_tracker: UsageTracker,
+    event_tx: Option<tokio::sync::mpsc::UnboundedSender<RuntimeEvent>>,
 }
+
 
 impl<C, T> ConversationRuntime<C, T>
 where
@@ -136,8 +148,26 @@ where
             system_prompt,
             max_iterations: 16,
             usage_tracker,
+            event_tx: None,
         }
     }
+
+    pub fn with_event_tx(mut self, tx: tokio::sync::mpsc::UnboundedSender<RuntimeEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
+    }
+
+    /// Replace the event sender for the next turn (used by streaming REPL).
+    pub fn set_event_tx(&mut self, tx: tokio::sync::mpsc::UnboundedSender<RuntimeEvent>) {
+        self.event_tx = Some(tx);
+    }
+
+    /// Restore a session loaded from disk (used for auto-resume).
+    pub fn restore_session(&mut self, session: Session) {
+        self.usage_tracker = UsageTracker::from_session(&session);
+        self.session = session;
+    }
+
 
     #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
@@ -185,8 +215,17 @@ where
             let events = match self.api_client.stream(request) {
                 Ok(events) => {
                     consecutive_errors = 0;
+                    // Emit TextDeltas if we have a listener
+                    if let Some(tx) = &self.event_tx {
+                        for event in &events {
+                            if let AssistantEvent::TextDelta(delta) = event {
+                                let _ = tx.send(RuntimeEvent::TextDelta(delta.clone()));
+                            }
+                        }
+                    }
                     events
                 }
+
                 Err(error) => {
                     consecutive_errors += 1;
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -230,11 +269,19 @@ where
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::ToolUse { id, name, input } => {
+                        if let Some(tx) = &self.event_tx {
+                            let _ = tx.send(RuntimeEvent::ToolUse { 
+                                id: id.clone(), 
+                                name: name.clone(), 
+                                input: input.clone() 
+                            });
+                        }
                         Some((id.clone(), name.clone(), input.clone()))
                     }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+
 
             self.session.messages.push(assistant_message.clone());
             assistant_messages.push(assistant_message);
@@ -300,17 +347,35 @@ where
                     }
                 };
                 self.session.messages.push(result_message.clone());
+                if let Some(tx) = &self.event_tx {
+                    if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = &result_message.blocks[0] {
+                        let _ = tx.send(RuntimeEvent::ToolResult {
+                            tool_name: tool_name.clone(),
+                            output: output.clone(),
+                            is_error: *is_error,
+                        });
+                    }
+                }
                 tool_results.push(result_message);
+
             }
         }
 
-        Ok(TurnSummary {
+        let summary = TurnSummary {
             assistant_messages,
             tool_results,
             iterations,
             usage: self.usage_tracker.cumulative_usage(),
-        })
+        };
+
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(RuntimeEvent::Usage(summary.usage.clone()));
+            let _ = tx.send(RuntimeEvent::Finished(summary.clone()));
+        }
+
+        Ok(summary)
     }
+
 
     #[must_use]
     pub fn compact(&self, config: CompactionConfig) -> CompactionResult {

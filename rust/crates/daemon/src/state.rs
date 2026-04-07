@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
 use backend::BackendRegistry;
@@ -149,6 +150,14 @@ pub struct DaemonState {
     pub saas: Option<SaaSPlatform>,
     /// Real-time inference performance tracking.
     pub inference_stats: InferenceStats,
+    /// Registry of cloud-scale batch jobs (Direction B).
+    pub cloud_jobs: Vec<crate::batch_client::BatchJob>,
+    /// Parallel swarm orchestrator (Direction C).
+    pub orchestrator: Arc<Mutex<crate::parallel::Orchestrator>>,
+    /// Mission Control event bus (Phase 5).
+    pub mission_control: Arc<crate::internal_bus::MissionControl>,
+    /// Recent mission event log for retrieval.
+    pub mission_feed: Arc<Mutex<VecDeque<crate::internal_bus::MissionEvent>>>,
 }
 
 impl DaemonState {
@@ -217,6 +226,10 @@ impl DaemonState {
             marketplace: Marketplace::new(),
             saas: None,
             inference_stats,
+            cloud_jobs: Vec::new(),
+            orchestrator: Arc::new(Mutex::new(crate::parallel::Orchestrator::new(8))),
+            mission_control: Arc::new(crate::internal_bus::MissionControl::new(1024)),
+            mission_feed: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
         };
 
         // Auto-select Gemma 4 if no model is configured
@@ -452,6 +465,40 @@ impl DaemonState {
         let n = s.total_requests as f32;
         s.avg_ttft_ms = (s.avg_ttft_ms * (n - 1.0) + ttft_ms as f32) / n;
         s.avg_tokens_per_sec = (s.avg_tokens_per_sec * (n - 1.0) + tokens_per_sec) / n;
+    }
+
+    /// Get a conversation by ID.
+    pub fn get_conversation(&self, conv_id: &str) -> Option<&Conversation> {
+        self.conversations.get(conv_id)
+    }
+
+    /// Delete a conversation. Returns true if it existed.
+    pub fn delete_conversation(&mut self, conv_id: &str) -> bool {
+        let removed = self.conversations.remove(conv_id).is_some();
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
+    /// Delete (stop / forget) an agent. Returns true if it existed.
+    pub fn delete_agent(&mut self, agent_id: &str) -> bool {
+        let removed = self.agents.remove(agent_id).is_some();
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
+    /// Update an agent's status to Failed (used to surface cancellation).
+    pub fn cancel_agent(&mut self, agent_id: &str) -> bool {
+        if let Some(agent) = self.agents.get_mut(agent_id) {
+            agent.status = platform::AgentStatus::Failed;
+            self.save();
+            true
+        } else {
+            false
+        }
     }
 }
 

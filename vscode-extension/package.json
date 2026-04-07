@@ -12,12 +12,32 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": ["Other", "Machine Learning"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tachy",
+          "title": "Tachy",
+          "icon": "$(zap)"
+        }
+      ]
+    },
+    "views": {
+      "tachy": [
+        {
+          "type": "webview",
+          "id": "tachy.chatView",
+          "name": "Chat",
+          "icon": "$(comment-discussion)",
+          "contextualTitle": "Tachy Chat"
+        }
+      ]
+    },
     "configuration": {
-      "title": "Tachy Autocomplete",
+      "title": "Tachy",
       "properties": {
         "tachy.endpoint": {
           "type": "string",
@@ -32,7 +52,7 @@
         "tachy.model": {
           "type": "string",
           "default": "gemma4:26b",
-          "description": "LLM model for completions"
+          "description": "LLM model for completions and chat"
         },
         "tachy.enabled": {
           "type": "boolean",
@@ -59,6 +79,56 @@
       {
         "command": "tachy.checkHealth",
         "title": "Tachy: Check Daemon Health"
+      },
+      {
+        "command": "tachy.selectModel",
+        "title": "Tachy: Select Model",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "tachy.explainSelection",
+        "title": "Tachy: Explain Selection"
+      },
+      {
+        "command": "tachy.fixSelection",
+        "title": "Tachy: Fix Selection"
+      },
+      {
+        "command": "tachy.fixDiagnostic",
+        "title": "⚡ Fix with Tachy"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tachy.explainSelection",
+          "when": "editorHasSelection",
+          "group": "tachy@1"
+        },
+        {
+          "command": "tachy.fixSelection",
+          "when": "editorHasSelection",
+          "group": "tachy@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "tachy.explainSelection",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "tachy.fixSelection",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "tachy.selectModel",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
       }
     ]
   },

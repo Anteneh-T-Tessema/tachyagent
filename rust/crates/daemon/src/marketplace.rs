@@ -19,6 +19,17 @@ pub struct MarketplaceListing {
     pub ratings: BTreeMap<String, u8>,
     pub created_at: u64,
     pub updated_at: u64,
+    pub visibility: ListingVisibility,
+    pub team_id: Option<String>,
+}
+
+/// Visibility of a marketplace listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ListingVisibility {
+    #[default]
+    Public,
+    Team,
 }
 
 /// A versioned snapshot of an agent template.
@@ -156,10 +167,28 @@ impl Marketplace {
                 ratings: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
+                visibility: ListingVisibility::Public,
+                team_id: None,
             };
             self.listings.insert(id.clone(), listing);
             Ok(id)
         }
+    }
+
+    /// Publish a team-specific agent template.
+    pub fn publish_to_team(
+        &mut self,
+        template: AgentTemplate,
+        description: &str,
+        version: &str,
+        author_id: &str,
+        team_id: &str,
+    ) -> Result<String, MarketplaceError> {
+        let id = self.publish(template, description, version, author_id)?;
+        let listing = self.listings.get_mut(&id).unwrap();
+        listing.visibility = ListingVisibility::Team;
+        listing.team_id = Some(team_id.to_string());
+        Ok(id)
     }
 
     /// Search marketplace listings.
@@ -176,6 +205,14 @@ impl Marketplace {
         let mut results: Vec<&MarketplaceListing> = self
             .listings
             .values()
+            .filter(|l| {
+                // Visibility check: Public or matching Team
+                if l.visibility == ListingVisibility::Team {
+                    // Note: Filtering by user's teams happens in the HTTP handler
+                    return true; 
+                }
+                true
+            })
             .filter(|l| {
                 query.map_or(true, |q| {
                     l.name.to_lowercase().contains(&q.to_lowercase())

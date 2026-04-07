@@ -1,0 +1,85 @@
+name: Tachy AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  tachy-review:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Tachy
+        run: |
+          if [ -n "$TACHY_API_KEY" ]; then
+            curl -fsSL https://tachy.dev/install.sh | bash
+          else
+            echo "::warning::TACHY_API_KEY not set — skipping Tachy AI review"
+            exit 0
+          fi
+        env:
+          TACHY_API_KEY: ${{ secrets.TACHY_API_KEY }}
+
+      - name: Run Tachy Review
+        id: tachy_review
+        run: |
+          tachy prompt \
+            "Review the staged changes in this repository for: (1) bugs and logic errors, \
+             (2) security vulnerabilities (OWASP Top 10), \
+             (3) performance regressions, \
+             (4) code style and maintainability. \
+             Provide actionable feedback with line references where possible." \
+            --permission-mode read-only \
+            --json > /tmp/tachy-review.json
+          echo "review_json=$(cat /tmp/tachy-review.json | jq -c .)" >> $GITHUB_OUTPUT
+        env:
+          TACHY_API_KEY: ${{ secrets.TACHY_API_KEY }}
+          TACHY_PERMISSION_MODE: read-only
+
+      - name: Post Review Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let reviewText;
+            try {
+              const raw = fs.readFileSync('/tmp/tachy-review.json', 'utf8');
+              const parsed = JSON.parse(raw);
+              reviewText = parsed.response || parsed.text || JSON.stringify(parsed, null, 2);
+            } catch (e) {
+              reviewText = 'Tachy review output could not be parsed.';
+            }
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚡ Tachy AI Review\n\n${reviewText}\n\n---\n*Powered by [Tachy](https://tachy.dev) — local-first AI agent*`,
+            });
+
+  tachy-doctor:
+    name: Environment Health Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tachy
+        run: curl -fsSL https://tachy.dev/install.sh | bash
+        continue-on-error: true
+
+      - name: Run Doctor
+        run: tachy doctor --json || true

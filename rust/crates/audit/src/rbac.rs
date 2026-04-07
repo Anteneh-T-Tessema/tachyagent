@@ -12,8 +12,12 @@ pub enum Role {
     Viewer,
     /// Can run agents and view results. Cannot change governance or manage users.
     Developer,
+    /// Can define and manage templates and swarms. Can run agents.
+    Architect,
     /// Full access — can manage users, change governance, run agents, view audit.
     Admin,
+    /// Highest privilege — can manage SSO, review full audit chains, and set security policies.
+    SecurityAdmin,
 }
 
 /// A user in the system.
@@ -46,9 +50,12 @@ pub enum Action {
     RunAgent,
     ScheduleTask,
     ViewAudit,
+    BroadcastEvent,
+    ViewMissionFeed,
     ManageUsers,
     ManageGovernance,
     ManageConfig,
+    ManageEnterpriseSSO,
 }
 
 /// Check if a role is allowed to perform an action.
@@ -58,10 +65,16 @@ pub fn check_permission(role: Role, action: Action) -> AccessResult {
         Action::ViewHealth | Action::ListModels | Action::ListTemplates => true,
         // Viewers can see agents, tasks, and audit
         Action::ListAgents | Action::ListTasks | Action::ViewAudit => true,
+        // Broadcast and Feed accessible to Developers and above
+        Action::BroadcastEvent | Action::ViewMissionFeed => role >= Role::Developer,
         // Developers and above can run agents and schedule tasks
         Action::RunAgent | Action::ScheduleTask => role >= Role::Developer,
-        // Only admins can manage users, governance, and config
-        Action::ManageUsers | Action::ManageGovernance | Action::ManageConfig => role == Role::Admin,
+        // Architects and above can manage templates and swarms (ManageConfig)
+        Action::ManageConfig => role >= Role::Architect,
+        // Only admins and above can manage users and governance
+        Action::ManageUsers | Action::ManageGovernance => role >= Role::Admin,
+        // Only security admins can manage SSO
+        Action::ManageEnterpriseSSO => role >= Role::SecurityAdmin,
     };
 
     if allowed {

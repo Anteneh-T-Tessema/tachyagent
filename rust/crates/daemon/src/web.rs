@@ -289,6 +289,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div class="nav-item active" onclick="showPage('chat', this)">💬 Conversations</div>
             <div class="nav-item" onclick="showPage('agents', this)">🤖 Agent Fleet</div>
             <div class="nav-item" onclick="showPage('approvals', this)">🛡️ Governance</div>
+            <div class="nav-item" onclick="showPage('search', this)">🔍 Code Search</div>
             
             <div class="nav-section">Performance</div>
             <div class="nav-item" onclick="showPage('dashboard', this)">📊 Metrics</div>
@@ -297,6 +298,13 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div class="nav-section">Audit</div>
             <div class="nav-item" onclick="showPage('audit', this)">📜 Audit Trail</div>
             <div class="nav-item" onclick="showPage('parallel', this)">⛓️ Parallel Ops</div>
+            
+            <div class="nav-section">Enterprise Scaling</div>
+            <div class="nav-item" onclick="showPage('mission', this)">📡 Mission Control</div>
+            <div class="nav-item" onclick="showPage('swarm', this)">🐝 Agent Swarm</div>
+            <div class="nav-item" onclick="showPage('marketplace', this)">🏪 Marketplace</div>
+            <div class="nav-item" onclick="showPage('cloud', this)">☁️ AWS Batch</div>
+            <div class="nav-item" onclick="showPage('identity', this)">🛡️ Enterprise Identity</div>
 
             <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
                 <div class="stat-label">Workspace Root</div>
@@ -353,6 +361,14 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <div class="stat-card">
                         <div class="stat-value" id="val-requests">0</div>
                         <div class="stat-label">Total Inferences</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-workers">0</div>
+                        <div class="stat-label">Active Swarm Workers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-cloud">Off</div>
+                        <div class="stat-label">Cloud Sync</div>
                     </div>
                 </div>
                 
@@ -414,6 +430,81 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <table id="parallel-table-body"></table>
                 </div>
             </section>
+
+            <section id="page-swarm" class="content">
+                <div class="card">
+                    <h3>Active Swarm Clusters</h3>
+                    <div id="swarm-list"></div>
+                </div>
+                <div class="card">
+                    <h3>Recursive Delegation DAG</h3>
+                    <div id="swarm-dag" style="height: 300px; background: rgba(0,0,0,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;">
+                        Interactive DAG Visualization (Initializing...)
+                    </div>
+                </div>
+            </section>
+
+            <section id="page-cloud" class="content">
+                <div class="card">
+                    <h3>AWS Batch Dashboard</h3>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value">Active</div>
+                            <div class="stat-label">Compute Environment</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="val-cloud-jobs">0</div>
+                            <div class="stat-label">Jobs in Queue</div>
+                        </div>
+                    </div>
+                    <table id="cloud-table-body"></table>
+                </div>
+            </section>
+
+            <section id="page-mission" class="content">
+                <div class="card">
+                    <h3>Swarm Mission Feed</h3>
+                    <div id="mission-feed-list" style="max-height: 500px; overflow-y: auto;"></div>
+                </div>
+            </section>
+
+            <section id="page-marketplace" class="content">
+                <div class="card">
+                    <h3>Public Marketplace</h3>
+                    <div id="marketplace-public" class="grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:16px;"></div>
+                </div>
+                <div class="card">
+                    <h3>Team Collection</h3>
+                    <div id="marketplace-team" class="grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:16px;"></div>
+                </div>
+            </section>
+
+            <section id="page-identity" class="content">
+                <div class="card">
+                    <h3>SAML 2.0 / OIDC Configuration</h3>
+                    <div style="display:grid; gap:16px; margin-top:16px;">
+                        <input type="text" id="sso-idp-url" placeholder="IdP SSO URL" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                        <input type="text" id="sso-sp-entity" placeholder="SP Entity ID (e.g. tachy-dev)" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                        <button onclick="saveSsoConfig()" style="background:var(--accent); color:white; border:none; padding:12px; border-radius:var(--radius); cursor:pointer;">Update Identity Provider</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="page-search" class="content">
+                <div class="card">
+                    <h3>Code Search</h3>
+                    <div style="display:flex; gap:10px; margin-top:16px;">
+                        <input type="text" id="search-query" placeholder="Search functions, types, files..." style="flex:1; background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);" onkeydown="if(event.key==='Enter') runCodeSearch();">
+                        <select id="search-limit" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                            <option value="10">10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                        </select>
+                        <button onclick="runCodeSearch()" style="background:var(--accent); color:white; border:none; padding:12px 20px; border-radius:var(--radius); cursor:pointer;">Search</button>
+                    </div>
+                    <div id="search-results" style="margin-top:20px;"></div>
+                </div>
+            </section>
         </main>
     </div>
 
@@ -453,6 +544,40 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 case 'models': loadModels(); break;
                 case 'audit': loadAudit(); break;
                 case 'parallel': loadParallel(); break;
+                case 'swarm': loadSwarm(); break;
+                case 'cloud': loadCloud(); break;
+                case 'mission': loadMissionFeed(); break;
+                case 'marketplace': loadMarketplace(); break;
+                case 'search': /* results are user-initiated */ break;
+            }
+        }
+
+        async function runCodeSearch() {
+            const q = document.getElementById('search-query').value.trim();
+            if (!q) return;
+            const limit = document.getElementById('search-limit').value;
+            const resultsEl = document.getElementById('search-results');
+            resultsEl.innerHTML = '<div style="color:var(--text-secondary)">Searching...</div>';
+            try {
+                const r = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+                const data = await r.json();
+                const results = data.results || [];
+                if (!results.length) {
+                    resultsEl.innerHTML = '<div style="color:var(--text-secondary)">No results found.</div>';
+                    return;
+                }
+                resultsEl.innerHTML = results.map((item, i) => `
+                    <div style="border:1px solid var(--border); border-radius:var(--radius); padding:12px 16px; margin-bottom:10px; background:var(--surface);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong style="color:var(--accent); font-size:14px;">${item.path || ''}</strong>
+                            <span style="font-size:11px; color:var(--text-secondary); background:var(--surface-solid); padding:2px 8px; border-radius:10px;">${item.language || ''}</span>
+                        </div>
+                        ${item.exports && item.exports.length ? `<div style="font-size:12px; color:var(--text-secondary); margin-top:6px;">exports: ${item.exports.slice(0,6).join(', ')}</div>` : ''}
+                        ${item.summary ? `<div style="font-size:13px; margin-top:6px; opacity:0.8;">${item.summary.split('\\n')[0]}</div>` : ''}
+                    </div>
+                `).join('');
+            } catch(e) {
+                resultsEl.innerHTML = `<div style="color:#e74c3c">Search failed: ${e.message}</div>`;
             }
         }
 
@@ -660,6 +785,42 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 runs.map(r => `<tr><td><code>${r.run_id}</code></td><td>${r.status}</td><td>${r.task_count}</td></tr>`).join('');
         }
 
+        async function loadSwarm() {
+            const r = await apiFetch('/api/swarm/runs');
+            const runs = await r.json();
+            const list = document.getElementById('swarm-list');
+            if (!runs.length) {
+                list.innerHTML = '<p style="color:var(--muted); font-size: 13px;">No active swarm clusters. Initialize a recursive refactor to see parallel delegation.</p>';
+                return;
+            }
+            list.innerHTML = runs.map(run => `
+                <div class="card" style="margin-bottom: 12px; border-left: 4px solid var(--accent);">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="font-weight:600;">RUN: ${run.id}</div>
+                            <div style="font-size:12px; color:var(--muted);">${run.status} · ${run.tasks.length} sub-tasks</div>
+                        </div>
+                        <div class="status-badge ${run.status === 'Running' ? 'status-ok' : 'status-err'}">${run.status}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadCloud() {
+            const r = await apiFetch('/api/cloud/jobs');
+            const jobs = await r.json();
+            const tbody = document.getElementById('cloud-table-body');
+            document.getElementById('val-cloud-jobs').textContent = jobs.length;
+            
+            if (!jobs.length) {
+                tbody.innerHTML = '<tr><td colspan="3" style="color:var(--muted); text-align:center;">No cloud bridge jobs active. Run "tachy deploy" to scale to AWS.</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = '<thead><tr><th>Job ID</th><th>Status</th><th>Updated</th></tr></thead>' + 
+                jobs.map(j => `<tr><td><code>${j.id}</code></td><td>${j.status}</td><td>${new Date(j.updated_at * 1000).toLocaleTimeString()}</td></tr>`).join('');
+        }
+
         async function loadLocks() {
             const r = await apiFetch('/api/file-locks');
             const data = await r.json();
@@ -700,6 +861,54 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 btn.disabled = false;
                 btn.textContent = 'Launch';
             }
+        }
+
+        async function loadMissionFeed() {
+            const r = await apiFetch('/api/mission/feed');
+            const feed = await r.json();
+            const list = document.getElementById('mission-feed-list');
+            
+            if (!feed.length) {
+                list.innerHTML = '<p style="color:var(--muted); font-size: 13px;">No events in the mission bus.</p>';
+                return;
+            }
+
+            list.innerHTML = feed.map(e => {
+                let badge = 'status-ok';
+                let icon = '📡';
+                let payload = JSON.stringify(e);
+                
+                return `
+                <div class="card" style="margin-bottom: 8px; border-left: 3px solid var(--accent); padding: 12px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                        <span style="font-weight:600; color:var(--accent);">${icon} Event</span>
+                        <span style="color:var(--muted); opacity:0.6;">${e.agent_id || 'system'}</span>
+                    </div>
+                    <div style="font-size:13px;">${payload}</div>
+                </div>`;
+            }).join('');
+        }
+
+        async function loadMarketplace() {
+            const r = await apiFetch('/api/marketplace');
+            const listings = await r.json();
+            const pub = document.getElementById('marketplace-public');
+            const team = document.getElementById('marketplace-team');
+            
+            pub.innerHTML = listings.filter(l => l.visibility !== 'team').map(renderListing).join('');
+            team.innerHTML = listings.filter(l => l.visibility === 'team').map(renderListing).join('');
+        }
+
+        function renderListing(l) {
+            return `
+            <div class="card" style="background:var(--surface-solid);">
+                <div style="font-weight:600; margin-bottom:8px;">${l.name}</div>
+                <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">${l.description}</div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:11px; color:var(--accent);">v${l.default_version}</span>
+                    <button onclick="installTemplate('${l.id}')" style="background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; font-size:11px; cursor:pointer;">Install</button>
+                </div>
+            </div>`;
         }
 
         async function checkHealth() {

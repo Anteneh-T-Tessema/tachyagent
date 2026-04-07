@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use crate::rag::{VectorStore, CodeChunk, Chunker};
 
 // Import embedding support — graceful fallback when Ollama is unavailable.
 use backend::{cosine_similarity, EmbeddingClient};
@@ -36,6 +37,8 @@ pub struct CodebaseIndex {
     pub built_at: u64,
     pub files: BTreeMap<String, FileEntry>,
     pub project: ProjectMeta,
+    #[serde(default)]
+    pub vector_store: VectorStore,
 }
 
 /// Metadata about the overall project
@@ -140,7 +143,8 @@ impl CodebaseIndexer {
         // Attempt semantic embedding of all summaries in one pass.
         // If Ollama / nomic-embed-text is not available, skip silently —
         // context selection falls back to keyword scoring.
-        embed_summaries(&mut files);
+        let mut vector_store = VectorStore::new();
+        embed_summaries(&mut files, &mut vector_store, workspace_root, &config);
 
         Ok(CodebaseIndex {
             version: 1,
@@ -148,13 +152,14 @@ impl CodebaseIndexer {
             built_at,
             files,
             project,
+            vector_store,
         })
     }
 
     /// Embed all file summaries using the local Ollama embedding model.
     /// Silently skips if the model is unavailable — callers handle `None` embeddings.
-    fn embed_summaries_impl(files: &mut BTreeMap<String, FileEntry>) {
-        embed_summaries(files);
+    fn embed_summaries_impl(files: &mut BTreeMap<String, FileEntry>, vector_store: &mut VectorStore, root: &Path, config: &IndexerConfig) {
+        embed_summaries(files, vector_store, root, config);
     }
 
     fn walk_directory(
@@ -740,30 +745,46 @@ fn search_score(entry: &FileEntry, keywords: &[&str]) -> f32 {
     score
 }
 
-/// Embed all file summaries in the index using the local Ollama embedding model.
-/// Files that already have embeddings (loaded from disk) are skipped.
+/// Embed all file summaries and individual code chunks using the local Ollama embedding model.
 /// Silently does nothing if Ollama / the embedding model is unavailable.
-pub fn embed_summaries(files: &mut BTreeMap<String, FileEntry>) {
-    // Collect paths whose summaries need embedding
-    let to_embed: Vec<(String, String)> = files
-        .iter()
-        .filter(|(_, e)| e.embedding.is_none())
-        .map(|(path, e)| (path.clone(), e.summary.clone()))
-        .collect();
-
-    if to_embed.is_empty() {
-        return;
-    }
-
+pub fn embed_summaries(
+    files: &mut BTreeMap<String, FileEntry>,
+    vector_store: &mut VectorStore,
+    root: &Path,
+    config: &IndexerConfig,
+) {
     // Only attempt if Ollama is reachable
     let Some(client) = EmbeddingClient::try_new() else {
         return;
     };
 
-    for (path, summary) in &to_embed {
-        if let Ok(emb) = client.embed(summary) {
-            if let Some(entry) = files.get_mut(path) {
+    let chunker = Chunker::default();
+
+    for (path, entry) in files.iter_mut() {
+        // 1. Embed Summary (if missing)
+        if entry.embedding.is_none() {
+            if let Ok(emb) = client.embed(&entry.summary) {
                 entry.embedding = Some(emb);
+            }
+        }
+
+        // 2. Embed Chunks (always attempt for new/updated files)
+        // In a production scenario, we'd check content_hash vs the existing vector_store.
+        // For Phase 4.1, we rebuild chunks for all files in the current indexing pass.
+        let full_path = root.join(path);
+        if let Ok(content) = std::fs::read_to_string(&full_path) {
+            let chunks = chunker.chunk_file(path, &content);
+            for (start, end, text) in chunks {
+                if let Ok(emb) = client.embed(&text) {
+                    vector_store.add_chunk(CodeChunk {
+                        id: format!("{}:{}-{}", path, start, end),
+                        path: path.clone(),
+                        start_line: start,
+                        end_line: end,
+                        content: text,
+                        embedding: emb,
+                    });
+                }
             }
         }
     }
@@ -972,6 +993,7 @@ mod tests {
             workspace_root: "/tmp".to_string(),
             built_at: 0,
             files,
+            vector_store: VectorStore::new(),
             project: ProjectMeta {
                 primary_language: Some("rust".to_string()),
                 test_command: None,

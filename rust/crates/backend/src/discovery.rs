@@ -422,4 +422,38 @@ mod tests {
     fn recommend_model_returns_none_for_empty() {
         assert!(recommend_model(&[], &None).is_none());
     }
+
+    #[test]
+    fn health_report_print_does_not_panic_offline() {
+        let report = HealthReport {
+            ollama_running: false,
+            ollama_version: None,
+            ollama_url: "http://localhost:11434".to_string(),
+            local_models: Vec::new(),
+            gpu_info: None,
+            recommended_model: None,
+        };
+        // Must not panic; output goes to stdout during test capture
+        report.print();
+    }
+
+    #[test]
+    fn health_report_print_does_not_panic_online() {
+        let models = vec![LocalModel {
+            name: "gemma4:26b".to_string(),
+            size_bytes: 16_000_000_000,
+            parameter_size: "26B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            family: "gemma4".to_string(),
+        }];
+        let report = HealthReport {
+            ollama_running: true,
+            ollama_version: Some("0.6.0".to_string()),
+            ollama_url: "http://localhost:11434".to_string(),
+            local_models: models,
+            gpu_info: Some("Apple M2 Pro (32 GB unified)".to_string()),
+            recommended_model: Some("gemma4:26b".to_string()),
+        };
+        report.print();
+    }
 }

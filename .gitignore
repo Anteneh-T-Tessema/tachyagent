@@ -8,3 +8,6 @@ vscode-extension/out/
 vscode-extension/*.vsix
 rust/target/
 rust/.tachy/
+sdk/python/.venv/
+sdk/python/tachy_agent.egg-info/
+*.proptest-regressions

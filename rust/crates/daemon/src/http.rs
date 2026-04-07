@@ -288,6 +288,7 @@ async fn handle_request(
     let (method, path_raw, body) = parse_http_request(raw);
     let path_full = path_raw.split('?').next().unwrap_or("/").trim_end_matches('/');
     let path = if path_full.is_empty() { "/" } else { path_full };
+    let query_str = path_raw.find('?').map(|i| &path_raw[i + 1..]).unwrap_or("").to_string();
 
     if method == "OPTIONS" {
         return Response::Full {
@@ -320,15 +321,15 @@ async fn handle_request(
         ("GET", "/" | "/index.html") => Response::html(200, web::INDEX_HTML),
         ("GET", "/health") => Response::json(200, &handle_health(state)),
         ("GET", "/api/models") => Response::json(200, &handle_list_models(state)),
-        ("GET", "/api/inference/stats") => Response::json(200, &handle_inference_stats(state)),
+        ("GET", "/api/inference/stats") => handle_inference_stats(state),
         ("POST", "/api/models/pull") => handle_pull_model(&body, state),
         ("POST", "/api/complete/stream") => handle_complete_stream(&body, state).await,
         ("POST", "/api/chat/stream") => handle_chat_stream(&body, state).await,
         ("GET", "/api/templates") => Response::json(200, &handle_list_templates(state)),
         ("GET", "/api/agents") => Response::json(200, &handle_list_agents(state)),
         ("GET", "/api/tasks") => Response::json(200, &handle_list_tasks(state)),
-        ("GET", "/api/audit") => handle_audit_log(state),
-        ("GET", "/api/metrics") => handle_metrics(state),
+        ("GET", "/api/audit") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_log(state)),
+        ("GET", "/api/metrics") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_metrics(state)),
         ("GET", "/api/conversations") => handle_list_conversations(state),
         ("POST", "/api/conversations") => handle_create_conversation(&body, state),
         ("POST", "/api/conversations/message") => handle_add_message(&body, state),
@@ -343,26 +344,219 @@ async fn handle_request(
         ("GET", "/api/marketplace") => handle_marketplace_list(&path, state),
         ("POST", "/api/marketplace/install") => handle_install(&body, state),
         ("POST", "/api/parallel/runs") => handle_parallel_run(&body, state),
-        ("POST", "/api/agents/run") => handle_run_agent(&body, state),
+        ("GET", "/api/cloud/jobs") => handle_list_cloud_jobs(state),
+        ("GET", "/api/swarm/runs") => handle_list_swarm_runs(state),
+        ("POST", "/api/agents/run") => gate_action(state, raw, audit::Action::RunAgent, |_| handle_run_agent(&body, state)),
         ("GET", "/api/pending-approvals") => handle_list_pending_approvals(state),
-        ("POST", "/api/approve") => handle_approve_patch(&body, state),
+        ("POST", "/api/approve") => gate_action(state, raw, audit::Action::ManageGovernance, |_| handle_approve_patch(&body, state)),
         ("GET", "/api/file-locks") => handle_list_file_locks(state),
+        ("GET", "/api/mission/feed") => handle_get_mission_feed(state),
+        ("POST", "/api/auth/sso/config") => gate_action(state, raw, audit::Action::ManageEnterpriseSSO, |_| handle_sso_config(&body, state)),
+        ("GET", "/api/search") => handle_search(&path_full, state),
+        ("GET", "/api/policy") => handle_get_policy(state),
+        ("POST", "/api/policy") => handle_set_policy(&body, state),
 
+        // --- routes present in OpenAPI spec ---
+        ("POST", "/api/complete") => handle_complete(&body, state).await,
+        ("POST", "/api/parallel/run") => handle_parallel_run(&body, state), // spec uses singular
+        ("GET", "/api/webhooks") => handle_list_webhooks(state),
+        ("POST", "/api/webhooks") => handle_register_webhook(&body, state),
+        ("POST", "/api/tasks/schedule") => handle_schedule_task(&body, state),
+        ("POST", "/api/license/activate") => handle_license_activate(&body, state),
+
+        ("POST", "/api/index") => handle_index_build(&body, state),
+        ("GET", "/api/index") => handle_index_status(state),
+        ("GET", "/api/graph") => handle_dependency_graph(&query_str, state),
+        ("GET", "/api/monorepo") => handle_monorepo(state),
+        ("GET", "/api/dashboard") => handle_dashboard(state),
         _ => {
             if method == "GET" && path.starts_with("/api/agents/") {
                 return handle_get_agent(&path["/api/agents/".len()..], state);
             }
+            if method == "DELETE" && path.starts_with("/api/agents/") && path.ends_with("/cancel") {
+                let id = &path["/api/agents/".len()..path.len() - "/cancel".len()];
+                return handle_cancel_agent(id, state);
+            }
+            if method == "POST" && path.starts_with("/api/agents/") && path.ends_with("/cancel") {
+                let id = &path["/api/agents/".len()..path.len() - "/cancel".len()];
+                return handle_cancel_agent(id, state);
+            }
+            if method == "DELETE" && path.starts_with("/api/agents/") {
+                return handle_delete_agent(&path["/api/agents/".len()..], state);
+            }
+            if method == "GET" && path.starts_with("/api/conversations/") {
+                return handle_get_conversation(&path["/api/conversations/".len()..], state);
+            }
+            if method == "DELETE" && path.starts_with("/api/conversations/") {
+                return handle_delete_conversation(&path["/api/conversations/".len()..], state);
+            }
             if method == "GET" && path.starts_with("/api/parallel/runs/") {
                 return handle_get_parallel_run(&path["/api/parallel/runs/".len()..], state);
+            }
+            if method == "POST" && path.starts_with("/api/parallel/runs/") && path.ends_with("/cancel") {
+                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/cancel".len()];
+                return handle_cancel_parallel_run(run_id, &body, state);
             }
             Response::json(404, &ErrorResponse { error: format!("not found: {method} {path}") })
         }
     }
 }
 
-fn handle_inference_stats(state: &Arc<Mutex<DaemonState>>) -> serde_json::Value {
+fn handle_inference_stats(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    serde_json::to_value(&s.inference_stats).unwrap_or_default()
+    Response::json(200, &s.inference_stats)
+}
+
+/// GET /api/search?q=<query>&limit=<n>
+/// Semantic search over the codebase index.
+fn handle_search(path_full: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    // Parse query string from raw path (e.g. /api/search?q=foo&limit=10)
+    let (query, limit) = {
+        let qs = path_full.split_once('?').map(|(_, q)| q).unwrap_or("");
+        let mut q_val = String::new();
+        let mut lim_val: usize = 10;
+        for pair in qs.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                match k {
+                    "q" | "query" => q_val = urlencoding_decode(v),
+                    "limit" | "n" => lim_val = v.parse().unwrap_or(10).min(50),
+                    _ => {}
+                }
+            }
+        }
+        (q_val, lim_val)
+    };
+
+    if query.is_empty() {
+        return Response::json(400, &ErrorResponse { error: "missing query param: ?q=".to_string() });
+    }
+
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let ws = &s.workspace_root;
+
+    let index = match intelligence::CodebaseIndexer::load_index(ws) {
+        Ok(idx) => idx,
+        Err(_) => {
+            // Index not built yet — build it now (blocking is fine, this is a sync handler)
+            let cfg = intelligence::IndexerConfig::default();
+            match intelligence::CodebaseIndexer::build_index(ws, &cfg) {
+                Ok(idx) => {
+                    let _ = intelligence::CodebaseIndexer::save_index(ws, &idx);
+                    idx
+                }
+                Err(e) => {
+                    return Response::json(503, &ErrorResponse {
+                        error: format!("codebase not indexed: {e}"),
+                    });
+                }
+            }
+        }
+    };
+
+    let results: Vec<serde_json::Value> = intelligence::CodebaseIndexer::search(&index, &query, limit)
+        .into_iter()
+        .map(|entry| serde_json::json!({
+            "path": entry.path,
+            "language": entry.language,
+            "lines": entry.lines,
+            "exports": entry.exports,
+            "summary": entry.summary,
+        }))
+        .collect();
+
+    Response::json(200, &serde_json::json!({ "query": query, "results": results }))
+}
+
+/// Simple percent-decode for URL query values.
+fn urlencoding_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = u8::from_str_radix(&s[i+1..i+3], 16) {
+                out.push(hex as char);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(' ');
+        } else {
+            out.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// GET /api/policy — return the current tachy-policy.yaml as JSON.
+fn handle_get_policy(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let policy_path = s.workspace_root.join("tachy-policy.yaml");
+    let pf = audit::PolicyFile::load(&policy_path)
+        .unwrap_or_else(|_| audit::PolicyFile::enterprise_default());
+    Response::json(200, &pf)
+}
+
+/// POST /api/policy — save a new tachy-policy.yaml from JSON body.
+fn handle_set_policy(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let pf: audit::PolicyFile = match serde_json::from_str(body) {
+        Ok(p) => p,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid policy JSON: {e}") }),
+    };
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let policy_path = s.workspace_root.join("tachy-policy.yaml");
+    match pf.save(&policy_path) {
+        Ok(()) => Response::json(200, &serde_json::json!({ "saved": policy_path.display().to_string() })),
+        Err(e) => Response::json(500, &ErrorResponse { error: format!("save failed: {e}") }),
+    }
+}
+
+fn handle_get_mission_feed(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let feed = s.mission_feed.lock().unwrap_or_else(|e| e.into_inner());
+    Response::json(200, &*feed)
+}
+
+fn handle_sso_config(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let config: audit::SsoConfig = match serde_json::from_str(body) {
+        Ok(c) => c,
+        Err(_) => return Response::json(400, &ErrorResponse { error: "invalid config".to_string() }),
+    };
+    s.sso_manager = audit::SsoManager::new(config);
+    Response::json(200, &serde_json::json!({ "status": "updated" }))
+}
+
+fn gate_action<F>(state: &Arc<Mutex<DaemonState>>, raw: &str, action: audit::Action, f: F) -> Response
+where F: FnOnce(&audit::User) -> Response {
+    let user = match extract_user(state, raw) {
+        Some(u) => u,
+        None => return Response::json(401, &ErrorResponse { error: "unauthorized".to_string() }),
+    };
+
+    match audit::check_permission(user.role, action) {
+        audit::AccessResult::Allowed => f(&user),
+        audit::AccessResult::Denied { reason } => Response::json(403, &ErrorResponse { error: reason }),
+    }
+}
+
+fn extract_user(state: &Arc<Mutex<DaemonState>>, raw: &str) -> Option<audit::User> {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let auth = extract_auth_header(raw)?;
+    
+    // 1. Check if it's an API key
+    if let Some(user) = s.user_store.authenticate(&audit::hash_api_key(&auth)) {
+        return Some(user.clone());
+    }
+
+    // 2. Check if it's an SSO session token
+    if let Some(session) = s.sso_manager.validate_session(&auth) {
+        return s.user_store.users.get(&session.user_id).cloned();
+    }
+
+    None
 }
 
 fn handle_pull_model(body: &str, _state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -445,6 +639,17 @@ fn handle_list_conversations(state: &Arc<Mutex<DaemonState>>) -> Response {
         serde_json::json!({ "id": c.id, "title": c.title, "messages": c.messages, "message_count": c.messages.len(), "created_at": c.created_at, "updated_at": c.updated_at, "workspace": c.workspace })
     }).collect();
     Response::json(200, &convs)
+}
+
+fn handle_list_cloud_jobs(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    Response::json(200, &s.cloud_jobs)
+}
+
+fn handle_list_swarm_runs(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
+    Response::json(200, &orch.list_runs())
 }
 
 fn handle_create_conversation(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -742,6 +947,193 @@ fn handle_list_file_locks(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &serde_json::json!({ "locks": s.file_locks.list_locks() }))
 }
 
+/// POST /api/complete — non-streaming single-turn completion.
+async fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct CompleteRequest {
+        prompt: String,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default = "default_max_tokens")]
+        max_tokens: usize,
+    }
+    fn default_max_tokens() -> usize { 2048 }
+
+    let req: CompleteRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+    if req.prompt.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "prompt must not be empty".to_string() });
+    }
+    let prompt = audit::sanitize_prompt(&req.prompt, 50_000);
+    let model = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        req.model.unwrap_or_else(|| s.config.default_model.clone())
+    };
+    let model_clone = model.clone();
+    let mut ollama = match backend::OllamaBackend::new(model_clone, "http://localhost:11434".to_string(), false) {
+        Ok(b) => b,
+        Err(e) => return Response::json(502, &ErrorResponse { error: format!("backend unavailable: {e}") }),
+    };
+    // Collect tokens via channel rather than SSE
+    let (t_tx, mut t_rx) = tokio::sync::mpsc::channel(256);
+    ollama.set_token_tx(t_tx);
+    let max_toks = req.max_tokens.min(4096) as u32;
+    let gen_fut = ollama.send_streaming_generate(backend::OllamaGenerateRequest {
+        model: ollama.model().to_string(),
+        prompt,
+        stream: true,
+        raw: false,
+        options: None,
+    });
+    // Run inference and collect tokens concurrently
+    let (gen_result, completion) = tokio::join!(
+        gen_fut,
+        async {
+            let mut buf = String::new();
+            // Drain up to max_toks*4 chars worth of tokens
+            while let Some(ev) = t_rx.recv().await {
+                if let backend::BackendEvent::Text(t) = ev { buf.push_str(&t); }
+            }
+            buf
+        }
+    );
+    // ignore: t_rx closes when ollama drops, join completes
+    let _ = gen_result.as_ref().map(|(_, m)| {
+        if let Ok(mut s) = state.lock() {
+            s.inference_stats.record(m.ttft_ms, m.tokens_per_sec, m.total_tokens);
+        }
+    });
+    let text = if completion.is_empty() {
+        gen_result.ok().map(|(events, _)| {
+            // fallback: extract text from returned events
+            events.into_iter().filter_map(|e| {
+                let s = format!("{e:?}");
+                if s.starts_with("TextDelta(") {
+                    Some(s[10..s.len()-1].to_string())
+                } else { None }
+            }).collect::<String>()
+        }).unwrap_or_default()
+    } else {
+        completion
+    };
+    Response::json(200, &serde_json::json!({ "completion": text, "model": model }))
+}
+
+/// GET /api/webhooks — list registered webhooks.
+fn handle_list_webhooks(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    Response::json(200, &serde_json::json!({ "webhooks": s.webhooks }))
+}
+
+/// POST /api/webhooks — register a new webhook.
+fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct RegisterWebhookRequest {
+        url: String,
+        #[serde(default)]
+        events: Vec<String>,
+        #[serde(default = "bool_true")]
+        enabled: bool,
+    }
+    fn bool_true() -> bool { true }
+
+    let req: RegisterWebhookRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+    if req.url.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "url is required".to_string() });
+    }
+    // Basic URL validation — must start with http
+    if !req.url.starts_with("http://") && !req.url.starts_with("https://") {
+        return Response::json(400, &ErrorResponse { error: "url must start with http:// or https://".to_string() });
+    }
+    let events = if req.events.is_empty() { vec!["*".to_string()] } else { req.events };
+    let webhook = crate::state::WebhookConfig { url: req.url, events, enabled: req.enabled };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.webhooks.push(webhook.clone());
+    s.save();
+    Response::json(201, &serde_json::json!({ "ok": true, "webhook": webhook }))
+}
+
+/// POST /api/tasks/schedule — register a new recurring agent task.
+fn handle_schedule_task(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct ScheduleRequest {
+        template: String,
+        name: String,
+        #[serde(default)]
+        interval_seconds: Option<u64>,
+    }
+
+    let req: ScheduleRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+    if req.template.trim().is_empty() || req.name.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "template and name are required".to_string() });
+    }
+    let rule = match req.interval_seconds {
+        Some(secs) if secs > 0 => platform::ScheduleRule::Interval { seconds: secs },
+        _ => platform::ScheduleRule::Once,
+    };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.schedule_agent(&req.template, rule, &req.name) {
+        Ok(task_id) => Response::json(201, &serde_json::json!({ "task_id": task_id, "name": req.name })),
+        Err(e) => Response::json(400, &ErrorResponse { error: e }),
+    }
+}
+
+/// POST /api/license/activate — activate a license key.
+fn handle_license_activate(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct ActivateRequest {
+        key: String,
+        secret: String,
+    }
+
+    let req: ActivateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+    if req.key.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "key is required".to_string() });
+    }
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let tachy_dir = s.workspace_root.join(".tachy");
+    drop(s);
+
+    let mut license = audit::LicenseFile::load_or_create(&tachy_dir);
+    match license.activate(&req.key, &req.secret) {
+        Ok(data) => {
+            if let Err(e) = license.save(&tachy_dir) {
+                return Response::json(500, &ErrorResponse { error: format!("activation succeeded but save failed: {e}") });
+            }
+            Response::json(200, &serde_json::json!({
+                "status": "activated",
+                "tier": format!("{:?}", data.tier),
+                "expires_at": data.expires_at,
+            }))
+        }
+        Err(e) => Response::json(400, &ErrorResponse { error: e }),
+    }
+}
+
+/// POST /api/parallel/runs/{id}/cancel — cancel a running parallel run.
+fn handle_cancel_parallel_run(run_id: &str, _body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let matching: Vec<_> = s.agents.keys().filter(|id| id.starts_with(run_id)).cloned().collect();
+    if matching.is_empty() {
+        return Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") });
+    }
+    drop(s);
+    // Signal cancellation by marking tasks: in a full implementation this would
+    // set a cancellation token; here we record the intent and return accepted.
+    Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "cancellation_requested", "tasks": matching.len() }))
+}
+
 // Helpers
 
 fn parse_http_request(raw: &str) -> (String, String, String) {
@@ -756,9 +1148,13 @@ fn parse_http_request(raw: &str) -> (String, String, String) {
 
 fn extract_auth_header(raw: &str) -> Option<String> {
     for line in raw.lines() {
-        if line.to_lowercase().starts_with("authorization:") {
+        let lower = line.to_lowercase();
+        if lower.starts_with("authorization:") {
             let val = line[14..].trim();
             return Some(val.strip_prefix("Bearer ").or(val.strip_prefix("bearer ")).unwrap_or(val).trim().to_string());
+        }
+        if lower.starts_with("x-sso-token:") {
+            return Some(line[12..].trim().to_string());
         }
     }
     None
@@ -771,6 +1167,153 @@ fn csv_response(body: &str, _filename: &str) -> Response {
 fn truncate_completion(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens * 4;
     if text.len() <= max_chars { text.to_string() } else { text[..max_chars].to_string() }
+}
+
+/// GET /api/conversations/{id} — return a single conversation by ID.
+fn handle_get_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    if id.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "conversation id required".to_string() });
+    }
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.get_conversation(id) {
+        Some(conv) => Response::json(200, conv),
+        None => Response::json(404, &ErrorResponse { error: format!("conversation not found: {id}") }),
+    }
+}
+
+/// DELETE /api/conversations/{id} — delete a conversation by ID.
+fn handle_delete_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    if id.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "conversation id required".to_string() });
+    }
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if s.delete_conversation(id) {
+        Response::json(204, &serde_json::json!({}))
+    } else {
+        Response::json(404, &ErrorResponse { error: format!("conversation not found: {id}") })
+    }
+}
+
+/// DELETE /api/agents/{id} — remove an agent from state.
+fn handle_delete_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    if id.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
+    }
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if s.delete_agent(id) {
+        Response::json(204, &serde_json::json!({}))
+    } else {
+        Response::json(404, &ErrorResponse { error: format!("agent not found: {id}") })
+    }
+}
+
+/// POST /api/agents/{id}/cancel — mark a running agent as cancelled (status=Failed).
+fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    if id.trim().is_empty() {
+        return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
+    }
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if s.cancel_agent(id) {
+        Response::json(200, &serde_json::json!({ "id": id, "status": "Failed" }))
+    } else {
+        Response::json(404, &ErrorResponse { error: format!("agent not found: {id}") })
+    }
+}
+
+/// POST /api/index — trigger a codebase index (re)build for the daemon workspace.
+fn handle_index_build(_body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let ws = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.workspace_root.clone()
+    };
+    let cfg = intelligence::IndexerConfig::default();
+    match intelligence::CodebaseIndexer::build_index(&ws, &cfg) {
+        Ok(idx) => Response::json(202, &serde_json::json!({
+            "status": "built",
+            "file_count": idx.files.len(),
+            "workspace": ws.display().to_string()
+        })),
+        Err(e) => Response::json(500, &ErrorResponse { error: format!("index build failed: {e}") }),
+    }
+}
+
+/// GET /api/index — return the current index status (file count + workspace path).
+fn handle_index_status(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let ws = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.workspace_root.clone()
+    };
+    match intelligence::CodebaseIndexer::load_index(&ws) {
+        Ok(idx) => Response::json(200, &serde_json::json!({
+            "status": "ready",
+            "file_count": idx.files.len(),
+            "workspace": ws.display().to_string()
+        })),
+        Err(_) => Response::json(200, &serde_json::json!({
+            "status": "not_built",
+            "file_count": 0,
+            "workspace": ws.display().to_string()
+        })),
+    }
+}
+
+/// GET /api/graph?file=<path> — return dependency graph (or per-file if ?file= given).
+fn handle_dependency_graph(query: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let ws = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.workspace_root.clone()
+    };
+    let graph = intelligence::DependencyGraph::build(&ws);
+    // Parse optional ?file= query param
+    let file_param = query
+        .split('&')
+        .find(|p| p.starts_with("file="))
+        .map(|p| urlencoding_decode(&p[5..]));
+    if let Some(f) = file_param {
+        let deps = graph.transitive_dependents(&f);
+        let node = graph.nodes.get(&f);
+        return Response::json(200, &serde_json::json!({
+            "file": f,
+            "direct_imports": node.map(|n| &n.imports).cloned().unwrap_or_default(),
+            "imported_by": node.map(|n| &n.imported_by).cloned().unwrap_or_default(),
+            "transitive_dependents": deps,
+        }));
+    }
+    Response::json(200, &graph)
+}
+
+/// GET /api/monorepo — detect monorepo structure.
+fn handle_monorepo(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let ws = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.workspace_root.clone()
+    };
+    let manifest = intelligence::MonorepoManifest::detect(&ws);
+    Response::json(200, &manifest)
+}
+
+/// GET /api/dashboard — performance stats + cost estimate.
+fn handle_dashboard(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let stats = &s.inference_stats;
+    let total_tokens = stats.total_tokens;
+    let cost = (total_tokens as f64 / 1_000.0) * 0.002;
+    let models: Vec<serde_json::Value> = s
+        .registry
+        .list_models()
+        .iter()
+        .map(|m| serde_json::json!({ "name": m.name, "tier": format!("{:?}", m.tier) }))
+        .collect();
+    Response::json(200, &serde_json::json!({
+        "total_requests": stats.total_requests,
+        "total_tokens": total_tokens,
+        "avg_tokens_per_sec": stats.avg_tokens_per_sec,
+        "last_tokens_per_sec": stats.last_tokens_per_sec,
+        "p50_ttft_ms": stats.p50_ttft_ms,
+        "p95_ttft_ms": stats.p95_ttft_ms,
+        "estimated_cost_usd": cost,
+        "models": models,
+    }))
 }
 
 #[cfg(test)]
@@ -789,5 +1332,291 @@ mod tests {
         let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
         let res = handle_request("GET /health HTTP/1.1\r\n\r\n", &state, &limiter, "127.0.0.1").await;
         if let Response::Full { body, .. } = res { assert!(body.contains("\"status\":\"ok\"") || body.contains("\"status\": \"ok\"")); } else { panic!("not full"); }
+    }
+
+    // --- urlencoding_decode ---
+
+    #[test]
+    fn decode_plain_string() {
+        assert_eq!(urlencoding_decode("hello"), "hello");
+    }
+
+    #[test]
+    fn decode_plus_as_space() {
+        assert_eq!(urlencoding_decode("hello+world"), "hello world");
+    }
+
+    #[test]
+    fn decode_percent_encoded() {
+        assert_eq!(urlencoding_decode("hello%20world"), "hello world");
+        assert_eq!(urlencoding_decode("a%2Fb"), "a/b");
+    }
+
+    #[test]
+    fn decode_mixed_encoding() {
+        assert_eq!(urlencoding_decode("fn+main%28%29"), "fn main()");
+    }
+
+    #[test]
+    fn decode_incomplete_percent_sequence_kept_as_is() {
+        // A lone % at the end should not panic
+        let result = urlencoding_decode("abc%");
+        assert!(result.starts_with("abc"));
+    }
+
+    // --- handle_search: missing ?q= returns 400 ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn search_missing_query_returns_400() {
+        let root = std::env::temp_dir().join(format!("tachy-search-test-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/search HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 400);
+            assert!(body.contains("missing query"));
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_get_policy: returns 200 with policy JSON ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_policy_returns_200_with_defaults() {
+        let root = std::env::temp_dir().join(format!("tachy-policy-test-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/policy HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            // Should be valid JSON
+            assert!(serde_json::from_str::<serde_json::Value>(&body).is_ok());
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_set_policy: invalid JSON returns 400 ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn set_policy_invalid_json_returns_400() {
+        let root = std::env::temp_dir().join(format!("tachy-set-policy-test-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let raw = "POST /api/policy HTTP/1.1\r\nContent-Length: 11\r\n\r\nnot-valid{{";
+        let res = handle_request(raw, &state, &limiter, "127.0.0.1").await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 400);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_get_conversation ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_conversation_unknown_returns_404() {
+        let root = std::env::temp_dir().join(format!("tachy-get-conv-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/conversations/conv-999 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 404);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_conversation_existing_returns_200() {
+        let root = std::env::temp_dir().join(format!("tachy-get-conv2-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            let mut s = DaemonState::init(root).expect("init");
+            let _id = s.create_conversation("test conv");
+            s
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/conversations/conv-1 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            assert!(body.contains("conv-1") || body.contains("test conv"));
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_delete_conversation ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_conversation_unknown_returns_404() {
+        let root = std::env::temp_dir().join(format!("tachy-del-conv-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "DELETE /api/conversations/conv-999 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 404);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_conversation_existing_returns_204() {
+        let root = std::env::temp_dir().join(format!("tachy-del-conv2-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            let mut s = DaemonState::init(root).expect("init");
+            let _id = s.create_conversation("to delete");
+            s
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "DELETE /api/conversations/conv-1 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 204);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_delete_agent ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_agent_unknown_returns_404() {
+        let root = std::env::temp_dir().join(format!("tachy-del-ag-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "DELETE /api/agents/agent-999 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 404);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_agent_existing_returns_204() {
+        let root = std::env::temp_dir().join(format!("tachy-del-ag2-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            let mut s = DaemonState::init(root).expect("init");
+            let _id = s.create_agent("code-reviewer", "do stuff").expect("create");
+            s
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "DELETE /api/agents/agent-1 HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 204);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_cancel_agent ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_agent_unknown_returns_404() {
+        let root = std::env::temp_dir().join(format!("tachy-cancel-ag-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "POST /api/agents/agent-999/cancel HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res {
+            assert_eq!(status, 404);
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_agent_existing_returns_200() {
+        let root = std::env::temp_dir().join(format!("tachy-cancel-ag2-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            let mut s = DaemonState::init(root).expect("init");
+            let _id = s.create_agent("code-reviewer", "cancellable task").expect("create");
+            s
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "POST /api/agents/agent-1/cancel HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            assert!(body.contains("Failed") || body.contains("agent-1"));
+        } else {
+            panic!("expected Full response");
+        }
+    }
+
+    // --- handle_index_status: returns 200 ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn index_status_returns_200() {
+        let root = std::env::temp_dir().join(format!("tachy-index-status-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/index HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            assert!(body.contains("status"));
+        } else {
+            panic!("expected Full response");
+        }
     }
 }

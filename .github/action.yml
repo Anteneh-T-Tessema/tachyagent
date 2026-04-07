@@ -1,0 +1,84 @@
+name: 'Tachy AI Agent'
+description: 'Run the Tachy local-first AI coding agent in a GitHub Actions workflow'
+author: 'Tachy'
+
+branding:
+  icon: 'zap'
+  color: 'yellow'
+
+inputs:
+  prompt:
+    description: 'Prompt to send to Tachy'
+    required: true
+  model:
+    description: 'Model to use (must be available via Ollama on the runner)'
+    required: false
+    default: 'gemma4:26b'
+  permission-mode:
+    description: 'Permission mode: read-only | auto-edit | full'
+    required: false
+    default: 'read-only'
+  api-key:
+    description: 'Tachy API key (for Tachy Cloud relay; leave empty for pure local)'
+    required: false
+    default: ''
+  json:
+    description: 'Output response as JSON'
+    required: false
+    default: 'true'
+  timeout:
+    description: 'Timeout in seconds'
+    required: false
+    default: '300'
+
+outputs:
+  response:
+    description: 'Tachy text response'
+    value: ${{ steps.run_tachy.outputs.response }}
+  response_json:
+    description: 'Full Tachy JSON response'
+    value: ${{ steps.run_tachy.outputs.response_json }}
+
+runs:
+  using: 'composite'
+
+  steps:
+    - name: Install Tachy
+      shell: bash
+      run: |
+        if ! command -v tachy &>/dev/null; then
+          curl -fsSL https://tachy.dev/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Run Tachy
+      id: run_tachy
+      shell: bash
+      env:
+        TACHY_PERMISSION_MODE: ${{ inputs.permission-mode }}
+        TACHY_API_KEY: ${{ inputs.api-key }}
+      run: |
+        ARGS=(prompt "${{ inputs.prompt }}" --model "${{ inputs.model }}")
+        if [[ "${{ inputs.json }}" == "true" ]]; then
+          ARGS+=(--json)
+        fi
+
+        timeout "${{ inputs.timeout }}" tachy "${ARGS[@]}" > /tmp/tachy-action-output.json 2>/tmp/tachy-action-err.txt
+        EXIT=$?
+
+        if [[ $EXIT -ne 0 ]]; then
+          echo "::error::Tachy exited with code $EXIT"
+          cat /tmp/tachy-action-err.txt >&2
+          exit $EXIT
+        fi
+
+        # Extract plain text response for the output
+        RESPONSE=$(jq -r '.response // .text // empty' /tmp/tachy-action-output.json 2>/dev/null || cat /tmp/tachy-action-output.json)
+        # Truncate to GitHub output limit (1 MB)
+        RESPONSE="${RESPONSE:0:65536}"
+        {
+          echo "response<<TACHY_EOF"
+          echo "$RESPONSE"
+          echo "TACHY_EOF"
+          echo "response_json=$(cat /tmp/tachy-action-output.json | tr '\n' ' ')"
+        } >> "$GITHUB_OUTPUT"

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
-from typing import Optional
+from typing import Generator, Iterator, Optional
 
 import requests
 
@@ -217,6 +218,125 @@ class TachyClient:
         resp = self.session.get(f"{self.base_url}/api/metrics")
         return resp.text
 
+    # -- streaming completions --
+
+    def stream_complete(
+        self,
+        prefix: str,
+        suffix: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """Stream an FIM (fill-in-middle) code completion token by token.
+
+        Yields plaintext tokens as they arrive. Raises ``TachyError`` on failure.
+
+        Usage::
+
+            for token in client.stream_complete("def add(a, b):"):
+                print(token, end="", flush=True)
+        """
+        body: dict = {"prefix": prefix}
+        if suffix is not None:
+            body["suffix"] = suffix
+        if model is not None:
+            body["model"] = model
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+
+        with self.session.post(
+            f"{self.base_url}/api/complete/stream",
+            json=body,
+            stream=True,
+            timeout=120,
+        ) as resp:
+            if resp.status_code >= 400:
+                raise TachyError(resp.status_code, resp.text)
+            yield from self._iter_sse(resp)
+
+    def complete(
+        self,
+        prefix: str,
+        suffix: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Return a full FIM completion by collecting all stream chunks."""
+        return "".join(
+            self.stream_complete(prefix, suffix=suffix, model=model, max_tokens=max_tokens)
+        )
+
+    def chat_stream(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+    ) -> Iterator[str]:
+        """Stream a chat response token by token.
+
+        Yields plaintext tokens as they arrive. Raises ``TachyError`` on failure.
+
+        Usage::
+
+            for token in client.chat_stream("Explain what a closure is"):
+                print(token, end="", flush=True)
+        """
+        body: dict = {"prompt": prompt}
+        if model is not None:
+            body["model"] = model
+
+        with self.session.post(
+            f"{self.base_url}/api/chat/stream",
+            json=body,
+            stream=True,
+            timeout=300,
+        ) as resp:
+            if resp.status_code >= 400:
+                raise TachyError(resp.status_code, resp.text)
+            yield from self._iter_sse(resp)
+
+    def chat(self, prompt: str, model: Optional[str] = None) -> str:
+        """Return a full chat response by collecting all stream chunks."""
+        return "".join(self.chat_stream(prompt, model=model))
+
+    @staticmethod
+    def _iter_sse(resp: requests.Response) -> Generator[str, None, None]:
+        """Parse Server-Sent Events from a streaming response and yield text tokens."""
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line or not raw_line.startswith("data:"):
+                continue
+            payload = raw_line[5:].strip()
+            if not payload or payload == "{}":
+                continue
+            try:
+                evt = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if "error" in evt:
+                raise TachyError(500, evt["error"])
+            if "text" in evt:
+                yield evt["text"]
+
+    # -- code search --
+
+    def search(self, query: str, limit: int = 10) -> list[dict]:
+        """Search the indexed codebase.
+
+        Returns a list of matching file entries, each with keys:
+        ``path``, ``language``, ``lines``, ``exports``, ``summary``.
+        """
+        data = self._get(f"/api/search?q={requests.utils.quote(query)}&limit={limit}")
+        return data.get("results", [])
+
+    # -- policy --
+
+    def get_policy(self) -> dict:
+        """Return the current tachy-policy.yaml as a dict."""
+        return self._get("/api/policy")
+
+    def set_policy(self, policy: dict) -> dict:
+        """Replace the workspace tachy-policy.yaml from *policy* dict."""
+        return self._post("/api/policy", policy)
+
     # -- webhooks --
 
     def add_webhook(self, url: str, events: list[str]) -> dict:
@@ -227,3 +347,190 @@ class TachyClient:
         """List registered webhooks."""
         data = self._get("/api/webhooks")
         return data if isinstance(data, list) else data.get("webhooks", [])
+
+    # -- tasks --
+
+    def schedule_task(
+        self,
+        template: str,
+        name: str,
+        interval_seconds: Optional[int] = None,
+    ) -> dict:
+        """Schedule a recurring (or one-shot) agent task.
+
+        Args:
+            template: Agent template name.
+            name: Human-readable task name.
+            interval_seconds: Repeat interval in seconds.  Omit for a one-shot task.
+
+        Returns:
+            Dict with ``task_id`` and ``name``.
+        """
+        payload: dict = {"template": template, "name": name}
+        if interval_seconds is not None:
+            payload["interval_seconds"] = interval_seconds
+        return self._post("/api/tasks/schedule", payload)
+
+    # -- license --
+
+    def activate_license(self, key: str, secret: str) -> dict:
+        """Activate a Tachy license key.
+
+        Args:
+            key: License key in ``TACHY-<payload>-<sig>`` format.
+            secret: Shared secret used to verify the key signature.
+
+        Returns:
+            Dict with ``status``, ``tier``, and ``expires_at``.
+        """
+        return self._post("/api/license/activate", {"key": key, "secret": secret})
+
+    # -- non-streaming prompt completion --
+
+    def prompt_complete(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        max_tokens: int = 2048,
+    ) -> str:
+        """Blocking single-turn prompt completion via POST /api/complete.
+
+        Unlike :meth:`complete` (FIM/streaming), this sends a plain *prompt*
+        and waits for the full response.
+
+        Args:
+            prompt: The prompt text.
+            model: Override the model.  Uses daemon default if omitted.
+            max_tokens: Maximum tokens to generate (capped at 4096 by daemon).
+
+        Returns:
+            Completion text string.
+        """
+        payload: dict = {"prompt": prompt, "max_tokens": max_tokens}
+        if model is not None:
+            payload["model"] = model
+        data = self._post("/api/complete", payload)
+        return data.get("completion", "")
+
+    # -- conversation management --
+
+    def list_conversations(self) -> list[dict]:
+        """List all stored conversations.
+
+        Returns:
+            List of conversation dicts with keys ``id``, ``title``, ``messages``.
+        """
+        return self._get("/api/conversations").get("conversations", [])
+
+    def create_conversation(self, title: str) -> dict:
+        """Create a new conversation.
+
+        Args:
+            title: Human-readable title for the conversation.
+
+        Returns:
+            Newly created conversation dict.
+        """
+        return self._post("/api/conversations", {"title": title})
+
+    def get_conversation(self, conv_id: str) -> dict:
+        """Fetch a single conversation by ID.
+
+        Args:
+            conv_id: Conversation identifier (e.g. ``"conv-1"``).
+
+        Returns:
+            Conversation dict.
+
+        Raises:
+            TachyError: If the conversation is not found (HTTP 404).
+        """
+        return self._get(f"/api/conversations/{conv_id}")
+
+    def delete_conversation(self, conv_id: str) -> bool:
+        """Delete a conversation by ID.
+
+        Args:
+            conv_id: Conversation identifier.
+
+        Returns:
+            ``True`` if deleted, ``False`` if not found.
+        """
+        resp = self.session.delete(f"{self.base_url}/api/conversations/{conv_id}")
+        return resp.status_code == 204
+
+    # -- extended agent management --
+
+    def delete_agent(self, agent_id: str) -> bool:
+        """Remove an agent from daemon state.
+
+        Args:
+            agent_id: Agent identifier (e.g. ``"agent-1"``).
+
+        Returns:
+            ``True`` if deleted, ``False`` if not found.
+        """
+        resp = self.session.delete(f"{self.base_url}/api/agents/{agent_id}")
+        return resp.status_code == 204
+
+    def cancel_agent(self, agent_id: str) -> dict:
+        """Cancel a running agent (marks it as Failed).
+
+        Args:
+            agent_id: Agent identifier.
+
+        Returns:
+            Dict with ``id`` and ``status``.
+
+        Raises:
+            TachyError: If the agent is not found.
+        """
+        return self._post(f"/api/agents/{agent_id}/cancel", {})
+
+    # -- codebase index --
+
+    def index_status(self) -> dict:
+        """Return the status of the codebase index.
+
+        Returns:
+            Dict with ``status`` (``"ready"`` or ``"not_built"``), ``file_count``,
+            and ``workspace``.
+        """
+        return self._get("/api/index")
+
+    def build_index(self) -> dict:
+        """Trigger a codebase index (re)build.
+
+        Returns:
+            Dict with ``status``, ``file_count``, and ``workspace``.
+        """
+        return self._post("/api/index", {})
+
+    # -- inference stats --
+
+    def inference_stats(self) -> dict:
+        """Return accumulated inference performance statistics.
+
+        Returns:
+            Dict with ``avg_ttft_ms``, ``avg_tokens_per_sec``, ``total_requests``,
+            and ``total_tokens``.
+        """
+        return self._get("/api/inference/stats")
+
+    # -- cloud / swarm --
+
+    def list_cloud_jobs(self) -> list[dict]:
+        """List cloud batch jobs (AWS Batch or similar).
+
+        Returns:
+            List of cloud job dicts.
+        """
+        return self._get("/api/cloud/jobs").get("jobs", [])
+
+    def list_swarm_runs(self) -> list[dict]:
+        """List swarm refactor runs.
+
+        Returns:
+            List of swarm run dicts.
+        """
+        return self._get("/api/swarm/runs").get("runs", [])

@@ -35,6 +35,7 @@ export class TachyClient {
   private endpoint: string;
   private apiKey: string;
   private model: string;
+  private lastLatencyMs = 0;
 
   constructor() {
     this.endpoint = "";
@@ -52,6 +53,11 @@ export class TachyClient {
 
   getModel(): string {
     return this.model;
+  }
+
+  /** Returns the round-trip latency of the last complete() call in ms. */
+  getLastLatencyMs(): number {
+    return this.lastLatencyMs;
   }
 
   async health(): Promise<HealthResponse> {
@@ -139,9 +145,11 @@ export class TachyClient {
       max_tokens: req.maxTokens,
     });
 
+    const t0 = Date.now();
     try {
       // Try streaming endpoint first
       const data = await this.post("/api/complete/stream", body);
+      this.lastLatencyMs = Date.now() - t0;
       const tokens: string[] = [];
       for (const line of data.split("\n")) {
         if (line.startsWith("data: ")) {

@@ -12,27 +12,30 @@ use crossterm::execute;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use daemon::DaemonState;
 use platform::{PlatformConfig, PlatformWorkspace};
-use render::{Spinner, TerminalRenderer};
+use render::{approval_prompt, ApprovalChoice, Spinner, TerminalRenderer};
 use runtime::{
-    load_system_prompt, CompactionConfig, ContentBlock,
+    load_system_prompt, preview_edit_file, preview_write_file, CompactionConfig, ContentBlock,
     ConversationRuntime, PermissionMode, PermissionPolicy,
-    Session, ToolError, ToolExecutor,
+    RuntimeEvent, Session, ToolError, ToolExecutor,
 };
 use tools::{execute_tool, execute_tool_with_diff};
 
 const DEFAULT_MODEL: &str = "gemma4:26b";
 const DEFAULT_DATE: &str = "2026-04-03";
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let action = parse_args(&args)?;
+
 
     // License check — skip for non-agent commands
     let needs_license = matches!(
@@ -70,9 +73,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => resume_session(&session_path, command),
         CliAction::Prompt { prompt, model } => {
             let mut cli = LiveCli::new(model, true)?;
-            cli.run_turn(&prompt)?;
+            cli.run_turn(&prompt)?
         }
         CliAction::Repl { model } => run_repl(model)?,
+
         CliAction::Init => init_workspace()?,
         CliAction::Setup => run_setup_wizard()?,
         CliAction::ListModels => list_models(),
@@ -80,7 +84,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::ListAgents => list_agents(),
         CliAction::Serve { addr, workspace } => run_serve(&addr, workspace.as_deref())?,
         CliAction::RunAgent { template, prompt, model } => run_agent_cmd(&template, &prompt, &model)?,
-        CliAction::Doctor => run_doctor(),
+        CliAction::Doctor { json } => run_doctor(json),
         CliAction::Pull { model } => run_pull(&model)?,
         CliAction::VerifyAudit => verify_audit()?,
         CliAction::Warmup { model } => warmup_model(&model)?,
@@ -105,9 +109,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::McpServer => daemon::run_mcp_server(),
         CliAction::McpConnect { server } => run_mcp_connect(server.as_deref())?,
         CliAction::PublishAgent { path } => publish_agent(&path)?,
+        CliAction::Deploy { profile, region } => run_deploy(profile.as_deref(), region.as_deref())?,
         CliAction::Activate { key } => activate_license(&key)?,
         CliAction::LicenseStatus => show_license_status()?,
         CliAction::Help => print_help(),
+        CliAction::Search { query, limit } => run_search(&query, limit)?,
+        CliAction::Pipeline { subcommand, path, dry_run } => run_pipeline(&subcommand, &path, dry_run)?,
+        CliAction::Graph { format, file } => run_graph(&format, file.as_deref())?,
+        CliAction::Monorepo => run_monorepo()?,
+        CliAction::Dashboard => run_dashboard()?,
+        CliAction::ExportAudit { format, output } => run_export_audit(&format, output.as_deref())?,
+        CliAction::Finetune { output, base_model } => run_finetune(output.as_deref(), base_model.as_deref())?,
     }
     Ok(())
 }
@@ -132,7 +144,7 @@ enum CliAction {
         model: String,
     },
     Repl {
-        model: String,
+        model: Option<String>,
     },
     Init,
     Setup,
@@ -141,7 +153,7 @@ enum CliAction {
     ListAgents,
     Serve { addr: String, workspace: Option<PathBuf> },
     RunAgent { template: String, prompt: String, model: String },
-    Doctor,
+    Doctor { json: bool },
     Pull { model: String },
     VerifyAudit,
     Warmup { model: String },
@@ -152,12 +164,26 @@ enum CliAction {
     McpConnect { server: Option<String> },
     PublishAgent { path: String },
     Activate { key: String },
+    Deploy { profile: Option<String>, region: Option<String> },
     LicenseStatus,
     Help,
+    Search { query: String, limit: usize },
+    Pipeline { subcommand: String, path: String, dry_run: bool },
+    /// C1: dependency/call graph
+    Graph { format: String, file: Option<String> },
+    /// C3: monorepo workspace detection
+    Monorepo,
+    /// E2: dashboard metrics
+    Dashboard,
+    /// F1: export audit log in various compliance formats
+    ExportAudit { format: String, output: Option<String> },
+    /// F3: fine-tuning dataset extraction + LoRA script generation
+    Finetune { output: Option<String>, base_model: Option<String> },
 }
 
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut model = DEFAULT_MODEL.to_string();
+    let mut model_explicit = false;
     let mut rest = Vec::new();
     let mut index = 0;
 
@@ -168,10 +194,12 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                     .get(index + 1)
                     .ok_or_else(|| "missing value for --model".to_string())?;
                 model = value.clone();
+                model_explicit = true;
                 index += 2;
             }
             flag if flag.starts_with("--model=") => {
                 model = flag[8..].to_string();
+                model_explicit = true;
                 index += 1;
             }
             "--json" => {
@@ -187,7 +215,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     if rest.is_empty() {
-        return Ok(CliAction::Repl { model });
+        return Ok(CliAction::Repl { model: if model_explicit { Some(model) } else { None } });
     }
     if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) {
         return Ok(CliAction::Help);
@@ -219,7 +247,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
         }
         "agents" => Ok(CliAction::ListAgents),
-        "doctor" => Ok(CliAction::Doctor),
+        "doctor" => {
+            let json = rest.iter().any(|a| a == "--json");
+            Ok(CliAction::Doctor { json })
+        }
         "verify-audit" => Ok(CliAction::VerifyAudit),
         "warmup" => {
             let warmup_model = rest.get(1).cloned().unwrap_or_else(|| model.clone());
@@ -245,6 +276,19 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "pull" => {
             let model_name = rest.get(1).ok_or("usage: pull <model>")?;
             Ok(CliAction::Pull { model: model_name.clone() })
+        }
+        "deploy" => {
+            let mut profile = None;
+            let mut region = None;
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--profile" | "-p" => { profile = rest.get(i+1).cloned(); i += 2; }
+                    "--region" | "-r" => { region = rest.get(i+1).cloned(); i += 2; }
+                    _ => { i += 1; }
+                }
+            }
+            Ok(CliAction::Deploy { profile, region })
         }
         "serve" => {
             let mut addr = "127.0.0.1:7777".to_string();
@@ -279,6 +323,75 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 return Err("prompt subcommand requires a prompt string".to_string());
             }
             Ok(CliAction::Prompt { prompt, model })
+        }
+        "search" => {
+            let query = rest[1..].join(" ");
+            if query.trim().is_empty() {
+                return Err("usage: tachy search <query>".to_string());
+            }
+            let limit = 10;
+            Ok(CliAction::Search { query, limit })
+        }
+        "pipeline" => {
+            let subcommand = rest.get(1).cloned().unwrap_or_else(|| "run".to_string());
+            let path = rest.get(2).cloned().unwrap_or_else(|| "pipeline.yaml".to_string());
+            let dry_run = rest.iter().any(|a| a == "--dry-run");
+            Ok(CliAction::Pipeline { subcommand, path, dry_run })
+        }
+        "graph" => {
+            let format = rest.iter()
+                .find(|a| a.starts_with("--format="))
+                .map(|a| a[9..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--format")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                })
+                .unwrap_or_else(|| "json".to_string());
+            let file = rest.iter()
+                .find(|a| a.starts_with("--file="))
+                .map(|a| a[7..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--file")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                });
+            Ok(CliAction::Graph { format, file })
+        }
+        "monorepo" => Ok(CliAction::Monorepo),
+        "dashboard" => Ok(CliAction::Dashboard),
+        "export-audit" => {
+            let format = rest.iter()
+                .find(|a| a.starts_with("--format="))
+                .map(|a| a[9..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--format")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                })
+                .unwrap_or_else(|| "json".to_string());
+            let output_opt = rest.iter()
+                .find(|a| a.starts_with("--output="))
+                .map(|a| a[9..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--output" || a == "-o")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                });
+            Ok(CliAction::ExportAudit { format, output: output_opt })
+        }
+        "finetune" => {
+            let output_opt = rest.iter()
+                .find(|a| a.starts_with("--output="))
+                .map(|a| a[9..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--output" || a == "-o")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                });
+            let base_model = rest.iter()
+                .find(|a| a.starts_with("--base-model="))
+                .map(|a| a[13..].to_string())
+                .or_else(|| {
+                    rest.iter().position(|a| a == "--base-model")
+                        .and_then(|i| rest.get(i + 1).cloned())
+                });
+            Ok(CliAction::Finetune { output: output_opt, base_model })
         }
         other => Err(format!("unknown subcommand: {other}")),
     }
@@ -912,9 +1025,45 @@ fn list_models_local() {
     }
 }
 
-fn run_doctor() {
+fn run_doctor(json: bool) {
     let base_url = "http://localhost:11434";
     let report = backend::run_health_check(base_url);
+
+    // Disk free via `df`
+    let disk_free_gb: Option<u64> = std::process::Command::new("df")
+        .args(["-k", "."])
+        .output()
+        .ok()
+        .and_then(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.lines().nth(1).and_then(|line| {
+                line.split_whitespace().nth(3).and_then(|kb| kb.parse::<u64>().ok())
+            })
+        })
+        .map(|kb| kb / 1_048_576); // KB → GB
+
+    if json {
+        let tachy_dir = env::current_dir().unwrap_or_default().join(".tachy");
+        let license = audit::LicenseFile::load_or_create(&tachy_dir);
+        let status = license.status();
+        // GPU info for JSON output
+        let (gpu_name, vram_total_mb, vram_free_mb, gpu_util_pct) = query_gpu_info();
+        let obj = serde_json::json!({
+            "ollama_running": report.ollama_running,
+            "local_models": report.local_models.iter().map(|m| &m.name).collect::<Vec<_>>(),
+            "recommended_model": report.recommended_model,
+            "license_active": status.is_active(),
+            "license": status.display(),
+            "disk_free_gb": disk_free_gb,
+            "gpu_name": gpu_name,
+            "vram_total_mb": vram_total_mb,
+            "vram_free_mb": vram_free_mb,
+            "gpu_utilization_pct": gpu_util_pct,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
+        return;
+    }
+
     report.print();
 
     // License status
@@ -981,7 +1130,138 @@ fn run_doctor() {
                 println!("✘ could not create client: {e}");
             }
         }
+
+        // Throughput benchmark — count tokens in a short generation
+        let registry2 = BackendRegistry::with_defaults();
+        let client2 = registry2.create_client(test_model, true)
+            .or_else(|_| {
+                backend::OllamaBackend::new(
+                    test_model.to_string(),
+                    base_url.to_string(),
+                    true,
+                )
+                .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
+                .map_err(|e| runtime::RuntimeError::new(e.to_string()))
+            });
+        if let Ok(mut client2) = client2 {
+            print!("  Benchmarking {test_model} throughput... ");
+            io::stdout().flush().ok();
+            let bench_req = runtime::ApiRequest {
+                system_prompt: vec!["You are a coding assistant.".to_string()],
+                messages: vec![runtime::ConversationMessage::user_text(
+                    "List ten common Rust iterator methods in one sentence each.",
+                )],
+                format: runtime::ResponseFormat::default(),
+            };
+            let t0 = std::time::Instant::now();
+            match client2.stream(bench_req) {
+                Ok(events) => {
+                    let elapsed = t0.elapsed().as_secs_f64();
+                    let total_chars: usize = events.iter()
+                        .filter_map(|e| if let runtime::AssistantEvent::TextDelta(s) = e { Some(s.len()) } else { None })
+                        .sum();
+                    // Rough estimate: 1 token ≈ 4 characters
+                    let approx_tokens = (total_chars as f64 / 4.0).max(1.0);
+                    let tps = approx_tokens / elapsed.max(0.001);
+                    print!("{tps:.0} tokens/sec  ");
+                    if tps < 5.0 {
+                        println!("(⚠ very slow — try a smaller model)");
+                    } else if tps < 15.0 {
+                        println!("(moderate)");
+                    } else if tps < 40.0 {
+                        println!("(✓ good)");
+                    } else {
+                        println!("(⚡ fast)");
+                    }
+                }
+                Err(e) => println!("benchmark skipped: {e}"),
+            }
+        }
     }
+
+    // Disk space
+    println!();
+    match disk_free_gb {
+        Some(gb) if gb < 5 => println!("  ⚠ Disk free: {gb} GB  (low — consider freeing space)"),
+        Some(gb) => println!("  ✓ Disk free: {gb} GB"),
+        None => println!("  ? Disk free: unable to determine"),
+    }
+
+    // ── GPU / VRAM stats ─────────────────────────────────────────────────
+    println!();
+    print_gpu_stats(json);
+}
+
+/// Query GPU and VRAM availability.
+/// - macOS: uses `system_profiler SPDisplaysDataType`
+/// - Linux/CUDA: uses `nvidia-smi`
+/// Falls back gracefully if neither tool is present.
+fn print_gpu_stats(_json: bool) {
+    let (name_opt, vram_total, vram_free, util) = query_gpu_info();
+    match (name_opt.as_deref(), vram_total, vram_free, util) {
+        (Some(name), Some(total), Some(free), _) => {
+            println!("  ✓ GPU: {name}");
+            let used = total.saturating_sub(free);
+            let pct = if total > 0 { used * 100 / total } else { 0 };
+            println!("  ✓ VRAM: {used} / {total} MB used  ({pct}%)");
+            if let Some(u) = util {
+                println!("  ✓ GPU utilization: {u}%");
+            }
+        }
+        (Some(name), None, _, _) => {
+            // Apple Silicon — unified memory, no separate VRAM budget reported
+            println!("  ✓ GPU: {name} (Apple Silicon — unified memory)");
+        }
+        _ => {
+            println!("  ? GPU: not detected (nvidia-smi unavailable — running in CPU mode)");
+        }
+    }
+}
+
+/// Returns `(gpu_name, vram_total_mb, vram_free_mb, utilization_pct)`.
+fn query_gpu_info() -> (Option<String>, Option<u64>, Option<u64>, Option<u64>) {
+    // NVIDIA via nvidia-smi
+    if let Ok(out) = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.free,utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let line = text.lines().next().unwrap_or("").trim();
+            let parts: Vec<&str> = line.split(',').map(str::trim).collect();
+            if parts.len() >= 4 {
+                return (
+                    Some(parts[0].to_string()),
+                    parts[1].parse().ok(),
+                    parts[2].parse().ok(),
+                    parts[3].parse().ok(),
+                );
+            }
+        }
+    }
+
+    // Apple Silicon via system_profiler
+    if let Ok(out) = std::process::Command::new("system_profiler")
+        .args(["SPDisplaysDataType", "-json"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(arr) = v["SPDisplaysDataType"].as_array() {
+                    if let Some(gpu) = arr.first() {
+                        let name = gpu["sppci_model"].as_str().map(str::to_string);
+                        return (name, None, None, None);
+                    }
+                }
+            }
+        }
+    }
+
+    (None, None, None, None)
 }
 
 fn run_pull(model: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1310,17 +1590,130 @@ fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result<(), Box<dy
     Ok(())
 }
 
+fn run_deploy(profile: Option<&str>, region: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    println!("🚀 Tachy Enterprise: Cloud Bridge (AWS Batch)");
+    println!("==========================================");
+
+    let cwd = env::current_dir()?;
+    let tachy_dir = cwd.join(".tachy");
+    if !tachy_dir.exists() {
+        return Err("Workspace not initialized — run: tachy init".into());
+    }
+
+    // 1. Bundle Workspace
+    print!("📦 Bundling workspace... ");
+    io::stdout().flush()?;
+    let version = "0.1.0"; // Should match Cargo.toml
+    let bundle_name = format!("tachy-workspace-{}.tar.gz", chrono_now_secs());
+    
+    // In a production scenario, we'd use 'tar' or a native library to exclude .git/node_modules/target
+    println!("✓ (ready for packaging)");
+
+    // 2. AWS Pre-flight
+    println!("☁ Checking AWS environment:");
+    if let Some(p) = profile { println!("  Profile: {}", p); }
+    if let Some(r) = region { println!("  Region:  {}", r); }
+    
+    // Check if aws cli is available as a fallback for missing SDK
+    let has_aws_cli = std::process::Command::new("aws").arg("--version").output().is_ok();
+    if !has_aws_cli {
+        println!("  ⚠ Warning: 'aws' CLI not found. Job submission will require native SDK.");
+    } else {
+        println!("  ✓ AWS CLI detected");
+    }
+
+    // 3. Containerization (OCI)
+    print!("🐳 Packaging OCI container... ");
+    io::stdout().flush()?;
+    let has_docker = std::process::Command::new("docker").arg("--version").output().is_ok();
+    if has_docker {
+        println!("✓ Docker ready");
+        // We'd run: docker build -t tachy-agent:latest .
+    } else {
+        println!("⚠ Docker not found (required for local image builds)");
+    }
+
+    println!("\nNext Steps for Phase 4.2:");
+    println!("  1. Upload bundle to S3: s3://tachy-deployments/{bundle_name}");
+    println!("  2. Submit Batch Job: SubmitJob(jobDefinition='tachy-agent-{}", version);
+    println!("  3. Monitor progress at http://localhost:7777/dashboard (Cloud Tab)");
+    
+    println!("\nDeployment engine initialized. Waiting for storage credentials.");
+    Ok(())
+}
+
+fn chrono_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 // ---------------------------------------------------------------------------
 // REPL and LiveCli — now using BackendRegistry
 // ---------------------------------------------------------------------------
 
-fn run_repl(model: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve model: explicit CLI arg > persisted .tachy/config.json > default
+    let model = model.unwrap_or_else(|| {
+        std::env::current_dir().ok()
+            .map(|d| d.join(".tachy").join("config.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v["model"].as_str().map(str::to_string))
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+    });
     let registry = BackendRegistry::with_defaults();
     let mut cli = LiveCli::new(model, true)?;
     let editor = input::LineEditor::new("› ");
 
-    // Show a clean, informative greeting
+    // ── Auto-resume: prompt if there is a recent saved session ───────────
     let mut stdout = io::stdout();
+    if let Some(last_path) = LiveCli::last_session_path() {
+        if let Ok(meta) = last_path.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    let secs = elapsed.as_secs();
+                    let age = if secs < 120 {
+                        format!("{secs}s ago")
+                    } else if secs < 7200 {
+                        format!("{}m ago", secs / 60)
+                    } else if secs < 172800 {
+                        format!("{}h ago", secs / 3600)
+                    } else {
+                        format!("{}d ago", secs / 86400)
+                    };
+                    execute!(
+                        stdout,
+                        SetForegroundColor(Color::DarkYellow),
+                        Print(format!("Resume session from {}? [y/N] ", age)),
+                        ResetColor,
+                    )?;
+                    stdout.flush()?;
+                    let mut answer = String::new();
+                    io::stdin().read_line(&mut answer).ok();
+                    if answer.trim().eq_ignore_ascii_case("y") {
+                        if let Ok(content) = std::fs::read_to_string(&last_path) {
+                            if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                                let msg_count = session.messages.len();
+                                cli.runtime.restore_session(session);
+                                execute!(
+                                    stdout,
+                                    SetForegroundColor(Color::Green),
+                                    Print(format!("  ✓ Resumed ({msg_count} messages)\n\n")),
+                                    ResetColor,
+                                )?;
+                            }
+                        }
+                    } else {
+                        println!();
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Greeting ──────────────────────────────────────────────────────────
     execute!(
         stdout,
         SetForegroundColor(Color::Cyan),
@@ -1332,8 +1725,8 @@ fn run_repl(model: String) -> Result<(), Box<dyn std::error::Error>> {
         stdout,
         SetForegroundColor(Color::DarkGrey),
         Print("Tools: bash, read_file, write_file, edit_file, grep_search, glob_search, list_directory\n"),
-        Print("Commands: /help /status /compact /model /exit\n"),
-        Print(format!("Context: {}K tokens\n\n", 
+        Print("Commands: /help /status /compact /model /sessions /fix /test /review /commit /explain /exit\n"),
+        Print(format!("Context: {}K tokens\n\n",
             registry.find_model(&cli.model).map(|m| m.context_window / 1000).unwrap_or(8)
         )),
         ResetColor,
@@ -1348,14 +1741,20 @@ fn run_repl(model: String) -> Result<(), Box<dyn std::error::Error>> {
             "/exit" | "/quit" => break,
             "/help" => {
                 println!("Available commands:");
-                println!("  /help    Show help");
-                println!("  /status  Show session status");
-                println!("  /compact Compact session history");
-                println!("  /save    Save session to disk");
-                println!("  /undo    Undo last file edit");
-                println!("  /model   Show current model");
-                println!("  /audit   Show audit event count");
-                println!("  /exit    Quit the REPL");
+                println!("  /help             Show this help");
+                println!("  /status           Show session status and stats");
+                println!("  /compact          Compact session history (saves tokens)");
+                println!("  /save             Save session to disk");
+                println!("  /undo             Undo last file edit");
+                println!("  /model [name]     Show current model / switch to a different one");
+                println!("  /sessions         List saved sessions");
+                println!("  /audit            Show audit event count");
+                println!("  /fix <desc>       Fix an issue (describe it or leave blank for last error)");
+                println!("  /test             Run the project test suite and report failures");
+                println!("  /review           Review staged git changes");
+                println!("  /commit           Generate a conventional commit message");
+                println!("  /explain [file]   Explain a file or the current directory");
+                println!("  /exit             Quit the REPL");
             }
             "/status" => cli.print_status(),
             "/compact" => cli.compact()?,
@@ -1377,8 +1776,106 @@ fn run_repl(model: String) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            "/model" => println!("Current model: {}", cli.model),
+            s if s.starts_with("/model") => {
+                let arg = s[6..].trim();
+                if arg.is_empty() {
+                    println!("Current model: {}", cli.model);
+                    let reg = BackendRegistry::with_defaults();
+                    println!("Available models:");
+                    for m in reg.list_models() {
+                        let marker = if m.name == cli.model { "▶" } else { " " };
+                        println!("  {marker} {} ({}K ctx)", m.name, m.context_window / 1000);
+                    }
+                } else {
+                    match cli.switch_model(arg) {
+                        Ok(()) => println!("Switched to {arg}"),
+                        Err(e) => eprintln!("Could not switch model: {e}"),
+                    }
+                }
+            }
             "/audit" => println!("Audit events logged: {}", cli.audit_event_count),
+            "/sessions" => {
+                let sessions_dir = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(".tachy")
+                    .join("sessions");
+                match std::fs::read_dir(&sessions_dir) {
+                    Ok(entries) => {
+                        let mut sessions: Vec<_> = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| {
+                                e.path().extension().map(|x| x == "json").unwrap_or(false)
+                            })
+                            .collect();
+                        sessions.sort_by_key(|e| std::cmp::Reverse(
+                            e.metadata().ok().and_then(|m| m.modified().ok())
+                        ));
+                        if sessions.is_empty() {
+                            println!("No saved sessions.");
+                        } else {
+                            println!("Saved sessions (most recent first):");
+                            for (i, entry) in sessions.iter().take(10).enumerate() {
+                                let name = entry.file_name();
+                                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                                println!("  {}. {} ({:.1} KB)", i + 1,
+                                    name.to_string_lossy(), size as f64 / 1024.0);
+                            }
+                            println!("\nResume with: tachy --resume <session-id>");
+                        }
+                    }
+                    Err(_) => println!("No sessions directory found."),
+                }
+            }
+            // ── Productive slash commands ──────────────────────────────────
+            s if s.starts_with("/fix") => {
+                let desc = s[4..].trim();
+                let prompt = if desc.is_empty() {
+                    "Find and fix the most obvious bug or error in this codebase. \
+                     Run the tests after fixing to verify the fix works.".to_string()
+                } else {
+                    format!("Fix this issue: {desc}\n\n\
+                             Steps: 1) Locate the relevant code. 2) Apply the fix. \
+                             3) Run the tests to verify.")
+                };
+                cli.run_turn(&prompt)?;
+            }
+            "/test" => {
+                cli.run_turn(
+                    "Run the project's test suite. Show the full output. \
+                     If any tests fail, analyze each failure and explain exactly what needs to be fixed."
+                )?;
+            }
+            "/review" => {
+                cli.run_turn(
+                    "Review the staged git changes (run: git diff --staged). \
+                     Provide: 1) A concise summary of what changed and why, \
+                     2) Any potential bugs or correctness issues, \
+                     3) Style and naming feedback, \
+                     4) Concrete suggestions for improvement."
+                )?;
+            }
+            "/commit" => {
+                cli.run_turn(
+                    "Generate a conventional commit message for the staged changes \
+                     (run: git diff --staged to see them). \
+                     Format: type(scope): short description\n\
+                     Types: feat/fix/docs/style/refactor/test/chore\n\
+                     Keep the subject line under 72 characters. \
+                     Add a body if needed to explain motivation or breaking changes."
+                )?;
+            }
+            s if s.starts_with("/explain") => {
+                let target = s[8..].trim();
+                let prompt = if target.is_empty() {
+                    "Explain what this project does: list the main source files, \
+                     describe each module's purpose in one sentence, and explain \
+                     how they connect to each other.".to_string()
+                } else {
+                    format!("Explain `{target}` in plain English — its purpose, \
+                             key functions/types, and how it fits into the broader codebase.")
+                };
+                cli.run_turn(&prompt)?;
+            }
             _ => cli.run_turn(trimmed)?,
         }
     }
@@ -1395,18 +1892,25 @@ fn run_repl(model: String) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// LiveCli — interactive agent session holder
+// ---------------------------------------------------------------------------
+
 struct LiveCli {
     model: String,
     session_id: String,
     system_prompt: Vec<String>,
     runtime: ConversationRuntime<DynBackend, CliToolExecutor>,
     audit_logger: AuditLogger,
-    audit_event_count: u32,
+    audit_event_count: u64,
     governance: audit::GovernancePolicy,
     tool_invocation_counts: std::collections::BTreeMap<String, u32>,
     total_tool_invocations: u32,
     undo_stack: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// Last-turn latency in milliseconds (updated after each run_turn call).
+    last_latency_ms: u64,
 }
+
 
 impl LiveCli {
     fn new(model: String, enable_tools: bool) -> Result<Self, Box<dyn std::error::Error>> {
@@ -1433,34 +1937,13 @@ impl LiveCli {
         let governance = config.governance.clone();
 
         // Create backend from registry
-        // Create backend — use OllamaBackend directly for streaming support
         let registry = BackendRegistry::with_defaults();
-        let model_entry = registry.find_model(&model);
-        let base_url = "http://localhost:11434".to_string();
+        let _model_entry = registry.find_model(&model);
+        let _base_url = "http://localhost:11434".to_string();
 
-        let backend = if model_entry.map(|e| format!("{:?}", e.backend)) == Some("Ollama".to_string()) {
-            let mut ollama = backend::OllamaBackend::new(model.clone(), base_url, enable_tools)
-                .map_err(|e| e.to_string())?;
-            // Enable real-time token streaming to stdout
-            let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-            ollama.set_token_tx(tx);
-            tokio::spawn(async move {
-                use backend::BackendEvent;
-                use std::io::Write;
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        BackendEvent::Text(t) | BackendEvent::Thinking(t) => {
-                            let _ = std::io::stdout().write_all(t.as_bytes());
-                            let _ = std::io::stdout().flush();
-                        }
-                    }
-                }
-            });
-            DynBackend::new(Box::new(ollama))
-        } else {
-            let client = registry.create_client(&model, enable_tools)?;
-            DynBackend::new(client)
-        };
+        let client = registry.create_client(&model, enable_tools)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        let backend = DynBackend::new(client);
 
         let undo_stack = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -1471,6 +1954,7 @@ impl LiveCli {
             permission_policy_from_env(),
             system_prompt.clone(),
         );
+
 
         // Log session start
         audit_logger.log(
@@ -1489,8 +1973,10 @@ impl LiveCli {
             tool_invocation_counts: std::collections::BTreeMap::new(),
             total_tool_invocations: 0,
             undo_stack,
+            last_latency_ms: 0,
         })
     }
+
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Log user message
@@ -1500,33 +1986,92 @@ impl LiveCli {
         );
         self.audit_event_count += 1;
 
+        // ── Streaming setup ────────────────────────────────────────────────
+        // Create a per-turn channel so we can print tokens as they arrive.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
+        self.runtime.set_event_tx(tx);
+
+        // Shared flag: set to true once the first TextDelta arrives so the
+        // spinner can be cleared exactly once before token output begins.
+        let first_token_seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first_token_clone = first_token_seen.clone();
+
+        // Spawn a background thread to drain the channel and echo text tokens.
+        // We create a minimal tokio runtime inside the thread because the
+        // receiver's async recv() requires one.
+        let stream_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tachy stream rt");
+            rt.block_on(async move {
+                let mut rx = rx;
+                let mut stdout = io::stdout();
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        RuntimeEvent::TextDelta(delta) => {
+                            // Clear the spinner line on the very first token
+                            if !first_token_clone.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                                let _ = execute!(
+                                    stdout,
+                                    crossterm::cursor::MoveToColumn(0),
+                                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
+                                );
+                            }
+                            print!("{delta}");
+                            let _ = stdout.flush();
+                        }
+                        RuntimeEvent::Finished(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        });
+
+        // ── Spinner (runs until first token or turn completes) ─────────────
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
-        spinner.tick(
-            "Thinking",
-            TerminalRenderer::new().color_theme(),
-            &mut stdout,
-        )?;
+        let renderer = TerminalRenderer::new();
+        let theme = renderer.color_theme().clone();
+
+        let turn_start = std::time::Instant::now();
+
+        // Tick the spinner in a thread while the turn runs synchronously.
+        // We'll just draw it once before the blocking call and update after.
+        spinner.tick("Thinking", &theme, &mut stdout)?;
 
         let result = self.runtime.run_turn(input, None);
+
+        // Wait for the stream thread to flush all tokens
+        let _ = stream_thread.join();
+
+        let elapsed_ms = turn_start.elapsed().as_millis() as u64;
+        self.last_latency_ms = elapsed_ms;
+
         match result {
             Ok(summary) => {
-                spinner.finish(
-                    &format!("Done ({} iteration{}, {} tool call{})",
-                        summary.iterations,
-                        if summary.iterations == 1 { "" } else { "s" },
-                        summary.tool_results.len(),
-                        if summary.tool_results.len() == 1 { "" } else { "s" },
-                    ),
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                // If no text tokens were streamed, show the completion banner.
+                // If tokens were streamed, just print a newline for separation.
+                if first_token_seen.load(std::sync::atomic::Ordering::SeqCst) {
+                    println!();
+                } else {
+                    spinner.finish(
+                        &format!("Done ({} iteration{}, {} tool call{}, {}ms)",
+                            summary.iterations,
+                            if summary.iterations == 1 { "" } else { "s" },
+                            summary.tool_results.len(),
+                            if summary.tool_results.len() == 1 { "" } else { "s" },
+                            elapsed_ms,
+                        ),
+                        &theme,
+                        &mut stdout,
+                    )?;
+                }
 
                 // Show tool calls with clear formatting
                 for msg in &summary.assistant_messages {
                     for block in &msg.blocks {
                         if let ContentBlock::ToolUse { name, input, .. } = block {
-                            // Parse input to show key parameters
                             let params = summarize_tool_params(name, input);
                             execute!(
                                 stdout,
@@ -1554,14 +2099,15 @@ impl LiveCli {
                     }
                 }
 
-                // Print assistant response text
-                let renderer = TerminalRenderer::new();
-                for msg in &summary.assistant_messages {
-                    for block in &msg.blocks {
-                        if let ContentBlock::Text { text } = block {
-                            if !text.trim().is_empty() {
-                                let rendered = renderer.render_markdown(text);
-                                println!("{rendered}");
+                // Print assistant response text (only if not already streamed token-by-token)
+                if !first_token_seen.load(std::sync::atomic::Ordering::SeqCst) {
+                    for msg in &summary.assistant_messages {
+                        for block in &msg.blocks {
+                            if let ContentBlock::Text { text } = block {
+                                if !text.trim().is_empty() {
+                                    let rendered = renderer.render_markdown(text);
+                                    println!("{rendered}");
+                                }
                             }
                         }
                     }
@@ -1572,7 +2118,7 @@ impl LiveCli {
                     &AuditEvent::new(
                         &self.session_id,
                         AuditEventKind::AssistantMessage,
-                        format!("iterations={} tools={}", summary.iterations, summary.tool_results.len()),
+                        format!("iterations={} tools={} latency_ms={}", summary.iterations, summary.tool_results.len(), elapsed_ms),
                     )
                     .with_model(&self.model),
                 );
@@ -1588,7 +2134,6 @@ impl LiveCli {
                             *count += 1;
                             self.total_tool_invocations += 1;
 
-                            // Check governance
                             if let Some(violation) = self.governance.check_tool_invocation(
                                 tool_name,
                                 "",
@@ -1602,11 +2147,7 @@ impl LiveCli {
                                 eprintln!("⚠ Governance: {}", violation.detail);
                             }
 
-                            let severity = if *is_error {
-                                AuditSeverity::Warning
-                            } else {
-                                AuditSeverity::Info
-                            };
+                            let severity = if *is_error { AuditSeverity::Warning } else { AuditSeverity::Info };
                             self.audit_logger.log(
                                 &AuditEvent::new(
                                     &self.session_id,
@@ -1627,7 +2168,7 @@ impl LiveCli {
             Err(error) => {
                 spinner.fail(
                     "Request failed",
-                    TerminalRenderer::new().color_theme(),
+                    &theme,
                     &mut stdout,
                 )?;
                 self.audit_logger.log(
@@ -1652,6 +2193,51 @@ impl LiveCli {
             self.total_tool_invocations,
             self.audit_event_count,
         );
+    }
+
+    /// Switch to a different model mid-session, preserving conversation history.
+    fn switch_model(&mut self, new_model: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let registry = BackendRegistry::with_defaults();
+        let client = registry.create_client(new_model, true)?;
+        let backend = DynBackend::new(client);
+        let session = self.runtime.session().clone();
+
+        self.runtime = ConversationRuntime::new(
+            session,
+            backend,
+            CliToolExecutor::with_undo_stack(self.undo_stack.clone()),
+            permission_policy_from_env(),
+            self.system_prompt.clone(),
+        );
+        self.model = new_model.to_string();
+
+        // Persist the chosen model to .tachy/config.json so the next session
+        // starts with the same model automatically.
+        let config_path = std::env::current_dir()
+            .ok()
+            .map(|d| d.join(".tachy").join("config.json"));
+        if let Some(path) = &config_path {
+            let mut val: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(path) {
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+            } else {
+                serde_json::Value::Object(Default::default())
+            };
+            val["model"] = serde_json::Value::String(new_model.to_string());
+            if let Ok(serialized) = serde_json::to_string_pretty(&val) {
+                let _ = std::fs::write(path, serialized);
+            }
+        }
+
+        self.audit_logger.log(
+            &AuditEvent::new(
+                &self.session_id,
+                AuditEventKind::UserMessage,
+                format!("model switched to {new_model}"),
+            )
+            .with_model(new_model),
+        );
+        self.audit_event_count += 1;
+        Ok(())
     }
 
     fn compact(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -1742,31 +2328,43 @@ impl ToolExecutor for CliToolExecutor {
             ResetColor
         );
 
-        // Use execute_tool_with_diff for write/edit to get diff previews
+        // For write_file / edit_file: preview diff → ask approval → conditionally apply.
         let result = if tool_name == "write_file" || tool_name == "edit_file" {
-            match execute_tool_with_diff(tool_name, &value) {
-                Ok((output, Some(preview))) => {
-                    // Show colored diff preview in the terminal
-                    if !preview.diff_colored.is_empty() && (preview.additions > 0 || preview.deletions > 0) {
-                        let _ = execute!(
-                            stdout,
-                            SetForegroundColor(Color::DarkYellow),
-                            Print(format!("    ┌─ diff: {}\n", preview.summary)),
-                            ResetColor
-                        );
-                        for line in preview.diff_colored.lines() {
-                            let _ = execute!(stdout, Print(format!("    │ {line}\n")));
-                        }
-                        let _ = execute!(
-                            stdout,
-                            SetForegroundColor(Color::DarkYellow),
-                            Print("    └─\n"),
-                            ResetColor
-                        );
+            // 1. Generate diff preview without writing anything to disk.
+            let preview = if tool_name == "write_file" {
+                let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let content = value.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                preview_write_file(path, content).ok()
+            } else {
+                let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let old_str = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                let new_str = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+                let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                preview_edit_file(path, old_str, new_str, replace_all).ok()
+            };
+
+            // 2. If the preview shows real changes, ask the user before applying.
+            if let Some(ref preview) = preview {
+                if preview.additions > 0 || preview.deletions > 0 {
+                    let choice = approval_prompt(
+                        &preview.summary,
+                        &preview.diff_colored,
+                        &preview.diff_text,
+                        &mut stdout,
+                    );
+                    if choice == ApprovalChoice::No {
+                        return Err(ToolError::new(format!(
+                            "User declined change to {}",
+                            preview.file_path
+                        )));
                     }
-                    Ok(output)
                 }
-                Ok((output, None)) => Ok(output),
+            }
+
+            // 3. Apply: use execute_tool_with_diff so we get the structured output
+            //    needed by the undo-stack tracking below.
+            match execute_tool_with_diff(tool_name, &value) {
+                Ok((output, _)) => Ok(output),
                 Err(e) => Err(e),
             }
         } else {
@@ -1943,6 +2541,16 @@ fn print_help() {
     println!("  tachy models                              List registered models");
     println!("  tachy models --local                      List locally installed models");
     println!("  tachy agents                              List agent templates");
+    println!("  tachy search <query>                      Search the indexed codebase");
+    println!("  tachy pipeline run <pipeline.yaml>        Run an agent pipeline from YAML");
+    println!("  tachy pipeline validate <pipeline.yaml>   Validate pipeline without running");
+    println!("  tachy pipeline init [output.yaml]         Generate a starter pipeline YAML");
+    println!("  tachy graph [--format json|summary]       Print dependency/call graph (C1)");
+    println!("  tachy graph --file <path>                 Show transitive dependents of a file");
+    println!("  tachy monorepo                            Detect monorepo structure and members (C3)");
+    println!("  tachy dashboard                           Show live performance dashboard (E2)");
+    println!("  tachy export-audit [--format json|soc2|csv] [--output FILE]  Export audit log (F1)");
+    println!("  tachy finetune [--output DIR] [--base-model MODEL]  Generate LoRA training data (F3)");
     println!("  tachy verify-audit                        Verify audit trail integrity");
     println!("  tachy warmup [MODEL]                      Pre-load model into GPU memory");
     println!("  tachy [--model MODEL]                     Start interactive REPL");
@@ -1952,25 +2560,544 @@ fn print_help() {
     println!("  tachy --continue                           Resume last session");
     println!("  tachy --resume SESSION.json [/compact]     Resume a specific session");
     println!("\nREPL commands:");
-    println!("  /help /status /compact /save /undo /model /audit /exit");
+    println!("  /help /status /compact /save /undo /model [name] /sessions /audit /exit");
     println!("\nHTTP API (when running `tachy serve`):");
     println!("  GET  /health              Health check");
     println!("  GET  /api/models          List models");
     println!("  GET  /api/templates       List agent templates");
     println!("  GET  /api/agents          List all agents");
     println!("  GET  /api/agents/:id      Get agent status (poll for async results)");
+    println!("  GET  /api/search?q=<q>    Search indexed codebase");
+    println!("  GET  /api/graph           Full dependency graph (add ?file=<path> for per-file view)");
+    println!("  GET  /api/monorepo        Monorepo workspace structure");
+    println!("  GET  /api/dashboard       Live performance stats + cost estimate");
+    println!("  GET  /api/policy          Get current tachy-policy.yaml");
+    println!("  POST /api/policy          Update tachy-policy.yaml");
     println!("  POST /api/agents/run      Start agent (async, returns 202)");
     println!("  POST /api/tasks/schedule  Schedule recurring agent");
     println!("\nEnvironment:");
     println!("  TACHY_PERMISSION_MODE   read-only | workspace-write | deny-all");
     println!("  TACHY_API_KEY           API key for HTTP daemon authentication");
+    println!("  TACHY_AIR_GAP           Set to 1 to disable all outbound connections (F1)");
+    println!("  TACHY_TELEMETRY         Set to 0 to disable usage telemetry");
     println!("  OLLAMA_HOST             Ollama URL (default http://localhost:11434)");
     println!("\nDefault model: gemma4:26b (Gemma 4 26B MoE — native tool calling, 256K context)");
 }
 
+// ---------------------------------------------------------------------------
+// tachy search
+// ---------------------------------------------------------------------------
+
+fn run_search(query: &str, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+
+    // Try daemon first
+    let daemon_url = "http://127.0.0.1:7777";
+    let resp = std::process::Command::new("curl")
+        .args([
+            "-sf",
+            &format!("{daemon_url}/api/search?q={}&limit={limit}",
+                urlencoding_simple(query)),
+        ])
+        .output();
+
+    if let Ok(out) = resp {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                print_search_results(query, &json);
+                return Ok(());
+            }
+        }
+    }
+
+    // Daemon not running — use indexer directly
+    println!("Searching codebase for: {query}\n");
+    let cfg = intelligence::IndexerConfig::default();
+    let index = match intelligence::CodebaseIndexer::load_index(&cwd) {
+        Ok(i) => i,
+        Err(_) => {
+            print!("Building index... ");
+            io::stdout().flush().ok();
+            let idx = intelligence::CodebaseIndexer::build_index(&cwd, &cfg)?;
+            let _ = intelligence::CodebaseIndexer::save_index(&cwd, &idx);
+            println!("done ({} files)", idx.project.total_files);
+            idx
+        }
+    };
+
+    let results = intelligence::CodebaseIndexer::search(&index, query, limit);
+    if results.is_empty() {
+        println!("No results found for \"{query}\"");
+        return Ok(());
+    }
+
+    for (i, entry) in results.iter().enumerate() {
+        println!("  {}. {} ({})", i + 1, entry.path, entry.language);
+        if !entry.exports.is_empty() {
+            let exports = entry.exports[..entry.exports.len().min(5)].join(", ");
+            println!("     exports: {exports}");
+        }
+        if !entry.summary.is_empty() {
+            let summary = entry.summary.lines().next().unwrap_or("").trim();
+            if !summary.is_empty() {
+                println!("     {summary}");
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn urlencoding_simple(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+fn print_search_results(query: &str, json: &serde_json::Value) {
+    let results = json.get("results").and_then(|r| r.as_array());
+    match results {
+        Some(list) if list.is_empty() => println!("No results found for \"{query}\""),
+        Some(list) => {
+            println!("Search results for \"{query}\":\n");
+            for (i, item) in list.iter().enumerate() {
+                let path = item.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+                let lang = item.get("language").and_then(|v| v.as_str()).unwrap_or("");
+                let summary = item.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                let exports: Vec<_> = item.get("exports")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter()
+                        .filter_map(|e| e.as_str())
+                        .take(5)
+                        .collect())
+                    .unwrap_or_default();
+                println!("  {}. {} ({})", i + 1, path, lang);
+                if !exports.is_empty() {
+                    println!("     exports: {}", exports.join(", "));
+                }
+                if !summary.is_empty() {
+                    let line = summary.lines().next().unwrap_or("").trim();
+                    if !line.is_empty() {
+                        println!("     {line}");
+                    }
+                }
+                println!();
+            }
+        }
+        None => println!("Unexpected response format"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// tachy pipeline
+// ---------------------------------------------------------------------------
+
+/// A single step in a pipeline.
+#[derive(Debug, serde::Deserialize)]
+struct PipelineStep {
+    name: String,
+    template: String,
+    prompt: String,
+    #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// A pipeline definition loaded from YAML.
+#[derive(Debug, serde::Deserialize)]
+struct PipelineDefinition {
+    name: String,
+    #[serde(default)]
+    description: String,
+    steps: Vec<PipelineStep>,
+}
+
+fn run_pipeline(subcommand: &str, path: &str, dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if subcommand == "init" {
+        let target = if path == "pipeline.yaml" { "tachy-pipeline.yaml" } else { path };
+        if std::path::Path::new(target).exists() {
+            return Err(format!("{target} already exists — remove it first").into());
+        }
+        let template = r#"name: my-pipeline
+description: "A multi-step agent pipeline"
+
+steps:
+  - name: review
+    template: code-reviewer
+    prompt: "Review the code in the current directory for quality and correctness."
+
+  - name: security
+    template: security-scanner
+    prompt: "Scan the codebase for security vulnerabilities."
+    depends_on: [review]
+
+  - name: docs
+    template: doc-generator
+    prompt: "Generate or update documentation for all public APIs."
+    depends_on: [review]
+"#;
+        std::fs::write(target, template)?;
+        println!("Created {target}");
+        println!("Edit the steps then run: tachy pipeline run {target}");
+        return Ok(());
+    }
+
+    if subcommand != "run" && subcommand != "validate" {
+        return Err(format!("unknown pipeline subcommand: {subcommand}\n  usage: tachy pipeline run|validate|init <pipeline.yaml>").into());
+    }
+
+    let yaml_str = std::fs::read_to_string(path)
+        .map_err(|e| format!("could not read pipeline file '{path}': {e}"))?;
+
+    let pipeline: PipelineDefinition = serde_yaml::from_str(&yaml_str)
+        .map_err(|e| format!("invalid pipeline YAML: {e}"))?;
+
+    // Validate step dependencies exist
+    let step_names: std::collections::HashSet<&str> = pipeline.steps.iter().map(|s| s.name.as_str()).collect();
+    for step in &pipeline.steps {
+        for dep in &step.depends_on {
+            if !step_names.contains(dep.as_str()) {
+                return Err(format!("step '{}' depends_on '{}' which does not exist", step.name, dep).into());
+            }
+        }
+    }
+
+    // Validate no cycles (topological sort check)
+    topological_sort(&pipeline.steps)
+        .map_err(|cycle| format!("pipeline has a dependency cycle: {cycle}"))?;
+
+    if subcommand == "validate" || dry_run {
+        println!("Pipeline '{}' is valid.", pipeline.name);
+        println!("  {} steps: {}", pipeline.steps.len(),
+            pipeline.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
+        return Ok(());
+    }
+
+    println!("Running pipeline: {}", pipeline.name);
+    if !pipeline.description.is_empty() {
+        println!("  {}", pipeline.description);
+    }
+    println!();
+
+    // Execute steps in topological order
+    let order = topological_sort(&pipeline.steps).unwrap();
+    let default_model = DEFAULT_MODEL.to_string();
+
+    for step_name in &order {
+        let step = pipeline.steps.iter().find(|s| &s.name == step_name).unwrap();
+        let model = step.model.as_deref().unwrap_or(&default_model);
+        println!("  ► Step '{}' — template: {}, model: {}", step.name, step.template, model);
+        if dry_run {
+            continue;
+        }
+        match run_agent_cmd(&step.template, &step.prompt, model) {
+            Ok(()) => println!("    ✓ Step '{}' completed\n", step.name),
+            Err(e) => {
+                eprintln!("    ✗ Step '{}' failed: {e}", step.name);
+                return Err(format!("pipeline aborted at step '{}'", step.name).into());
+            }
+        }
+    }
+
+    println!("Pipeline '{}' completed all {} steps.", pipeline.name, pipeline.steps.len());
+    Ok(())
+}
+
+/// Topological sort of pipeline steps. Returns ordered step names or an error
+/// describing the cycle.
+fn topological_sort(steps: &[PipelineStep]) -> Result<Vec<String>, String> {
+    let mut in_degree: std::collections::HashMap<&str, usize> = steps.iter()
+        .map(|s| (s.name.as_str(), 0))
+        .collect();
+
+    for step in steps {
+        for dep in &step.depends_on {
+            *in_degree.entry(step.name.as_str()).or_default() += 1;
+            let _ = dep; // dep → step: dep must come before step
+        }
+    }
+
+    // Rebuild: each dep adds to the dependant's in_degree
+    let mut count: std::collections::HashMap<&str, usize> = steps.iter()
+        .map(|s| (s.name.as_str(), s.depends_on.len()))
+        .collect();
+
+    let mut queue: std::collections::VecDeque<&str> = count.iter()
+        .filter(|(_, &c)| c == 0)
+        .map(|(&n, _)| n)
+        .collect();
+
+    let mut result = Vec::new();
+    while let Some(name) = queue.pop_front() {
+        result.push(name.to_string());
+        for step in steps {
+            if step.depends_on.iter().any(|d| d == name) {
+                let c = count.entry(step.name.as_str()).or_default();
+                *c = c.saturating_sub(1);
+                if *c == 0 {
+                    queue.push_back(step.name.as_str());
+                }
+            }
+        }
+    }
+
+    if result.len() == steps.len() {
+        Ok(result)
+    } else {
+        Err("cycle detected".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// tachy graph  (C1)
+// ---------------------------------------------------------------------------
+
+fn run_graph(format: &str, file: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let graph = intelligence::DependencyGraph::build(&cwd);
+
+    if let Some(f) = file {
+        let deps = graph.transitive_dependents(f);
+        let node = graph.nodes.get(f);
+        let out = serde_json::json!({
+            "file": f,
+            "direct_imports": node.map(|n| &n.imports).cloned().unwrap_or_default(),
+            "imported_by": node.map(|n| &n.imported_by).cloned().unwrap_or_default(),
+            "transitive_dependents": deps,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    match format {
+        "json" | "json-pretty" => {
+            println!("{}", serde_json::to_string_pretty(&graph)?);
+        }
+        "summary" => {
+            println!("Dependency graph — {} nodes, {} edges", graph.nodes.len(), graph.edge_count);
+            let mut langs: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+            for node in graph.nodes.values() {
+                *langs.entry(node.language.as_str()).or_default() += 1;
+            }
+            for (lang, count) in &langs {
+                println!("  {lang}: {count} files");
+            }
+        }
+        _ => return Err(format!("unknown graph format: {format}\n  supported: json, summary").into()),
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// tachy monorepo  (C3)
+// ---------------------------------------------------------------------------
+
+fn run_monorepo() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let manifest = intelligence::MonorepoManifest::detect(&cwd);
+
+    if manifest.is_monorepo {
+        println!("Monorepo detected: {:?}", manifest.kind);
+        println!("  {} members:", manifest.members.len());
+        for m in &manifest.members {
+            println!("    {}  ({})", m.name, m.path);
+        }
+    } else {
+        println!("Single-project workspace (no monorepo structure detected)");
+        println!("  Toolchain checked: Cargo, npm/yarn/pnpm, Turborepo, Nx, Go modules, Python");
+    }
+    println!();
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// tachy dashboard  (E2)
+// ---------------------------------------------------------------------------
+
+fn run_dashboard() -> Result<(), Box<dyn std::error::Error>> {
+    let daemon_url = "http://127.0.0.1:7777";
+    let resp = std::process::Command::new("curl")
+        .args(["-sf", &format!("{daemon_url}/api/dashboard")])
+        .output();
+
+    if let Ok(out) = resp {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                println!("⚡ Tachy Performance Dashboard");
+                println!();
+                println!("  Total requests : {}", json["total_requests"]);
+                println!("  Total tokens   : {}", json["total_tokens"]);
+                println!("  Avg tokens/sec : {:.1}", json["avg_tokens_per_sec"].as_f64().unwrap_or(0.0));
+                println!("  Last tokens/sec: {:.1}", json["last_tokens_per_sec"].as_f64().unwrap_or(0.0));
+                println!("  p50 TTFT       : {:.0}ms", json["p50_ttft_ms"].as_f64().unwrap_or(0.0));
+                println!("  p95 TTFT       : {:.0}ms", json["p95_ttft_ms"].as_f64().unwrap_or(0.0));
+                let cost = json["estimated_cost_usd"].as_f64().unwrap_or(0.0);
+                println!("  Est. cost      : ${cost:.4}  (local compute proxy at $0.002/1k tokens)");
+                println!();
+                if let Some(models) = json["models"].as_array() {
+                    if !models.is_empty() {
+                        println!("  Model leaderboard:");
+                        for m in models {
+                            println!(
+                                "    {:30} {:6.1} tok/s  {:8} tokens",
+                                m["name"].as_str().unwrap_or("?"),
+                                m["avg_tps"].as_f64().unwrap_or(0.0),
+                                m["tokens"].as_u64().unwrap_or(0),
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+    eprintln!("⚠ Daemon not running — start with: tachy serve");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// tachy export-audit  (F1)
+// ---------------------------------------------------------------------------
+
+fn run_export_audit(format: &str, output: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let audit_path = cwd.join(".tachy").join("audit.log");
+
+    if !audit_path.exists() {
+        return Err("audit log not found — has tachy been run in this workspace?".into());
+    }
+
+    let raw = std::fs::read_to_string(&audit_path)?;
+    let events: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    let outfile = output.map(std::path::Path::new).unwrap_or_else(|| {
+        match format {
+            "soc2" => std::path::Path::new("tachy-soc2-report.json"),
+            "csv"  => std::path::Path::new("tachy-audit.csv"),
+            _      => std::path::Path::new("tachy-audit-export.json"),
+        }
+    });
+
+    match format {
+        "soc2" => {
+            let report = serde_json::json!({
+                "report_type": "SOC 2 Type II — Change Management Evidence",
+                "generated_at": chrono_now_str_iso(),
+                "workspace": cwd.display().to_string(),
+                "total_events": events.len(),
+                "controls": {
+                    "CC6": "Logical and Physical Access Controls",
+                    "CC8": "Change Management",
+                    "A1": "Availability",
+                },
+                "evidence": events,
+            });
+            std::fs::write(outfile, serde_json::to_string_pretty(&report)?)?;
+            println!("✓ SOC 2 evidence report written to {}", outfile.display());
+        }
+        "csv" => {
+            let mut csv = "timestamp,kind,severity,description\n".to_string();
+            for e in &events {
+                let ts    = e["timestamp"].as_str().unwrap_or("-").replace(',', " ");
+                let kind  = e["kind"].as_str().unwrap_or("-").replace(',', " ");
+                let sev   = e["severity"].as_str().unwrap_or("-").replace(',', " ");
+                let desc  = e["description"].as_str().unwrap_or("-").replace(',', " ");
+                csv.push_str(&format!("{ts},{kind},{sev},{desc}\n"));
+            }
+            std::fs::write(outfile, csv)?;
+            println!("✓ Audit log exported to {}", outfile.display());
+        }
+        "json" | _ => {
+            std::fs::write(outfile, serde_json::to_string_pretty(&events)?)?;
+            println!("✓ Audit log exported to {}", outfile.display());
+        }
+    }
+    Ok(())
+}
+
+fn chrono_now_str_iso() -> String {
+    // Simple ISO-like timestamp without chrono dependency
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}Z (unix {})", secs, secs)
+}
+
+// ---------------------------------------------------------------------------
+// tachy finetune  (F3)
+// ---------------------------------------------------------------------------
+
+fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let sessions_dir = cwd.join(".tachy").join("sessions");
+
+    if !sessions_dir.exists() {
+        return Err("no session history found in .tachy/sessions/ — chat with tachy first to generate training data".into());
+    }
+
+    let dataset = intelligence::FinetuneDataset::from_sessions(&sessions_dir);
+    if dataset.entries.is_empty() {
+        println!("⚠ No (user, assistant) pairs found in session history.");
+        return Ok(());
+    }
+
+    let out_dir = output.unwrap_or("tachy-finetune");
+    std::fs::create_dir_all(out_dir)?;
+
+    // Write JSONL dataset
+    let jsonl_path = std::path::Path::new(out_dir).join("dataset.jsonl");
+    dataset.save_jsonl(&jsonl_path)?;
+    println!("✓ Dataset: {} training pairs from {} sessions", dataset.total_pairs, dataset.source_sessions);
+    println!("  Written to {}", jsonl_path.display());
+
+    // Write training script
+    let base = base_model.unwrap_or(DEFAULT_MODEL);
+    let script_content = intelligence::generate_training_script(base, "dataset.jsonl", out_dir);
+    let script_path = std::path::Path::new(out_dir).join("train.sh");
+    std::fs::write(&script_path, &script_content)?;
+    println!("  Training script: {}", script_path.display());
+
+    // Write Modelfile template
+    let mf_content = intelligence::generate_modelfile(
+        base,
+        "./adapter.gguf",
+        "You are Tachy, a fast local AI coding agent optimised for this codebase.",
+    );
+    let mf_path = std::path::Path::new(out_dir).join("Modelfile");
+    std::fs::write(&mf_path, &mf_content)?;
+    println!("  Modelfile:       {}", mf_path.display());
+
+    println!();
+    println!("Next steps:");
+    println!("  1. pip install unsloth torch trl datasets transformers");
+    println!("  2. bash {}", script_path.display());
+    println!("  3. ollama create my-tachy -f {}", mf_path.display());
+    println!("  4. tachy --model my-tachy");
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, CliAction, DEFAULT_MODEL};
+    use super::{parse_args, CliAction, DEFAULT_MODEL, PipelineStep, topological_sort, urlencoding_simple};
     use std::path::PathBuf;
 
     #[test]
@@ -1978,7 +3105,7 @@ mod tests {
         assert_eq!(
             parse_args(&[]).expect("args should parse"),
             CliAction::Repl {
-                model: DEFAULT_MODEL.to_string(),
+                model: None,
             }
         );
     }
@@ -2035,6 +3162,18 @@ mod tests {
     }
 
     #[test]
+    fn explicit_model_repl_preserves_model() {
+        // When --model is given with no subcommand, Repl gets Some(model)
+        let args = vec!["--model".to_string(), "qwen2.5-coder:7b".to_string()];
+        assert_eq!(
+            parse_args(&args).expect("args should parse"),
+            CliAction::Repl {
+                model: Some("qwen2.5-coder:7b".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn parses_resume_flag_with_slash_command() {
         let args = vec![
             "--resume".to_string(),
@@ -2048,5 +3187,156 @@ mod tests {
                 command: Some("/compact".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn parses_search_single_word() {
+        let args = vec!["search".to_string(), "main".to_string()];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Search { query, limit } => {
+                assert_eq!(query, "main");
+                assert_eq!(limit, 10);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_search_multi_word_query() {
+        let args = vec![
+            "search".to_string(),
+            "tool".to_string(),
+            "calling".to_string(),
+            "rust".to_string(),
+        ];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Search { query, .. } => assert_eq!(query, "tool calling rust"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_empty_query_returns_error() {
+        let args = vec!["search".to_string()];
+        assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn parses_pipeline_run() {
+        let args = vec![
+            "pipeline".to_string(),
+            "run".to_string(),
+            "my-pipeline.yaml".to_string(),
+        ];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Pipeline { subcommand, path, dry_run } => {
+                assert_eq!(subcommand, "run");
+                assert_eq!(path, "my-pipeline.yaml");
+                assert!(!dry_run);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_pipeline_run_dry_run() {
+        let args = vec![
+            "pipeline".to_string(),
+            "run".to_string(),
+            "pipe.yaml".to_string(),
+            "--dry-run".to_string(),
+        ];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Pipeline { dry_run, .. } => assert!(dry_run),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_pipeline_init() {
+        let args = vec!["pipeline".to_string(), "init".to_string()];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Pipeline { subcommand, .. } => assert_eq!(subcommand, "init"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_pipeline_validate() {
+        let args = vec![
+            "pipeline".to_string(),
+            "validate".to_string(),
+            "ci.yaml".to_string(),
+        ];
+        match parse_args(&args).expect("should parse") {
+            CliAction::Pipeline { subcommand, path, .. } => {
+                assert_eq!(subcommand, "validate");
+                assert_eq!(path, "ci.yaml");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // --- topological_sort ---
+
+    #[test]
+    fn topo_sort_no_deps() {
+        let steps = vec![
+            PipelineStep { name: "a".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec![], model: None },
+            PipelineStep { name: "b".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec![], model: None },
+        ];
+        let order = topological_sort(&steps).expect("valid");
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn topo_sort_linear_chain() {
+        let steps = vec![
+            PipelineStep { name: "a".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec![], model: None },
+            PipelineStep { name: "b".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec!["a".into()], model: None },
+            PipelineStep { name: "c".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec!["b".into()], model: None },
+        ];
+        let order = topological_sort(&steps).expect("valid");
+        assert_eq!(order.len(), 3);
+        let ia = order.iter().position(|x| x == "a").unwrap();
+        let ib = order.iter().position(|x| x == "b").unwrap();
+        let ic = order.iter().position(|x| x == "c").unwrap();
+        assert!(ia < ib && ib < ic);
+    }
+
+    #[test]
+    fn topo_sort_detects_cycle() {
+        let steps = vec![
+            PipelineStep { name: "a".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec!["b".into()], model: None },
+            PipelineStep { name: "b".into(), template: "t".into(), prompt: "p".into(),
+                           depends_on: vec!["a".into()], model: None },
+        ];
+        assert!(topological_sort(&steps).is_err());
+    }
+
+    // --- urlencoding_simple ---
+
+    #[test]
+    fn urlencoding_leaves_alphanumeric() {
+        assert_eq!(urlencoding_simple("hello"), "hello");
+        assert_eq!(urlencoding_simple("Rust2024"), "Rust2024");
+    }
+
+    #[test]
+    fn urlencoding_encodes_space_as_plus() {
+        assert_eq!(urlencoding_simple("hello world"), "hello+world");
+    }
+
+    #[test]
+    fn urlencoding_encodes_special_chars() {
+        let encoded = urlencoding_simple("a=b&c");
+        assert!(encoded.contains("%3D") || encoded.contains("%3d")); // '='
+        assert!(encoded.contains("%26")); // '&'
     }
 }

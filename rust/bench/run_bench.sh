@@ -1,18 +1,25 @@
 #!/bin/bash
 # Tachy Benchmark Suite — measures tool calling accuracy and latency
-# Usage: ./bench/run_bench.sh [model]
+# Usage: ./bench/run_bench.sh [model] [--json]
 #
 # Runs 15 tasks against the specified model and reports success rate + timing.
+# Pass --json to emit a machine-readable JSON summary to stdout.
 
 set -e
 
 MODEL="${1:-gemma4:26b}"
+JSON_OUT=false
+for arg in "$@"; do
+    [[ "$arg" == "--json" ]] && JSON_OUT=true
+done
+
 TACHY="./target/release/tachy-cli"
 RESULTS_DIR="bench/results"
 mkdir -p "$RESULTS_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULT_FILE="$RESULTS_DIR/bench_${MODEL//:/_}_${TIMESTAMP}.txt"
+FAILURES_JSON="[]"
 
 echo "Tachy Benchmark Suite"
 echo "Model: $MODEL"
@@ -48,6 +55,17 @@ run_test() {
         printf "✗ FAIL  (%ds)\n" "$ELAPSED"
         echo "    Expected: $expect" >> "$RESULT_FILE"
         echo "    Got: $(echo "$OUTPUT" | head -3)" >> "$RESULT_FILE"
+        # Append to failures JSON array
+        local escaped_expected escaped_got
+        escaped_expected=$(printf '%s' "$expect" | sed 's/"/\\"/g')
+        escaped_got=$(printf '%s' "$(echo "$OUTPUT" | head -1)" | sed 's/"/\\"/g')
+        FAILURES_JSON=$(printf '%s' "$FAILURES_JSON" | sed 's/]$//')
+        if [[ "$FAILURES_JSON" == "[" ]]; then
+            FAILURES_JSON="[{\"name\":\"${name}\",\"expected\":\"${escaped_expected}\",\"got\":\"${escaped_got}\",\"elapsed\":${ELAPSED}}"
+        else
+            FAILURES_JSON="${FAILURES_JSON},{\"name\":\"${name}\",\"expected\":\"${escaped_expected}\",\"got\":\"${escaped_got}\",\"elapsed\":${ELAPSED}}"
+        fi
+        FAILURES_JSON="${FAILURES_JSON}]"
     fi
 }
 
@@ -107,3 +125,21 @@ echo ""
 } >> "$RESULT_FILE"
 
 echo "Full results saved to $RESULT_FILE"
+
+# Optionally emit machine-readable JSON summary
+if $JSON_OUT; then
+    cat <<EOF
+{
+  "model": "$MODEL",
+  "timestamp": "$TIMESTAMP",
+  "passed": $PASS,
+  "failed": $FAIL,
+  "total": $TOTAL,
+  "accuracy_pct": $ACCURACY,
+  "total_time_s": $TOTAL_TIME,
+  "avg_time_s": $((TOTAL_TIME / TOTAL)),
+  "result_file": "$RESULT_FILE",
+  "failures": $FAILURES_JSON
+}
+EOF
+fi

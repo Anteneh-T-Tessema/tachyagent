@@ -5,56 +5,222 @@
     "version": "0.2.0",
     "description": "Local-first AI agent platform API"
   },
-  "servers": [{"url": "http://localhost:7777"}],
-  "security": [{"bearerAuth": []}],
+  "servers": [
+    {
+      "url": "http://localhost:7777"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
   "components": {
     "securitySchemes": {
-      "bearerAuth": {"type": "http", "scheme": "bearer"}
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     },
     "schemas": {
       "Error": {
         "type": "object",
-        "properties": {"error": {"type": "string"}}
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
       },
       "RunAgentRequest": {
         "type": "object",
-        "required": ["template", "prompt"],
+        "required": [
+          "template",
+          "prompt"
+        ],
         "properties": {
-          "template": {"type": "string"},
-          "prompt": {"type": "string"},
-          "model": {"type": "string"}
+          "template": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
         }
       },
       "CompleteRequest": {
         "type": "object",
-        "required": ["prefix"],
+        "description": "Used by POST /api/complete/stream (FIM completion)",
+        "required": [
+          "prefix"
+        ],
         "properties": {
-          "prefix": {"type": "string"},
-          "suffix": {"type": "string"},
-          "language": {"type": "string"},
-          "model": {"type": "string", "default": "gemma4:26b"},
-          "max_tokens": {"type": "integer", "default": 128}
+          "prefix": {
+            "type": "string"
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "default": "gemma4:26b"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "default": 128
+          }
+        }
+      },
+      "PromptCompleteRequest": {
+        "type": "object",
+        "description": "Used by POST /api/complete (non-streaming prompt completion)",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "default": 2048
+          }
+        }
+      },
+      "WebhookRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "*"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "ScheduleTaskRequest": {
+        "type": "object",
+        "required": [
+          "template",
+          "name"
+        ],
+        "properties": {
+          "template": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "interval_seconds": {
+            "type": "integer",
+            "description": "Omit or 0 for one-shot"
+          }
+        }
+      },
+      "LicenseActivateRequest": {
+        "type": "object",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "TACHY-<payload>-<sig> format"
+          },
+          "secret": {
+            "type": "string"
+          }
         }
       },
       "ParallelRunRequest": {
         "type": "object",
-        "required": ["tasks"],
+        "required": [
+          "tasks"
+        ],
         "properties": {
           "tasks": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["template", "prompt"],
+              "required": [
+                "template",
+                "prompt"
+              ],
               "properties": {
-                "template": {"type": "string"},
-                "prompt": {"type": "string"},
-                "model": {"type": "string"},
-                "deps": {"type": "array", "items": {"type": "string"}},
-                "priority": {"type": "integer", "default": 5}
+                "template": {
+                  "type": "string"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "deps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "priority": {
+                  "type": "integer",
+                  "default": 5
+                }
               }
             }
           },
-          "max_concurrency": {"type": "integer", "default": 4}
+          "max_concurrency": {
+            "type": "integer",
+            "default": 4
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
         }
       }
     }
@@ -63,170 +229,1011 @@
     "/health": {
       "get": {
         "summary": "Health check",
-        "responses": {"200": {"description": "Daemon health status"}}
+        "responses": {
+          "200": {
+            "description": "Daemon health status"
+          }
+        }
       }
     },
     "/api/models": {
       "get": {
         "summary": "List available LLM models",
-        "responses": {"200": {"description": "Array of model objects"}}
+        "responses": {
+          "200": {
+            "description": "Array of model objects"
+          }
+        }
       }
     },
     "/api/templates": {
       "get": {
         "summary": "List agent templates",
-        "responses": {"200": {"description": "Array of template objects"}}
+        "responses": {
+          "200": {
+            "description": "Array of template objects"
+          }
+        }
       }
     },
     "/api/agents": {
       "get": {
         "summary": "List all agents",
-        "responses": {"200": {"description": "Array of agent objects"}}
+        "responses": {
+          "200": {
+            "description": "Array of agent objects"
+          }
+        }
       }
     },
     "/api/agents/{id}": {
       "get": {
-        "summary": "Get agent status",
-        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
-        "responses": {"200": {"description": "Agent details"}, "404": {"description": "Not found"}}
+        "summary": "Get an agent by ID",
+        "operationId": "getAgent",
+        "tags": [
+          "Agents"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent details"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an agent by ID",
+        "operationId": "deleteAgent",
+        "tags": [
+          "Agents"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
       }
     },
     "/api/agents/run": {
       "post": {
         "summary": "Start an agent (async)",
-        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunAgentRequest"}}}},
-        "responses": {"202": {"description": "Agent started"}, "400": {"description": "Invalid request"}}
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Agent started"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        }
       }
     },
     "/api/complete": {
       "post": {
-        "summary": "Synchronous code completion",
-        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CompleteRequest"}}}},
-        "responses": {"200": {"description": "Completion result"}}
+        "summary": "Non-streaming prompt completion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptCompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Completion result"
+          },
+          "400": {
+            "description": "Empty prompt"
+          },
+          "502": {
+            "description": "Backend unavailable"
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "summary": "Semantic code search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results"
+          },
+          "400": {
+            "description": "Missing query parameter"
+          }
+        }
+      }
+    },
+    "/api/policy": {
+      "get": {
+        "summary": "Get current governance policy",
+        "responses": {
+          "200": {
+            "description": "PolicyFile JSON"
+          }
+        }
+      },
+      "post": {
+        "summary": "Update governance policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid policy JSON"
+          },
+          "500": {
+            "description": "Save failed"
+          }
+        }
       }
     },
     "/api/complete/stream": {
       "post": {
         "summary": "Streaming code completion (SSE)",
-        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CompleteRequest"}}}},
-        "responses": {"200": {"description": "SSE token stream"}}
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE token stream"
+          }
+        }
       }
     },
     "/api/parallel/run": {
       "post": {
         "summary": "Submit parallel agent run",
-        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ParallelRunRequest"}}}},
-        "responses": {"202": {"description": "Run started"}}
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParallelRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Run started"
+          }
+        }
       }
     },
     "/api/parallel/runs": {
       "get": {
         "summary": "List parallel runs",
-        "responses": {"200": {"description": "Array of runs"}}
+        "responses": {
+          "200": {
+            "description": "Array of runs"
+          }
+        }
       }
     },
     "/api/parallel/runs/{id}": {
       "get": {
         "summary": "Get parallel run status",
-        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
-        "responses": {"200": {"description": "Run details"}}
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run details"
+          }
+        }
       }
     },
     "/api/parallel/runs/{id}/cancel": {
       "post": {
         "summary": "Cancel a parallel run",
-        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
-        "responses": {"200": {"description": "Cancellation result"}}
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation requested"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
       }
     },
     "/api/pending-approvals": {
       "get": {
         "summary": "List pending approvals",
-        "responses": {"200": {"description": "Pending patches and agents"}}
+        "responses": {
+          "200": {
+            "description": "Pending patches and agents"
+          }
+        }
       }
     },
     "/api/approve": {
       "post": {
         "summary": "Approve or reject a pending item",
-        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"patch_id": {"type": "string"}, "agent_id": {"type": "string"}, "approved": {"type": "boolean"}}}}}},
-        "responses": {"200": {"description": "Approval result"}}
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patch_id": {
+                    "type": "string"
+                  },
+                  "agent_id": {
+                    "type": "string"
+                  },
+                  "approved": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval result"
+          }
+        }
       }
     },
     "/api/file-locks": {
       "get": {
         "summary": "List active file locks",
-        "responses": {"200": {"description": "Active locks"}}
+        "responses": {
+          "200": {
+            "description": "Active locks"
+          }
+        }
       }
     },
     "/api/auth/sso/login": {
       "get": {
         "summary": "Redirect to IdP login",
-        "responses": {"302": {"description": "Redirect to SAML IdP"}}
+        "responses": {
+          "302": {
+            "description": "Redirect to SAML IdP"
+          }
+        }
       }
     },
     "/api/auth/sso/callback": {
       "post": {
         "summary": "Process SAML response",
-        "responses": {"200": {"description": "Session token"}, "401": {"description": "Auth failed"}}
+        "responses": {
+          "200": {
+            "description": "Session token"
+          },
+          "401": {
+            "description": "Auth failed"
+          }
+        }
       }
     },
     "/api/auth/sso/logout": {
       "post": {
         "summary": "Invalidate SSO session",
-        "responses": {"200": {"description": "Logged out"}}
+        "responses": {
+          "200": {
+            "description": "Logged out"
+          }
+        }
       }
     },
     "/api/auth/sso/sessions": {
       "get": {
         "summary": "List active SSO sessions",
-        "responses": {"200": {"description": "Active sessions"}}
+        "responses": {
+          "200": {
+            "description": "Active sessions"
+          }
+        }
       }
     },
     "/api/license/activate": {
       "post": {
         "summary": "Activate a license key",
-        "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}}}},
-        "responses": {"200": {"description": "Activation result"}}
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LicenseActivateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Activation result"
+          },
+          "400": {
+            "description": "Invalid or expired key"
+          },
+          "500": {
+            "description": "Save failed"
+          }
+        }
       }
     },
     "/api/license/status": {
       "get": {
         "summary": "Get license status",
-        "responses": {"200": {"description": "License info"}}
+        "responses": {
+          "200": {
+            "description": "License info"
+          }
+        }
       }
     },
     "/api/audit": {
       "get": {
         "summary": "View audit log",
-        "responses": {"200": {"description": "Audit events"}}
+        "responses": {
+          "200": {
+            "description": "Audit events"
+          }
+        }
       }
     },
     "/api/metrics": {
       "get": {
         "summary": "Prometheus-format metrics",
-        "responses": {"200": {"description": "Metrics text"}}
+        "responses": {
+          "200": {
+            "description": "Metrics text"
+          }
+        }
       }
     },
     "/api/webhooks": {
       "get": {
-        "summary": "List webhooks",
-        "responses": {"200": {"description": "Webhook list"}}
+        "summary": "List registered webhooks",
+        "responses": {
+          "200": {
+            "description": "Webhook list"
+          }
+        }
       },
       "post": {
-        "summary": "Register a webhook",
-        "responses": {"200": {"description": "Webhook created"}}
+        "summary": "Register a new webhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Webhook created"
+          },
+          "400": {
+            "description": "Invalid URL"
+          }
+        }
       }
     },
     "/api/tasks": {
       "get": {
         "summary": "List scheduled tasks",
-        "responses": {"200": {"description": "Task list"}}
+        "responses": {
+          "200": {
+            "description": "Task list"
+          }
+        }
       }
     },
     "/api/tasks/schedule": {
       "post": {
-        "summary": "Schedule an agent",
-        "responses": {"200": {"description": "Task created"}}
+        "summary": "Schedule a recurring or one-shot agent task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Task created"
+          },
+          "400": {
+            "description": "Unknown template or invalid request"
+          }
+        }
+      }
+    },
+    "/api/conversations": {
+      "get": {
+        "summary": "List all conversations",
+        "operationId": "listConversations",
+        "tags": [
+          "Conversations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new conversation",
+        "operationId": "createConversation",
+        "tags": [
+          "Conversations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Conversation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}": {
+      "get": {
+        "summary": "Get a conversation by ID",
+        "operationId": "getConversation",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a conversation by ID",
+        "operationId": "deleteConversation",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/conversations/message": {
+      "post": {
+        "summary": "Append a chat message to a conversation",
+        "operationId": "addConversationMessage",
+        "tags": [
+          "Conversations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conv_id": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conv_id",
+                  "role",
+                  "content"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message appended"
+          }
+        }
+      }
+    },
+    "/api/agents/{id}/cancel": {
+      "post": {
+        "summary": "Cancel a running agent",
+        "operationId": "cancelAgent",
+        "tags": [
+          "Agents"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/inference/stats": {
+      "get": {
+        "summary": "Get inference performance statistics",
+        "operationId": "getInferenceStats",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Inference stats (ttft, tps, total tokens)"
+          }
+        }
+      }
+    },
+    "/api/models/pull": {
+      "post": {
+        "summary": "Pull (download) a model from Ollama registry",
+        "operationId": "pullModel",
+        "tags": [
+          "Models"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "model"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pull result"
+          }
+        }
+      }
+    },
+    "/api/chat/stream": {
+      "post": {
+        "summary": "Streaming multi-turn chat endpoint",
+        "operationId": "streamChat",
+        "tags": [
+          "Chat"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream of tokens"
+          }
+        }
+      }
+    },
+    "/api/billing/status": {
+      "get": {
+        "summary": "Get current billing / subscription status",
+        "operationId": "getBillingStatus",
+        "tags": [
+          "Billing"
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing status and tier"
+          }
+        }
+      }
+    },
+    "/api/teams": {
+      "post": {
+        "summary": "Create a new team",
+        "operationId": "createTeam",
+        "tags": [
+          "Teams"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Team created"
+          }
+        }
+      }
+    },
+    "/api/teams/join": {
+      "post": {
+        "summary": "Join a team using an invite code",
+        "operationId": "joinTeam",
+        "tags": [
+          "Teams"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "invite_code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "invite_code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Joined team"
+          }
+        }
+      }
+    },
+    "/api/marketplace": {
+      "get": {
+        "summary": "List available marketplace extensions",
+        "operationId": "listMarketplace",
+        "tags": [
+          "Marketplace"
+        ],
+        "responses": {
+          "200": {
+            "description": "Marketplace extension list"
+          }
+        }
+      }
+    },
+    "/api/marketplace/install": {
+      "post": {
+        "summary": "Install a marketplace extension",
+        "operationId": "installExtension",
+        "tags": [
+          "Marketplace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Install result"
+          }
+        }
+      }
+    },
+    "/api/cloud/jobs": {
+      "get": {
+        "summary": "List cloud batch jobs",
+        "operationId": "listCloudJobs",
+        "tags": [
+          "Cloud"
+        ],
+        "responses": {
+          "200": {
+            "description": "List of cloud jobs"
+          }
+        }
+      }
+    },
+    "/api/swarm/runs": {
+      "get": {
+        "summary": "List swarm refactor runs",
+        "operationId": "listSwarmRuns",
+        "tags": [
+          "Swarm"
+        ],
+        "responses": {
+          "200": {
+            "description": "List of swarm runs"
+          }
+        }
+      }
+    },
+    "/api/auth/sso/config": {
+      "post": {
+        "summary": "Set enterprise SSO configuration (admin only)",
+        "operationId": "setSsoConfig",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSO config updated"
+          }
+        }
+      }
+    },
+    "/api/mission/feed": {
+      "get": {
+        "summary": "Get the mission activity feed",
+        "operationId": "getMissionFeed",
+        "tags": [
+          "Mission"
+        ],
+        "responses": {
+          "200": {
+            "description": "Activity feed items"
+          }
+        }
+      }
+    },
+    "/api/index": {
+      "get": {
+        "summary": "Get codebase index status",
+        "operationId": "getIndexStatus",
+        "tags": [
+          "Intelligence"
+        ],
+        "responses": {
+          "200": {
+            "description": "Index status and file count"
+          }
+        }
+      },
+      "post": {
+        "summary": "Trigger a codebase index (re)build",
+        "operationId": "buildIndex",
+        "tags": [
+          "Intelligence"
+        ],
+        "responses": {
+          "202": {
+            "description": "Index build result"
+          }
+        }
       }
     }
   }

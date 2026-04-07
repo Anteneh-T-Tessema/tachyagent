@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { TachyCompletionProvider } from "./completionProvider";
 import { TachyChatProvider } from "./chatProvider";
 import { TachyClient, ModelInfo } from "./client";
+import { registerFixProvider } from "./fixProvider";
 
 let completionProvider: vscode.Disposable | undefined;
 let statusBar: vscode.StatusBarItem;
@@ -20,6 +21,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("tachy.chatView", chatProvider)
   );
+
+  // ── "Fix with Tachy" code action ──────────────────────────────────────
+  registerFixProvider(context, client, (text) => chatProvider.sendMessage(text));
 
   // ── Status bar ────────────────────────────────────────────────────────
   statusBar = vscode.window.createStatusBarItem(
@@ -192,6 +196,9 @@ function registerCompletionProvider(
   client: TachyClient
 ) {
   const provider = new TachyCompletionProvider(client);
+  provider.onCompletionSuccess = (latencyMs) => {
+    updateStatusBar(client, latencyMs);
+  };
   completionProvider = vscode.languages.registerInlineCompletionItemProvider(
     { pattern: "**" },
     provider
@@ -199,10 +206,12 @@ function registerCompletionProvider(
   context.subscriptions.push(completionProvider);
 }
 
-function updateStatusBar(client: TachyClient) {
+function updateStatusBar(client: TachyClient, latencyMs?: number) {
   const model = client.getModel();
-  statusBar.text = `$(server) Tachy: ${model}`;
-  statusBar.tooltip = `Tachy · ${model} · local Ollama · click to change model`;
+  const latency = latencyMs ?? client.getLastLatencyMs();
+  const latencyStr = latency > 0 ? ` | ${latency}ms` : "";
+  statusBar.text = `⚡ Tachy: ${model}${latencyStr}`;
+  statusBar.tooltip = `Tachy · ${model} · local Ollama${latency > 0 ? ` · last completion ${latency}ms` : ""} · click to change model`;
 }
 
 export function deactivate() {

@@ -28,7 +28,7 @@ pub use config::{
 };
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, ResponseFormat, RuntimeError,
-    StaticToolExecutor, ToolError, ToolExecutor, TurnSummary,
+    RuntimeEvent, StaticToolExecutor, ToolError, ToolExecutor, TurnSummary,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, list_directory, read_file, write_file,

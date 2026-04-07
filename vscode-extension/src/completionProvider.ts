@@ -7,6 +7,12 @@ export class TachyCompletionProvider
   private client: TachyClient;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private lastRequestId = 0;
+  // Per-position completion cache: key = "filePath:line:char", value = { text, expiry }
+  private readonly cache = new Map<string, { text: string; expiry: number }>();
+  private static readonly CACHE_TTL_MS = 30_000;
+  private static readonly CACHE_MAX_SIZE = 50;
+  /** Called after each successful completion so callers can update the status bar. */
+  onCompletionSuccess?: (latencyMs: number) => void;
 
   constructor(client: TachyClient) {
     this.client = client;
@@ -64,6 +70,18 @@ export class TachyCompletionProvider
     const filePath = vscode.workspace.asRelativePath(document.uri);
     const maxTokens = config.get<number>("maxTokens", 128);
 
+    // Check cache before making a network request
+    const cacheKey = `${filePath}:${position.line}:${position.character}:${this.client.getModel()}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() < cached.expiry) {
+      return [
+        new vscode.InlineCompletionItem(
+          cached.text,
+          new vscode.Range(position, position)
+        ),
+      ];
+    }
+
     try {
       const completion = await this.client.complete({
         prefix,
@@ -89,6 +107,20 @@ export class TachyCompletionProvider
       if (!cleaned) {
         return undefined;
       }
+
+      // Store in cache, evicting oldest entries when full
+      if (this.cache.size >= TachyCompletionProvider.CACHE_MAX_SIZE) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey !== undefined) {
+          this.cache.delete(firstKey);
+        }
+      }
+      this.cache.set(cacheKey, {
+        text: cleaned,
+        expiry: Date.now() + TachyCompletionProvider.CACHE_TTL_MS,
+      });
+
+      this.onCompletionSuccess?.(this.client.getLastLatencyMs());
 
       return [
         new vscode.InlineCompletionItem(

@@ -255,6 +255,7 @@ mod tests {
             workspace_root: "/tmp/test".to_string(),
             built_at: 0,
             files,
+            vector_store: crate::rag::VectorStore::new(),
             project: ProjectMeta {
                 primary_language: Some("rust".to_string()),
                 test_command: Some("cargo test".to_string()),

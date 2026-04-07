@@ -1,5 +1,12 @@
 version: "3.8"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   Standard:   docker compose up
+#   Air-gapped: docker compose --profile air-gap up
+#   SOC2 audit: docker compose --profile soc2  up
+# ──────────────────────────────────────────────────────────────────────────────
+
 services:
   tachy:
     build: .
@@ -11,6 +18,48 @@ services:
     environment:
       - TACHY_API_KEY=${TACHY_API_KEY:-}
       - TACHY_PERMISSION_MODE=${TACHY_PERMISSION_MODE:-workspace-write}
+      - TACHY_AIR_GAP=${TACHY_AIR_GAP:-0}
+      - TACHY_OLLAMA_BASE_URL=http://ollama:11434
+    networks:
+      - tachy-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Air-gap variant: tachy + ollama with no external network access.
+  # Activate with:  docker compose --profile air-gap up
+  # Pre-pull models:  docker compose run ollama-airgap pull gemma4:26b
+  # ---------------------------------------------------------------------------
+  tachy-airgap:
+    build: .
+    profiles: [air-gap]
+    ports:
+      - "7778:7777"
+    volumes:
+      - ./workspace:/home/tachy/workspace
+      - tachy-data:/home/tachy/workspace/.tachy
+    environment:
+      - TACHY_AIR_GAP=1
+      - TACHY_PERMISSION_MODE=${TACHY_PERMISSION_MODE:-workspace-write}
+      - TACHY_OLLAMA_BASE_URL=http://ollama-airgap:11434
+      # Disable all telemetry / update checks
+      - TACHY_TELEMETRY=0
+      - TACHY_UPDATE_CHECK=0
+    networks:
+      - airgap-net
+    # Block all external traffic at the compose network level
+    extra_hosts:
+      - "api.openai.com:0.0.0.0"
+      - "api.anthropic.com:0.0.0.0"
+      - "tachy.dev:0.0.0.0"
+    restart: unless-stopped
+
+  ollama-airgap:
+    image: ollama/ollama:latest
+    profiles: [air-gap]
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - airgap-net
     restart: unless-stopped
 
   ollama:
@@ -19,8 +68,65 @@ services:
       - "11434:11434"
     volumes:
       - ollama-models:/root/.ollama
+    networks:
+      - tachy-net
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # SOC 2 audit-log exporter sidecar.
+  # Activate with:  docker compose --profile soc2 up
+  # This service exports .tachy/audit.log as a structured JSON report.
+  # ---------------------------------------------------------------------------
+  soc2-exporter:
+    image: python:3.12-slim
+    profiles: [soc2]
+    volumes:
+      - tachy-data:/data/tachy:ro
+      - soc2-reports:/reports
+    command: >
+      sh -c "
+        pip install -q watchfiles &&
+        python3 -c \"
+import os, json, time, pathlib, datetime
+
+audit = pathlib.Path('/data/tachy/audit.log')
+reports = pathlib.Path('/reports')
+reports.mkdir(exist_ok=True)
+
+def export():
+    if not audit.exists():
+        return
+    lines = [l for l in audit.read_text().splitlines() if l.strip()]
+    events = [json.loads(l) for l in lines if l.startswith('{')]
+    report = {
+        'report_type': 'SOC 2 Type II Evidence',
+        'generated_at': datetime.datetime.utcnow().isoformat() + 'Z',
+        'total_events': len(events),
+        'controls': {'CC6': 'Access Controls', 'CC8': 'Change Management'},
+        'evidence': events,
+    }
+    out = reports / f'soc2-{int(time.time())}.json'
+    out.write_text(json.dumps(report, indent=2))
+    print(f'Exported {len(events)} events to {out}')
+
+while True:
+    export()
+    time.sleep(300)
+\"
+      "
+    networks:
+      - tachy-net
+    restart: unless-stopped
+
+networks:
+  tachy-net:
+    driver: bridge
+  airgap-net:
+    driver: bridge
+    internal: true   # No external routing — true air-gap
 
 volumes:
   tachy-data:
   ollama-models:
+  soc2-reports:
+

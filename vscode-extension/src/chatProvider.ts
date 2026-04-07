@@ -55,10 +55,70 @@ export class TachyChatProvider implements vscode.WebviewViewProvider {
 
         this._view.webview.postMessage({ type: 'thinking' });
 
+        // ── Slash command expansion ───────────────────────────────────────
+        const trimmed = text.trim();
+        let effectiveText = text;
+
+        // Handle /help inline — no daemon call needed
+        if (trimmed === '/help') {
+            this._view.webview.postMessage({
+                type: 'response',
+                text: '**Slash commands**\n\n`/fix [desc]` — fix a bug in the selected code\n`/explain [target]` — explain what code does in plain English\n`/review` — detailed code review with improvement suggestions\n`/test` — run the test suite and analyze failures\n`/commit [msg]` — commit current git changes with an optional message\n`/help` — show this message',
+                iterations: 0,
+                toolCalls: 0,
+                model,
+            });
+            return;
+        }
+
+        if (trimmed.startsWith('/fix') || trimmed.startsWith('/explain') || trimmed === '/review'
+            || trimmed === '/test' || trimmed.startsWith('/commit')) {
+            const editor = vscode.window.activeTextEditor;
+            let fileContext = '';
+            if (editor) {
+                const selection = editor.selection;
+                const selectedText = editor.document.getText(selection);
+                const relPath = vscode.workspace.asRelativePath(editor.document.uri);
+                if (selectedText.trim()) {
+                    fileContext = `\n\nFile: ${relPath}\n\`\`\`${editor.document.languageId}\n${selectedText}\n\`\`\``;
+                } else {
+                    // Use surrounding context (±30 lines around cursor)
+                    const line = selection.active.line;
+                    const start = Math.max(0, line - 30);
+                    const end = Math.min(editor.document.lineCount - 1, line + 30);
+                    const ctx = editor.document.getText(
+                        new vscode.Range(new vscode.Position(start, 0), new vscode.Position(end, 0))
+                    );
+                    fileContext = `\n\nFile: ${relPath} (lines ${start + 1}–${end + 1})\n\`\`\`${editor.document.languageId}\n${ctx}\n\`\`\``;
+                }
+            }
+
+            if (trimmed.startsWith('/fix')) {
+                const desc = trimmed.slice(4).trim();
+                effectiveText = desc
+                    ? `Fix this issue: ${desc}${fileContext}`
+                    : `Find and fix the most obvious bug or issue in the following code. Explain what you changed and why.${fileContext}`;
+            } else if (trimmed.startsWith('/explain')) {
+                const target = trimmed.slice(8).trim();
+                effectiveText = target
+                    ? `Explain \`${target}\` in plain English — its purpose, key logic, and how it fits into the codebase.${fileContext}`
+                    : `Explain what this code does in plain English — its purpose, key functions, and how it fits together.${fileContext}`;
+            } else if (trimmed === '/review') {
+                effectiveText = `Review this code. Provide: 1) Summary of what it does, 2) Potential bugs or issues, 3) Style feedback, 4) Concrete improvement suggestions.${fileContext}`;
+            } else if (trimmed === '/test') {
+                effectiveText = `Run the project's test suite with full output. If any tests fail, analyze each failure and explain exactly what needs to be fixed.${fileContext}`;
+            } else if (trimmed.startsWith('/commit')) {
+                const commitMsg = trimmed.slice(7).trim();
+                effectiveText = commitMsg
+                    ? `Show the current git diff, then stage and commit all changes with this message: "${commitMsg}".`
+                    : `Show the current git diff summary, write a clear conventional commit message, and stage and commit all changes.`;
+            }
+        }
+
         let fullText = "";
         try {
             await this.client.streamChat(
-                text,
+                effectiveText,
                 model,
                 (token) => {
                     fullText += token;
@@ -131,6 +191,13 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 /* Code */
 code { background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; font-family: var(--vscode-editor-font-family); font-size: 12px; }
 pre { background: var(--vscode-textCodeBlock-background); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 8px 0; font-size: 12px; }
+
+/* Slash command menu */
+.slash-menu { position: absolute; bottom: 78px; left: 0; right: 0; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); border: 1px solid var(--vscode-panel-border); border-radius: 6px 6px 0 0; border-bottom: none; overflow: hidden; z-index: 10; display: none; }
+.slash-item { padding: 6px 10px; cursor: pointer; font-size: 12px; display: flex; gap: 10px; align-items: baseline; }
+.slash-item:hover, .slash-item.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.slash-cmd { font-weight: 600; font-family: var(--vscode-editor-font-family); min-width: 80px; }
+.slash-desc { color: var(--vscode-descriptionForeground); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -151,11 +218,12 @@ pre { background: var(--vscode-textCodeBlock-background); padding: 8px; border-r
 </div>
 
 <div class="messages" id="messages">
-  <div class="msg assistant"><div class="bubble">Hi! I'm Tachy. Select code and use the right-click menu, or ask me anything here.</div></div>
+  <div class="msg assistant"><div class="bubble">Hi! I'm Tachy. Ask me anything, or type <code>/</code> for commands: <code>/fix</code> · <code>/explain</code> · <code>/review</code> · <code>/test</code> · <code>/commit</code></div></div>
 </div>
 
-<div class="input-area">
-  <textarea id="input" placeholder="Ask Tachy... (Enter to send, Shift+Enter for newline)" onkeydown="handleKey(event)"></textarea>
+<div class="input-area" style="position:relative;">
+  <div id="slash-menu" class="slash-menu"></div>
+  <textarea id="input" placeholder="Ask anything, or type / for commands…" onkeydown="handleKey(event)" oninput="handleInput(event)"></textarea>
   <button class="send-btn" onclick="send()">Send</button>
 </div>
 
@@ -171,7 +239,67 @@ function updateModelBadge(model) {
 // Initialize badge
 updateModelBadge(currentModel);
 
+const SLASH_CMDS = [
+  { cmd: '/fix',     desc: 'Fix a bug in the selected code' },
+  { cmd: '/explain', desc: 'Explain what the selected code does' },
+  { cmd: '/review',  desc: 'Code review with improvement suggestions' },
+  { cmd: '/test',    desc: 'Run tests and analyze failures' },
+  { cmd: '/commit',  desc: 'Commit current git changes' },
+  { cmd: '/help',    desc: 'Show all slash commands' },
+];
+let slashIdx = -1;
+
+function handleInput(e) {
+  const val = e.target.value;
+  const menu = document.getElementById('slash-menu');
+  const word = val.split('\n')[0];
+  if (!word.startsWith('/') || word.includes(' ')) {
+    menu.style.display = 'none'; return;
+  }
+  const filtered = SLASH_CMDS.filter(function(c) { return c.cmd.startsWith(word); });
+  if (!filtered.length) { menu.style.display = 'none'; return; }
+  slashIdx = -1;
+  menu.innerHTML = filtered.map(function(c) {
+    return '<div class="slash-item" data-cmd="' + c.cmd + '" onmousedown="pickSlash(\'' + c.cmd + '\')">' +
+      '<span class="slash-cmd">' + c.cmd + '</span>' +
+      '<span class="slash-desc">' + c.desc + '</span></div>';
+  }).join('');
+  menu.style.display = 'block';
+}
+
+function pickSlash(cmd) {
+  const input = document.getElementById('input');
+  input.value = cmd + ' ';
+  document.getElementById('slash-menu').style.display = 'none';
+  input.focus();
+}
+
 function handleKey(e) {
+  const menu = document.getElementById('slash-menu');
+  if (menu.style.display === 'block') {
+    const items = menu.querySelectorAll('.slash-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      slashIdx = Math.min(slashIdx + 1, items.length - 1);
+      items.forEach(function(el, i) { el.classList.toggle('selected', i === slashIdx); });
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      slashIdx = Math.max(slashIdx - 1, -1);
+      items.forEach(function(el, i) { el.classList.toggle('selected', i === slashIdx); });
+      return;
+    }
+    if ((e.key === 'Tab' || e.key === 'Enter') && slashIdx >= 0) {
+      e.preventDefault();
+      pickSlash(menu.querySelectorAll('.slash-item')[slashIdx].dataset.cmd);
+      return;
+    }
+    if (e.key === 'Escape') {
+      menu.style.display = 'none';
+      return;
+    }
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     send();
@@ -183,6 +311,7 @@ function send() {
   const text = input.value.trim();
   if (!text) { return; }
   input.value = '';
+  document.getElementById('slash-menu').style.display = 'none';
   addMsg('user', text);
   vscode.postMessage({ type: 'send', text, model: currentModel });
 }

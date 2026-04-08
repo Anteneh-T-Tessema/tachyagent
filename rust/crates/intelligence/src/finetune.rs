@@ -330,7 +330,8 @@ mod tests {
             source_sessions: 1,
             total_pairs: 2,
         };
-        let lines: Vec<&str> = ds.to_jsonl().lines().collect();
+        let jsonl = ds.to_jsonl();
+        let lines: Vec<&str> = jsonl.lines().collect();
         assert_eq!(lines.len(), 2);
     }
 

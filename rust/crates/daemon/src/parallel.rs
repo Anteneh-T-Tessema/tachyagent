@@ -221,6 +221,12 @@ impl Orchestrator {
     pub fn pending_count(&self) -> usize {
         self.queue.len()
     }
+
+    /// Persist a completed run for later polling without re-queuing its tasks.
+    /// Used to write back results after `execute_parallel_run` finishes.
+    pub fn register_completed_run(&mut self, run: ParallelRun) {
+        self.runs.insert(run.id.clone(), run);
+    }
 }
 
 /// Execute a parallel run using a thread pool.
@@ -288,40 +294,56 @@ fn execute_single_task(
     task: &AgentTask,
     state: &Arc<Mutex<super::DaemonState>>,
 ) -> TaskResult {
-    let s = state.lock().unwrap();
-    let workspace_root = task.work_dir.clone().unwrap_or_else(|| s.workspace_root.clone());
-    let file_locks = s.file_locks.clone();
+    // Extract all cloneable data from state before releasing the lock so that
+    // run_agent (which re-locks state for webhook firing) does not deadlock.
+    let (workspace_root, file_locks, config, registry, governance, intel_cfg) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let workspace_root = task.work_dir.clone().unwrap_or_else(|| s.workspace_root.clone());
+        let file_locks = s.file_locks.clone();
 
-    // Find or create agent config
-    let template = s.config.agent_templates.iter()
-        .find(|t| t.name == task.template)
-        .cloned()
-        .unwrap_or_else(|| {
-            let mut t = platform::AgentTemplate::chat_assistant();
-            t.name = task.template.clone();
-            t
-        });
+        let template = s.config.agent_templates.iter()
+            .find(|t| t.name == task.template)
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut t = platform::AgentTemplate::chat_assistant();
+                t.name = task.template.clone();
+                t
+            });
 
-    let mut template = template;
-    if let Some(model) = &task.model {
-        template.model = model.clone();
-    }
+        let mut template = template;
+        if let Some(model) = &task.model {
+            template.model = model.clone();
+        }
 
-    let config = platform::AgentConfig {
-        template,
-        session_id: format!("sess-{}", task.id),
-        working_directory: workspace_root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
-    };
+        let config = platform::AgentConfig {
+            template,
+            session_id: format!("sess-{}", task.id),
+            working_directory: workspace_root.to_string_lossy().to_string(),
+            environment: std::collections::BTreeMap::new(),
+        };
+
+        (
+            workspace_root,
+            file_locks,
+            config,
+            s.registry.clone(),
+            s.config.governance.clone(),
+            s.config.intelligence.clone(),
+        )
+    }; // lock released here — safe to re-acquire inside run_agent
+
+    // Build a fresh audit logger for this task so we don't need to clone the
+    // shared one (AuditLogger holds Box<dyn AuditSink> which is not Clone).
+    let task_audit = audit::AuditLogger::new();
 
     let result = super::AgentEngine::run_agent(
         &task.id,
         &config,
         &task.prompt,
-        &s.registry,
-        &s.config.governance,
-        &s.audit_logger,
-        &s.config.intelligence,
+        &registry,
+        &governance,
+        &task_audit,
+        &intel_cfg,
         &workspace_root,
         Some(file_locks.clone()),
         Some(Arc::clone(state)),
@@ -330,12 +352,19 @@ fn execute_single_task(
     // Release all file locks held by this agent on completion
     file_locks.release_all(&task.id);
 
+    // Get the final audit hash from the shared state logger (it will have been
+    // updated by the daemon's own sink during tool calls via the shared state).
+    let audit_hash = state.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .audit_logger
+        .last_hash();
+
     TaskResult {
         success: result.success,
         summary: result.summary,
         iterations: result.iterations,
         tool_invocations: result.tool_invocations,
-        audit_hash: s.audit_logger.last_hash(),
+        audit_hash,
     }
 }
 

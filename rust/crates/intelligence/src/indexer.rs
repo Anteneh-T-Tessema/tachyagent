@@ -156,12 +156,6 @@ impl CodebaseIndexer {
         })
     }
 
-    /// Embed all file summaries using the local Ollama embedding model.
-    /// Silently skips if the model is unavailable — callers handle `None` embeddings.
-    fn embed_summaries_impl(files: &mut BTreeMap<String, FileEntry>, vector_store: &mut VectorStore, root: &Path, config: &IndexerConfig) {
-        embed_summaries(files, vector_store, root, config);
-    }
-
     fn walk_directory(
         root: &Path,
         dir: &Path,
@@ -751,7 +745,7 @@ pub fn embed_summaries(
     files: &mut BTreeMap<String, FileEntry>,
     vector_store: &mut VectorStore,
     root: &Path,
-    config: &IndexerConfig,
+    _config: &IndexerConfig,
 ) {
     // Only attempt if Ollama is reachable
     let Some(client) = EmbeddingClient::try_new() else {
@@ -768,9 +762,15 @@ pub fn embed_summaries(
             }
         }
 
-        // 2. Embed Chunks (always attempt for new/updated files)
-        // In a production scenario, we'd check content_hash vs the existing vector_store.
-        // For Phase 4.1, we rebuild chunks for all files in the current indexing pass.
+        // 2. Embed Chunks — incremental: skip files whose content hash is
+        //    already represented in the vector store to avoid redundant work.
+        let already_embedded = vector_store.chunks.iter()
+            .any(|c| c.path == *path && c.content_hash == entry.content_hash);
+        if already_embedded { continue; }
+
+        // Remove stale chunks for this path before adding fresh ones
+        vector_store.chunks.retain(|c| c.path != *path);
+
         let full_path = root.join(path);
         if let Ok(content) = std::fs::read_to_string(&full_path) {
             let chunks = chunker.chunk_file(path, &content);
@@ -783,6 +783,7 @@ pub fn embed_summaries(
                         end_line: end,
                         content: text,
                         embedding: emb,
+                        content_hash: entry.content_hash.clone(),
                     });
                 }
             }

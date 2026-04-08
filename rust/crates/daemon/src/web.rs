@@ -305,6 +305,9 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div class="nav-item" onclick="showPage('marketplace', this)">🏪 Marketplace</div>
             <div class="nav-item" onclick="showPage('cloud', this)">☁️ AWS Batch</div>
             <div class="nav-item" onclick="showPage('identity', this)">🛡️ Enterprise Identity</div>
+            <div class="nav-item" onclick="showPage('usage', this)">📈 Usage Metering</div>
+            <div class="nav-item" onclick="showPage('finetune', this)">🔬 Fine-tuning</div>
+            <div class="nav-item" onclick="showPage('depgraph', this)">🕸️ Dep Graph</div>
 
             <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
                 <div class="stat-label">Workspace Root</div>
@@ -382,6 +385,45 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <canvas id="tpsChart"></canvas>
                     </div>
                 </div>
+
+                <!-- E2: Cost estimate + model leaderboard -->
+                <div class="stats-grid" style="grid-template-columns: 1fr 2fr; margin-top: 16px;">
+                    <div class="card">
+                        <h3>Cost Estimate (E2)</h3>
+                        <div style="margin-top: 14px;">
+                            <div style="font-size: 32px; font-weight: 700; color: var(--success);" id="val-cost-usd">$0.0000</div>
+                            <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">local compute proxy · $0.002 / 1k tokens</div>
+                        </div>
+                        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted);">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                                <span>Input tokens</span><span id="val-input-tokens" style="color:var(--text);">0</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between;">
+                                <span>Output tokens</span><span id="val-output-tokens" style="color:var(--text);">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3>Model Leaderboard</h3>
+                        <div style="margin-top: 14px; overflow-x: auto;">
+                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="color:var(--muted); text-align:left;">
+                                        <th style="padding:6px 0; font-weight:500;">#</th>
+                                        <th style="padding:6px 8px; font-weight:500;">Model</th>
+                                        <th style="padding:6px 8px; font-weight:500; text-align:right;">Tokens</th>
+                                        <th style="padding:6px 8px; font-weight:500; text-align:right;">Avg tok/s</th>
+                                        <th style="padding:6px 8px; font-weight:500; text-align:right;">P50 TTFT</th>
+                                        <th style="padding:6px 8px; font-weight:500; text-align:right;">Tier</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="model-leaderboard">
+                                    <tr><td colspan="6" style="color:var(--muted); padding:10px 0; font-size:12px;">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <section id="page-approvals" class="content">
@@ -415,6 +457,37 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <h3>Model Inventory</h3>
                     <table id="models-table-body"></table>
                 </div>
+                <div class="card">
+                    <h3>Side-by-Side Model Comparison</h3>
+                    <div style="display:grid; gap:12px; margin-top:16px;">
+                        <textarea id="cmp-prompt" rows="3" placeholder="Enter a prompt to run on both models…"
+                            style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <input type="text" id="cmp-model-a" placeholder="Model A (e.g. gemma4:26b)"
+                                style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px;">
+                            <input type="text" id="cmp-model-b" placeholder="Model B (e.g. llama3.3)"
+                                style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px;">
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <button onclick="runComparison()" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Compare</button>
+                            <span id="cmp-status" style="font-size:13px; color:var(--muted);"></span>
+                        </div>
+                    </div>
+                    <div id="cmp-results" style="display:none; margin-top:20px;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                            <div>
+                                <div id="cmp-header-a" style="font-weight:600; margin-bottom:8px; color:var(--accent);"></div>
+                                <div id="cmp-meta-a" style="font-size:11px; color:var(--muted); margin-bottom:8px;"></div>
+                                <pre id="cmp-output-a" style="background:rgba(0,0,0,0.3); padding:12px; border-radius:8px; font-size:12px; white-space:pre-wrap; word-break:break-word; max-height:400px; overflow-y:auto;"></pre>
+                            </div>
+                            <div>
+                                <div id="cmp-header-b" style="font-weight:600; margin-bottom:8px; color:#a78bfa;"></div>
+                                <div id="cmp-meta-b" style="font-size:11px; color:var(--muted); margin-bottom:8px;"></div>
+                                <pre id="cmp-output-b" style="background:rgba(0,0,0,0.3); padding:12px; border-radius:8px; font-size:12px; white-space:pre-wrap; word-break:break-word; max-height:400px; overflow-y:auto;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <section id="page-audit" class="content">
@@ -433,18 +506,43 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
             <section id="page-swarm" class="content">
                 <div class="card">
+                    <h3>Launch Swarm Run</h3>
+                    <div style="display:grid; gap:12px; margin-top:16px;">
+                        <input type="text" id="swarm-goal" placeholder="Describe the goal (e.g. Add structured logging to all HTTP handlers)" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                        <textarea id="swarm-files" rows="3" placeholder="Workspace-relative file paths, one per line (leave blank to auto-discover)" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <button onclick="launchSwarm()" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Launch Swarm</button>
+                            <span id="swarm-launch-status" style="font-size:13px; color:var(--muted);"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
                     <h3>Active Swarm Clusters</h3>
                     <div id="swarm-list"></div>
                 </div>
                 <div class="card">
-                    <h3>Recursive Delegation DAG</h3>
-                    <div id="swarm-dag" style="height: 300px; background: rgba(0,0,0,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;">
-                        Interactive DAG Visualization (Initializing...)
+                    <h3>Task DAG Visualizer</h3>
+                    <div id="swarm-dag-container" style="min-height: 300px; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 16px; position: relative;">
+                        <div id="swarm-dag-hint" style="color:var(--muted); font-size:12px; text-align:center; padding:40px 0;">
+                            Click a swarm run above to visualize its task DAG.
+                        </div>
+                        <svg id="swarm-dag-svg" style="width:100%; display:none;" xmlns="http://www.w3.org/2000/svg"></svg>
                     </div>
                 </div>
             </section>
 
             <section id="page-cloud" class="content">
+                <div class="card">
+                    <h3>Submit Cloud Job</h3>
+                    <div style="display:grid; gap:12px; margin-top:16px;">
+                        <input type="text" id="cloud-job-name" placeholder="Job name (e.g. refactor-auth-module)" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
+                        <input type="text" id="cloud-job-cmd" placeholder="Command (e.g. tachy run --goal 'add logging')" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); font-family:monospace; font-size:12px;">
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <button onclick="submitCloudJob()" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Submit to AWS Batch</button>
+                            <span id="cloud-submit-status" style="font-size:13px; color:var(--muted);"></span>
+                        </div>
+                    </div>
+                </div>
                 <div class="card">
                     <h3>AWS Batch Dashboard</h3>
                     <div class="stats-grid">
@@ -490,11 +588,93 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 </div>
             </section>
 
+            <section id="page-usage" class="content">
+                <div class="card">
+                    <h3>Usage Metering</h3>
+                    <div class="stats-grid" style="margin-top:16px;">
+                        <div class="stat-card"><div class="stat-value" id="usage-total-tokens">—</div><div class="stat-label">Total Tokens</div></div>
+                        <div class="stat-card"><div class="stat-value" id="usage-total-tools">—</div><div class="stat-label">Tool Invocations</div></div>
+                        <div class="stat-card"><div class="stat-value" id="usage-total-runs">—</div><div class="stat-label">Agent Runs</div></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>Per-User Breakdown</h3>
+                    <table id="usage-table"></table>
+                </div>
+            </section>
+
+            <section id="page-finetune" class="content">
+                <div class="card">
+                    <h3>Extract Fine-tuning Dataset</h3>
+                    <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+                        Converts your Tachy session history into Alpaca-format JSONL for LoRA fine-tuning.
+                    </p>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="extractDataset()" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Extract Dataset</button>
+                        <span id="finetune-status" style="font-size:13px; color:var(--muted);"></span>
+                    </div>
+                    <div id="finetune-dataset-info" style="margin-top:16px; display:none;">
+                        <div style="font-size:13px; color:var(--muted); margin-bottom:8px;" id="finetune-stats"></div>
+                        <button onclick="downloadJsonl()" style="background:rgba(255,255,255,0.06); border:1px solid var(--border); color:var(--text); padding:8px 16px; border-radius:var(--radius); font-size:12px; cursor:pointer;">⬇ Download JSONL</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>Generate Ollama Modelfile</h3>
+                    <div style="display:grid; gap:12px; margin-top:16px;">
+                        <input type="text" id="ft-base-model" placeholder="Base model (e.g. mistral:7b)" value="gemma4:27b"
+                            style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px;">
+                        <input type="text" id="ft-adapter-path" placeholder="LoRA adapter path (e.g. ./adapter.gguf)"
+                            style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px;">
+                        <textarea id="ft-system-prompt" rows="2" placeholder="Custom system prompt (optional)"
+                            style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:var(--radius); resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <button onclick="generateModelfile()" style="background:var(--accent); color:white; border:none; padding:10px 20px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Generate Modelfile</button>
+                            <span id="modelfile-status" style="font-size:13px; color:var(--muted);"></span>
+                        </div>
+                        <pre id="modelfile-output" style="display:none; background:rgba(0,0,0,0.4); padding:12px; border-radius:8px; font-size:11px; white-space:pre-wrap; max-height:300px; overflow-y:auto;"></pre>
+                    </div>
+                </div>
+            </section>
+
+            <section id="page-depgraph" class="content">
+                <div class="card">
+                    <h3>Dependency Graph Explorer</h3>
+                    <div style="display:flex; gap:10px; margin-top:16px;">
+                        <input type="text" id="depgraph-file" placeholder="File path (e.g. src/main.rs)"
+                            style="flex:1; background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); font-family:monospace; font-size:12px;"
+                            onkeydown="if(event.key==='Enter') loadDepGraph();">
+                        <button onclick="loadDepGraph()" style="background:var(--accent); color:white; border:none; padding:12px 20px; border-radius:var(--radius); cursor:pointer;">Analyze</button>
+                        <button onclick="loadFullGraph()" style="background:rgba(255,255,255,0.06); border:1px solid var(--border); color:var(--text); padding:12px 16px; border-radius:var(--radius); cursor:pointer; font-size:12px;">Full Graph</button>
+                    </div>
+                    <div id="depgraph-summary" style="display:none; margin-top:16px;">
+                        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
+                            <div class="stat-card"><div class="stat-value" id="dg-imports-count">0</div><div class="stat-label">Direct Imports</div></div>
+                            <div class="stat-card"><div class="stat-value" id="dg-imported-by-count">0</div><div class="stat-label">Imported By</div></div>
+                            <div class="stat-card"><div class="stat-value" id="dg-transitive-count">0</div><div class="stat-label">Transitive Dependents</div></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" id="depgraph-vis-card" style="display:none;">
+                    <h3 id="depgraph-vis-title">Graph</h3>
+                    <svg id="depgraph-svg" style="width:100%; min-height:320px;" xmlns="http://www.w3.org/2000/svg"></svg>
+                </div>
+                <div class="card" id="depgraph-full-card" style="display:none;">
+                    <h3>All Files — <span id="dg-total-nodes">0</span> nodes, <span id="dg-total-edges">0</span> edges</h3>
+                    <div id="depgraph-file-list" style="max-height:400px; overflow-y:auto; font-size:12px; font-family:monospace;"></div>
+                </div>
+            </section>
+
             <section id="page-search" class="content">
                 <div class="card">
-                    <h3>Code Search</h3>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3>Semantic Code Search (C2)</h3>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="index-status" style="font-size:12px; color:var(--muted);">Index: checking…</span>
+                            <button id="build-index-btn" onclick="buildIndex()" style="background:rgba(255,255,255,0.06); border:1px solid var(--border); color:var(--text); padding:6px 12px; border-radius:6px; font-size:12px; cursor:pointer;">Build Index</button>
+                        </div>
+                    </div>
                     <div style="display:flex; gap:10px; margin-top:16px;">
-                        <input type="text" id="search-query" placeholder="Search functions, types, files..." style="flex:1; background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);" onkeydown="if(event.key==='Enter') runCodeSearch();">
+                        <input type="text" id="search-query" placeholder="Search functions, types, symbols, concepts…" style="flex:1; background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);" onkeydown="if(event.key==='Enter') runCodeSearch();">
                         <select id="search-limit" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius);">
                             <option value="10">10</option>
                             <option value="25">25</option>
@@ -538,7 +718,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
         async function refreshPageData(page) {
             switch(page) {
-                case 'dashboard': loadMetrics(); break;
+                case 'dashboard': loadMetrics(); loadDashboardExtended(); break;
                 case 'approvals': loadApprovals(); loadLocks(); break;
                 case 'agents': loadAgents(); break;
                 case 'models': loadModels(); break;
@@ -548,7 +728,10 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 case 'cloud': loadCloud(); break;
                 case 'mission': loadMissionFeed(); break;
                 case 'marketplace': loadMarketplace(); break;
-                case 'search': /* results are user-initiated */ break;
+                case 'search': checkIndexStatus(); break;
+                case 'usage': loadUsage(); break;
+                case 'finetune': break; // no auto-load needed
+                case 'depgraph': break; // user triggers manually
             }
         }
 
@@ -760,6 +943,48 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 models.map(m => `<tr><td>${m.name}</td><td>${m.backend}</td><td>${m.context_window}</td><td>${m.supports_tool_use?'✓':'-'}</td></tr>`).join('');
         }
 
+        async function runComparison() {
+            const prompt = document.getElementById('cmp-prompt').value.trim();
+            const modelA = document.getElementById('cmp-model-a').value.trim();
+            const modelB = document.getElementById('cmp-model-b').value.trim();
+            if (!prompt) { alert('Enter a prompt first.'); return; }
+            if (!modelA || !modelB) { alert('Enter both model names.'); return; }
+            const status = document.getElementById('cmp-status');
+            status.textContent = 'Running comparison on both models…';
+            document.getElementById('cmp-results').style.display = 'none';
+
+            async function runOne(model) {
+                const t0 = Date.now();
+                const r = await apiFetch('/api/prompt', {
+                    method: 'POST',
+                    body: JSON.stringify({ prompt, model, session_id: 'cmp-' + model.replace(/[^a-z0-9]/gi,'_') }),
+                });
+                const ms = Date.now() - t0;
+                const data = await r.json();
+                return { model, ms, data, ok: r.ok };
+            }
+
+            try {
+                const [resA, resB] = await Promise.all([runOne(modelA), runOne(modelB)]);
+                status.textContent = 'Done.';
+                document.getElementById('cmp-results').style.display = 'block';
+
+                for (const [res, suffix] of [[resA,'a'],[resB,'b']]) {
+                    document.getElementById('cmp-header-' + suffix).textContent = res.model;
+                    const tokens = res.data.token_usage;
+                    const meta = res.ok
+                        ? `${res.ms}ms · ${tokens ? tokens.prompt_tokens + ' prompt / ' + tokens.completion_tokens + ' completion tokens' : 'tokens n/a'}`
+                        : 'Error';
+                    document.getElementById('cmp-meta-' + suffix).textContent = meta;
+                    document.getElementById('cmp-output-' + suffix).textContent = res.ok
+                        ? (res.data.response || res.data.summary || JSON.stringify(res.data, null, 2))
+                        : (res.data.error || 'Request failed');
+                }
+            } catch(e) {
+                status.textContent = 'Error: ' + e.message;
+            }
+        }
+
         async function loadAgents() {
             const r = await apiFetch('/api/agents');
             const agents = await r.json();
@@ -785,25 +1010,174 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 runs.map(r => `<tr><td><code>${r.run_id}</code></td><td>${r.status}</td><td>${r.task_count}</td></tr>`).join('');
         }
 
+        async function launchSwarm() {
+            const goal = document.getElementById('swarm-goal').value.trim();
+            if (!goal) { alert('Please enter a goal.'); return; }
+            const rawFiles = document.getElementById('swarm-files').value.trim();
+            const files = rawFiles ? rawFiles.split('\n').map(s => s.trim()).filter(Boolean) : [];
+            const statusEl = document.getElementById('swarm-launch-status');
+            statusEl.textContent = 'Submitting…';
+            try {
+                const r = await apiFetch('/api/swarm/runs', {
+                    method: 'POST',
+                    body: JSON.stringify({ goal, files, use_llm_planner: true, planner_model: 'gemma4:26b' }),
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    statusEl.textContent = `Launched: ${data.run_id}`;
+                    document.getElementById('swarm-goal').value = '';
+                    document.getElementById('swarm-files').value = '';
+                    setTimeout(loadSwarm, 1000);
+                } else {
+                    statusEl.textContent = `Error: ${data.error || r.status}`;
+                }
+            } catch (e) {
+                statusEl.textContent = `Error: ${e.message}`;
+            }
+        }
+
         async function loadSwarm() {
             const r = await apiFetch('/api/swarm/runs');
             const runs = await r.json();
             const list = document.getElementById('swarm-list');
-            if (!runs.length) {
-                list.innerHTML = '<p style="color:var(--muted); font-size: 13px;">No active swarm clusters. Initialize a recursive refactor to see parallel delegation.</p>';
+            if (!Array.isArray(runs) || !runs.length) {
+                list.innerHTML = '<p style="color:var(--muted); font-size: 13px;">No swarm runs yet. Use the form above to launch one.</p>';
                 return;
             }
             list.innerHTML = runs.map(run => `
-                <div class="card" style="margin-bottom: 12px; border-left: 4px solid var(--accent);">
+                <div class="card" style="margin-bottom: 12px; border-left: 4px solid var(--accent); cursor:pointer;"
+                     onclick="loadDag('${run.id}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
                             <div style="font-weight:600;">RUN: ${run.id}</div>
-                            <div style="font-size:12px; color:var(--muted);">${run.status} · ${run.tasks.length} sub-tasks</div>
+                            <div style="font-size:12px; color:var(--muted);">${run.status} · ${(run.tasks||[]).length} sub-tasks · click to visualize</div>
                         </div>
-                        <div class="status-badge ${run.status === 'Running' ? 'status-ok' : 'status-err'}">${run.status}</div>
+                        <div class="status-badge ${run.status === 'running' ? 'status-ok' : 'status-err'}">${run.status}</div>
                     </div>
                 </div>
             `).join('');
+        }
+
+        async function loadDag(runId) {
+            const r = await apiFetch('/api/swarm/runs/' + runId);
+            if (!r.ok) return;
+            const run = await r.json();
+            renderDag(run);
+        }
+
+        function renderDag(run) {
+            const tasks = run.tasks || [];
+            const hint = document.getElementById('swarm-dag-hint');
+            const svg = document.getElementById('swarm-dag-svg');
+            if (!tasks.length) {
+                hint.style.display = 'block';
+                svg.style.display = 'none';
+                hint.textContent = 'No tasks in this run.';
+                return;
+            }
+            hint.style.display = 'none';
+            svg.style.display = 'block';
+
+            // Layout: topological levels
+            const levels = dagLevels(tasks);
+            const maxLevel = Math.max(...Object.values(levels));
+            const colW = 160, rowH = 80, padX = 20, padY = 30;
+            const levelCounts = {};
+            tasks.forEach(t => { const l = levels[t.id] || 0; levelCounts[l] = (levelCounts[l]||0)+1; });
+            const maxPerLevel = Math.max(...Object.values(levelCounts));
+            const svgW = (maxLevel + 1) * colW + padX * 2;
+            const svgH = maxPerLevel * rowH + padY * 2;
+            svg.setAttribute('viewBox', '0 0 ' + svgW + ' ' + svgH);
+            svg.setAttribute('height', svgH);
+
+            // Compute node centres
+            const centres = {};
+            const levelIdx = {};
+            tasks.forEach(t => {
+                const l = levels[t.id] || 0;
+                const idx = levelIdx[l] = (levelIdx[l]||0);
+                levelIdx[l]++;
+                const x = padX + l * colW + colW / 2;
+                const y = padY + idx * rowH + rowH / 2;
+                centres[t.id] = { x, y };
+            });
+
+            const statusColor = s => s === 'completed' ? '#4ade80' : s === 'failed' ? '#f87171' : s === 'running' ? '#facc15' : '#94a3b8';
+
+            let out = '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">'
+                    + '<path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/></marker></defs>';
+
+            // Draw edges first (behind nodes)
+            tasks.forEach(t => {
+                (t.deps || []).forEach(dep => {
+                    if (centres[dep] && centres[t.id]) {
+                        const s = centres[dep], e = centres[t.id];
+                        out += '<line x1="' + (s.x+50) + '" y1="' + s.y + '" x2="' + (e.x-50) + '" y2="' + e.y
+                             + '" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>';
+                    }
+                });
+            });
+
+            // Draw nodes
+            tasks.forEach(t => {
+                const c = centres[t.id];
+                const col = statusColor(t.status);
+                const label = (t.id.length > 14 ? t.id.slice(0,13)+'…' : t.id);
+                out += '<rect x="' + (c.x-50) + '" y="' + (c.y-22) + '" width="100" height="44" rx="8" '
+                     + 'fill="rgba(0,0,0,0.5)" stroke="' + col + '" stroke-width="2"/>';
+                out += '<text x="' + c.x + '" y="' + (c.y-5) + '" text-anchor="middle" font-size="11" fill="' + col + '">' + label + '</text>';
+                out += '<text x="' + c.x + '" y="' + (c.y+10) + '" text-anchor="middle" font-size="9" fill="#94a3b8">' + (t.status||'pending') + '</text>';
+            });
+
+            svg.innerHTML = out;
+        }
+
+        function dagLevels(tasks) {
+            // Assign topological levels (longest path from root)
+            const levels = {};
+            const taskMap = {};
+            tasks.forEach(t => { taskMap[t.id] = t; levels[t.id] = 0; });
+            // Kahn-style: process nodes in dependency order
+            let changed = true;
+            for (let iter = 0; iter < tasks.length + 1 && changed; iter++) {
+                changed = false;
+                tasks.forEach(t => {
+                    (t.deps || []).forEach(dep => {
+                        const proposed = (levels[dep] || 0) + 1;
+                        if (proposed > (levels[t.id] || 0)) {
+                            levels[t.id] = proposed;
+                            changed = true;
+                        }
+                    });
+                });
+            }
+            return levels;
+        }
+
+        async function submitCloudJob() {
+            const name = document.getElementById('cloud-job-name').value.trim();
+            const cmdRaw = document.getElementById('cloud-job-cmd').value.trim();
+            if (!name) { alert('Job name is required.'); return; }
+            const command = cmdRaw ? cmdRaw.split(/\s+/) : [];
+            const statusEl = document.getElementById('cloud-submit-status');
+            statusEl.textContent = 'Submitting…';
+            try {
+                const r = await apiFetch('/api/cloud/jobs', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, command }),
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    statusEl.textContent = `Submitted: ${data.id}`;
+                    document.getElementById('cloud-job-name').value = '';
+                    document.getElementById('cloud-job-cmd').value = '';
+                    setTimeout(loadCloud, 500);
+                } else {
+                    statusEl.textContent = `Error: ${data.error || r.status}`;
+                }
+            } catch (e) {
+                statusEl.textContent = `Error: ${e.message}`;
+            }
         }
 
         async function loadCloud() {
@@ -860,6 +1234,178 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             } catch(e) {} finally {
                 btn.disabled = false;
                 btn.textContent = 'Launch';
+            }
+        }
+
+        // ── Dependency Graph Explorer ────────────────────────────────────────
+        async function loadDepGraph() {
+            const file = document.getElementById('depgraph-file').value.trim();
+            if (!file) return;
+            const r = await apiFetch('/api/graph?file=' + encodeURIComponent(file));
+            if (!r.ok) { alert('File not found in graph.'); return; }
+            const d = await r.json();
+
+            // Summary stats
+            const sumDiv = document.getElementById('depgraph-summary');
+            sumDiv.style.display = 'block';
+            document.getElementById('dg-imports-count').textContent = (d.direct_imports||[]).length;
+            document.getElementById('dg-imported-by-count').textContent = (d.imported_by||[]).length;
+            document.getElementById('dg-transitive-count').textContent = (d.transitive_dependents||[]).length;
+
+            // SVG visualization — three-column layout: imported_by | focal | direct_imports
+            const focal = d.file;
+            const imports = d.direct_imports || [];
+            const importedBy = d.imported_by || [];
+
+            const card = document.getElementById('depgraph-vis-card');
+            card.style.display = 'block';
+            document.getElementById('depgraph-full-card').style.display = 'none';
+            document.getElementById('depgraph-vis-title').textContent = 'Dependency Map: ' + focal.split('/').pop();
+
+            const colW = 180, rowH = 44, padX = 20, padY = 20;
+            const maxRows = Math.max(imports.length, importedBy.length, 1);
+            const svgH = maxRows * rowH + padY * 2 + 60;
+            const svgW = colW * 3 + padX * 2;
+            const svg = document.getElementById('depgraph-svg');
+            svg.setAttribute('viewBox', '0 0 ' + svgW + ' ' + svgH);
+            svg.setAttribute('height', Math.max(svgH, 200));
+
+            const focalX = padX + colW + colW / 2;
+            const focalY = svgH / 2;
+
+            function nodeY(i, total) {
+                return padY + 30 + i * rowH + (maxRows - total) * rowH / 2;
+            }
+
+            let out = '<defs><marker id="dgarrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">'
+                    + '<path d="M0,0 L0,6 L8,3 z" fill="#64748b"/></marker></defs>';
+
+            // Focal node
+            out += `<rect x="${focalX-70}" y="${focalY-14}" width="140" height="28" rx="6" fill="rgba(99,102,241,0.3)" stroke="#6366f1" stroke-width="2"/>`;
+            const focalLabel = focal.length > 20 ? '…' + focal.slice(-19) : focal;
+            out += `<text x="${focalX}" y="${focalY+5}" text-anchor="middle" font-size="10" fill="#e2e8f0">${focalLabel}</text>`;
+
+            // Column labels
+            out += `<text x="${padX + colW/2}" y="18" text-anchor="middle" font-size="10" fill="#64748b">imported by</text>`;
+            out += `<text x="${padX + colW*2 + colW/2}" y="18" text-anchor="middle" font-size="10" fill="#64748b">imports</text>`;
+
+            // imported_by nodes (left column)
+            importedBy.forEach((f, i) => {
+                const x = padX + colW / 2;
+                const y = nodeY(i, importedBy.length);
+                const label = f.length > 22 ? '…' + f.slice(-21) : f;
+                out += `<rect x="${x-70}" y="${y-12}" width="140" height="24" rx="5" fill="rgba(0,0,0,0.4)" stroke="#475569" stroke-width="1"/>`;
+                out += `<text x="${x}" y="${y+4}" text-anchor="middle" font-size="9" fill="#94a3b8">${label}</text>`;
+                out += `<line x1="${x+70}" y1="${y}" x2="${focalX-70}" y2="${focalY}" stroke="#64748b" stroke-width="1" marker-end="url(#dgarrow)"/>`;
+            });
+
+            // direct_imports nodes (right column)
+            imports.forEach((f, i) => {
+                const x = padX + colW * 2 + colW / 2;
+                const y = nodeY(i, imports.length);
+                const label = f.length > 22 ? '…' + f.slice(-21) : f;
+                out += `<rect x="${x-70}" y="${y-12}" width="140" height="24" rx="5" fill="rgba(0,0,0,0.4)" stroke="#475569" stroke-width="1"/>`;
+                out += `<text x="${x}" y="${y+4}" text-anchor="middle" font-size="9" fill="#94a3b8">${label}</text>`;
+                out += `<line x1="${focalX+70}" y1="${focalY}" x2="${x-70}" y2="${y}" stroke="#64748b" stroke-width="1" marker-end="url(#dgarrow)"/>`;
+            });
+
+            svg.innerHTML = out;
+        }
+
+        async function loadFullGraph() {
+            const r = await apiFetch('/api/graph');
+            if (!r.ok) return;
+            const g = await r.json();
+            document.getElementById('depgraph-vis-card').style.display = 'none';
+            const card = document.getElementById('depgraph-full-card');
+            card.style.display = 'block';
+            document.getElementById('dg-total-nodes').textContent = Object.keys(g.nodes||{}).length;
+            document.getElementById('dg-total-edges').textContent = g.edge_count || 0;
+            const list = document.getElementById('depgraph-file-list');
+            const nodes = Object.values(g.nodes || {});
+            nodes.sort((a, b) => (b.imports?.length||0) - (a.imports?.length||0));
+            list.innerHTML = nodes.map(n => {
+                const lang = `<span style="color:var(--muted); margin-right:8px;">[${n.language}]</span>`;
+                const imports = n.imports?.length ? `<span style="color:#4ade80;">↓${n.imports.length}</span>` : '';
+                const importedBy = n.imported_by?.length ? `<span style="color:#60a5fa; margin-left:6px;">↑${n.imported_by.length}</span>` : '';
+                return `<div style="padding:4px 0; border-bottom:1px solid var(--border); cursor:pointer;"
+                    onclick="document.getElementById('depgraph-file').value='${n.path}'; loadDepGraph();">
+                    ${lang}<span>${n.path}</span>${imports}${importedBy}
+                </div>`;
+            }).join('');
+        }
+
+        async function loadUsage() {
+            try {
+                const r = await apiFetch('/api/usage');
+                const d = await r.json();
+                document.getElementById('usage-total-tokens').textContent = (d.totals?.tokens || 0).toLocaleString();
+                document.getElementById('usage-total-tools').textContent = (d.totals?.tool_invocations || 0).toLocaleString();
+                document.getElementById('usage-total-runs').textContent = (d.totals?.agent_runs || 0).toLocaleString();
+                const tbody = document.getElementById('usage-table');
+                const users = d.users || [];
+                if (!users.length) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted); text-align:center; padding:20px;">No usage data yet. Run an agent to start metering.</td></tr>';
+                } else {
+                    tbody.innerHTML = '<thead><tr><th>User</th><th>Team</th><th>Tokens (in/out)</th><th>Tool Invocations</th><th>Agent Runs</th></tr></thead>'
+                        + users.map(u => `<tr>
+                            <td><code>${u.user_id}</code></td>
+                            <td>${u.team_id || '—'}</td>
+                            <td>${(u.total_input_tokens||0).toLocaleString()} / ${(u.total_output_tokens||0).toLocaleString()}</td>
+                            <td>${(u.total_tool_invocations||0).toLocaleString()}</td>
+                            <td>${(u.total_agent_runs||0).toLocaleString()}</td>
+                        </tr>`).join('');
+                }
+            } catch(e) {
+                document.getElementById('usage-table').innerHTML = '<tr><td style="color:var(--muted)">Error loading usage data.</td></tr>';
+            }
+        }
+
+        let _finetuneJsonl = '';
+        async function extractDataset() {
+            const status = document.getElementById('finetune-status');
+            status.textContent = 'Extracting…';
+            try {
+                const r = await apiFetch('/api/finetune/extract', { method: 'POST', body: JSON.stringify({}) });
+                const d = await r.json();
+                status.textContent = '';
+                _finetuneJsonl = d.jsonl || '';
+                document.getElementById('finetune-dataset-info').style.display = 'block';
+                document.getElementById('finetune-stats').textContent =
+                    `Extracted ${d.entries} training pairs from ${d.source_sessions} sessions.`;
+            } catch(e) {
+                status.textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function downloadJsonl() {
+            if (!_finetuneJsonl) return;
+            const blob = new Blob([_finetuneJsonl], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'tachy-finetune.jsonl'; a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function generateModelfile() {
+            const base = document.getElementById('ft-base-model').value.trim();
+            const adapter = document.getElementById('ft-adapter-path').value.trim();
+            const prompt = document.getElementById('ft-system-prompt').value.trim();
+            if (!base || !adapter) { alert('Base model and adapter path are required.'); return; }
+            const status = document.getElementById('modelfile-status');
+            status.textContent = 'Generating…';
+            try {
+                const r = await apiFetch('/api/finetune/modelfile', {
+                    method: 'POST',
+                    body: JSON.stringify({ base_model: base, adapter_path: adapter, system_prompt: prompt || undefined }),
+                });
+                const d = await r.json();
+                status.textContent = '';
+                const out = document.getElementById('modelfile-output');
+                out.style.display = 'block';
+                out.textContent = d.modelfile || '';
+            } catch(e) {
+                status.textContent = 'Error: ' + e.message;
             }
         }
 
@@ -923,6 +1469,73 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             }
         }
 
+        // ── C2: Index status + build ──────────────────────────────────────
+        async function checkIndexStatus() {
+            try {
+                const r = await apiFetch('/api/index');
+                const d = await r.json();
+                const el = document.getElementById('index-status');
+                if (!el) return;
+                if (d && d.total_files !== undefined) {
+                    const ago = d.built_at ? ` · built ${new Date(d.built_at * 1000).toLocaleTimeString()}` : '';
+                    el.textContent = `Index: ${d.total_files} files${ago}`;
+                    el.style.color = 'var(--success)';
+                } else {
+                    el.textContent = 'Index: not built';
+                    el.style.color = 'var(--warning)';
+                }
+            } catch(e) {
+                const el = document.getElementById('index-status');
+                if (el) { el.textContent = 'Index: offline'; el.style.color = 'var(--error)'; }
+            }
+        }
+
+        async function buildIndex() {
+            const btn = document.getElementById('build-index-btn');
+            const el  = document.getElementById('index-status');
+            if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+            if (el)  el.style.color = 'var(--warning)';
+            try {
+                await apiFetch('/api/index', { method: 'POST', body: '{}' });
+                await checkIndexStatus();
+            } catch(e) {
+                if (el) { el.textContent = 'Build failed'; el.style.color = 'var(--error)'; }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Build Index'; }
+            }
+        }
+
+        // ── E2: Extended dashboard — cost + model leaderboard ─────────────
+        async function loadDashboardExtended() {
+            try {
+                const r = await apiFetch('/api/dashboard');
+                const d = await r.json();
+                const costEl = document.getElementById('val-cost-usd');
+                if (costEl) costEl.textContent = '$' + (d.estimated_cost_usd || 0).toFixed(4);
+
+                const inEl  = document.getElementById('val-input-tokens');
+                const outEl = document.getElementById('val-output-tokens');
+                if (inEl)  inEl.textContent  = (d.input_tokens  || 0).toLocaleString();
+                if (outEl) outEl.textContent = (d.output_tokens || 0).toLocaleString();
+
+                const tbody = document.getElementById('model-leaderboard');
+                if (tbody && d.models && d.models.length) {
+                    tbody.innerHTML = d.models.map((m, i) => `
+                        <tr style="border-top:1px solid var(--border);">
+                            <td style="padding:8px 0; color:var(--muted);">${i+1}</td>
+                            <td style="padding:8px; font-weight:500;">${m.name}</td>
+                            <td style="padding:8px; text-align:right; color:var(--muted);">${(m.tokens||0).toLocaleString()}</td>
+                            <td style="padding:8px; text-align:right; color:var(--success);">${(m.avg_tps||0).toFixed(1)}</td>
+                            <td style="padding:8px; text-align:right; color:var(--muted);">${(m.p50_ttft_ms||0).toFixed(0)}ms</td>
+                            <td style="padding:8px; text-align:right;"><span style="background:rgba(99,102,241,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:11px;">${m.tier||'local'}</span></td>
+                        </tr>
+                    `).join('');
+                } else if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted); padding:10px 0; font-size:12px;">No model data yet — run an inference first.</td></tr>';
+                }
+            } catch(e) { /* daemon may be starting */ }
+        }
+
         // Initialize
         (async () => {
             const health = await (await apiFetch('/health')).json();
@@ -930,8 +1543,11 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             loadModels();
             loadTemplates();
             checkHealth();
+            checkIndexStatus();
+            loadDashboardExtended();
             setInterval(checkHealth, 5000);
             setInterval(() => { if(ttftChart) loadMetrics(); }, 3000);
+            setInterval(loadDashboardExtended, 10000);
         })();
     </script>
 </body>

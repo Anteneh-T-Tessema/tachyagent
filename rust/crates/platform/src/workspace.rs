@@ -54,6 +54,7 @@ impl Default for PlatformConfig {
                 AgentTemplate::security_scanner(),
                 AgentTemplate::doc_generator(),
                 AgentTemplate::test_runner(),
+                AgentTemplate::refactor(),
                 AgentTemplate::migrator(),
                 AgentTemplate::localizer(),
                 AgentTemplate::benchmark(),

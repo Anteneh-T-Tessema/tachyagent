@@ -6,7 +6,6 @@
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 use backend::EmbeddingClient;
-use crate::rag::VectorStore;
 use crate::indexer::CodebaseIndexer;
 
 /// Input for the `search_codebase` tool.

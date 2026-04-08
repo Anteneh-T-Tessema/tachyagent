@@ -5,7 +5,6 @@
 //! persistent in-memory index to ensure sub-millisecond retrieval across
 //! tens of thousands of code segments.
 
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use backend::cosine_similarity;
 
@@ -20,6 +19,10 @@ pub struct CodeChunk {
     pub content: String,
     /// Semantic embedding (768-dim vector)
     pub embedding: Vec<f32>,
+    /// FNV-1a hash of the source file at indexing time — used for incremental
+    /// re-embedding: skip files whose hash hasn't changed since last index build.
+    #[serde(default)]
+    pub content_hash: String,
 }
 
 /// A lightweight, persistent vector store for code chunks.
@@ -85,9 +88,8 @@ impl Default for Chunker {
 }
 
 impl Chunker {
-    pub fn chunk_file(&self, path: &str, content: &str) -> Vec<(usize, usize, String)> {
+    pub fn chunk_file(&self, _path: &str, content: &str) -> Vec<(usize, usize, String)> {
         let mut chunks = Vec::new();
-        let lines: Vec<&str> = content.lines().collect();
         let mut start_line = 1;
         let mut current_idx = 0;
 

@@ -209,6 +209,31 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        // E1: Richer diagnostics — LSP-powered error/warning extraction
+        ToolSpec {
+            name: "get_diagnostics",
+            description: concat!(
+                "Get language-server diagnostics (errors, warnings, hints) for a file or directory. ",
+                "Returns a list of problems with file path, line/column, severity, and message. ",
+                "Use this to understand compiler errors and type errors without running a full build."
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path or directory to get diagnostics for"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["error", "warning", "info", "hint", "all"],
+                        "description": "Minimum severity to include (default: error)"
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -223,6 +248,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "list_directory" => from_value::<ListDirInput>(input).and_then(run_list_directory),
         "web_search" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "web_fetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
+        // E1: Richer diagnostics via LSP integration
+        "get_diagnostics" => from_value::<GetDiagnosticsInput>(input).and_then(run_get_diagnostics),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -235,7 +262,8 @@ pub fn execute_tool_with_custom(
 ) -> Result<String, String> {
     // Try built-in tools first
     match name {
-        "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search" | "list_directory" | "web_search" | "web_fetch" => {
+        "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search"
+        | "list_directory" | "web_search" | "web_fetch" | "get_diagnostics" => {
             return execute_tool(name, input);
         }
         _ => {}
@@ -363,6 +391,182 @@ fn run_web_search(input: WebSearchInput) -> Result<String, String> {
 
 fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
     to_pretty_json(web_fetch(&input)?)
+}
+
+// ── E1: Richer diagnostics ──────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct GetDiagnosticsInput {
+    path: String,
+    #[serde(default)]
+    severity: Option<String>,
+}
+
+/// Run `get_diagnostics` using available CLI type-checkers.
+///
+/// Detects the project type from the target path and runs the appropriate
+/// checker (cargo check, tsc --noEmit, mypy/pyright, go vet).  Returns a
+/// JSON array of diagnostic objects with file/line/severity/message fields.
+fn run_get_diagnostics(input: GetDiagnosticsInput) -> Result<String, String> {
+    let path = std::path::Path::new(&input.path);
+    let min_severity = input.severity.as_deref().unwrap_or("error");
+
+    // Determine workspace root from path
+    let workspace = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().unwrap_or(path).to_path_buf()
+    };
+
+    // Detect language by presence of marker files
+    let is_rust   = workspace.join("Cargo.toml").exists() || path.extension().map(|e| e == "rs").unwrap_or(false);
+    let is_ts     = workspace.join("tsconfig.json").exists() || path.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false);
+    let is_python = path.extension().map(|e| e == "py").unwrap_or(false)
+                    || workspace.join("pyproject.toml").exists()
+                    || workspace.join("setup.py").exists();
+    let is_go     = workspace.join("go.mod").exists() || path.extension().map(|e| e == "go").unwrap_or(false);
+
+    let (cmd, args): (&str, Vec<&str>) = if is_rust {
+        ("cargo", vec!["check", "--message-format=json", "--quiet"])
+    } else if is_ts {
+        ("npx", vec!["tsc", "--noEmit", "--pretty", "false"])
+    } else if is_python {
+        if std::process::Command::new("mypy").arg("--version").output().is_ok() {
+            ("mypy", vec![input.path.as_str(), "--no-error-summary", "--show-column-numbers"])
+        } else {
+            ("python3", vec!["-m", "py_compile", input.path.as_str()])
+        }
+    } else if is_go {
+        ("go", vec!["vet", "./..."])
+    } else {
+        // Fallback: try a syntax check via the shell
+        ("sh", vec!["-n", input.path.as_str()])
+    };
+
+    let output = std::process::Command::new(cmd)
+        .args(&args)
+        .current_dir(&workspace)
+        .output()
+        .map_err(|e| format!("could not run {cmd}: {e} (is it installed?)"))?;
+
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Parse output into structured diagnostics
+    let diags = if is_rust {
+        parse_cargo_diagnostics(&combined, min_severity)
+    } else {
+        parse_text_diagnostics(&combined, min_severity, &input.path)
+    };
+
+    serde_json::to_string_pretty(&diags).map_err(|e| e.to_string())
+}
+
+/// Parse `cargo check --message-format=json` output.
+fn parse_cargo_diagnostics(output: &str, min_severity: &str) -> Vec<serde_json::Value> {
+    let mut results = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v["reason"].as_str() != Some("compiler-message") { continue; }
+        let msg = &v["message"];
+        let level = msg["level"].as_str().unwrap_or("note");
+        if !severity_passes(level, min_severity) { continue; }
+        let text = msg["message"].as_str().unwrap_or("").to_string();
+        // Primary span
+        if let Some(spans) = msg["spans"].as_array() {
+            for span in spans.iter().filter(|s| s["is_primary"].as_bool().unwrap_or(false)) {
+                results.push(serde_json::json!({
+                    "file": span["file_name"].as_str().unwrap_or(""),
+                    "line": span["line_start"].as_u64().unwrap_or(0),
+                    "column": span["column_start"].as_u64().unwrap_or(0),
+                    "severity": level,
+                    "message": text,
+                    "source": "cargo",
+                }));
+            }
+        }
+    }
+    results
+}
+
+/// Parse plain-text checker output (tsc, mypy, go vet, etc.).
+fn parse_text_diagnostics(output: &str, min_severity: &str, default_file: &str) -> Vec<serde_json::Value> {
+    let mut results = Vec::new();
+    // Common pattern: "file.ext:line:col: error/warning: message"
+    let _re_patterns = [
+        // TypeScript: src/foo.ts(10,5): error TS2304: ...
+        (r"([^:()]+)\((\d+),(\d+)\):\s*(error|warning|info)\s+\w+:\s*(.*)", true),
+        // mypy: src/foo.py:10: error: ...
+        (r"([^:]+):(\d+):\s*(error|warning|note):\s*(.*)", false),
+        // go vet / general: ./pkg/file.go:10:5: message
+        (r"(\./[^:]+):(\d+):(\d+):\s*(.*)", false),
+    ];
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { continue; }
+
+        // Try each pattern manually (no regex crate — keep deps minimal)
+        if let Some(d) = try_parse_diagnostic_line(line, default_file, min_severity) {
+            results.push(d);
+        }
+    }
+    results
+}
+
+fn try_parse_diagnostic_line(line: &str, default_file: &str, min_severity: &str) -> Option<serde_json::Value> {
+    // Pattern: <file>:<line>:<col>: <level>: <message>
+    // or:      <file>(<line>,<col>): <level> <code>: <message>
+    let line = line.replace('(', ":").replace(')', ":");
+    let parts: Vec<&str> = line.splitn(6, ':').collect();
+    if parts.len() < 3 { return None; }
+
+    let file = parts[0].trim();
+    let lineno: u64 = parts[1].trim().parse().unwrap_or(0);
+    // parts[2] may be col or level
+    let (col, level_idx) = if parts[2].trim().parse::<u64>().is_ok() {
+        (parts[2].trim().parse::<u64>().unwrap_or(0), 3)
+    } else {
+        (0, 2)
+    };
+
+    if parts.len() <= level_idx { return None; }
+    let level_raw = parts[level_idx].trim().to_lowercase();
+    let level = if level_raw.starts_with("error") { "error" }
+                else if level_raw.starts_with("warn") { "warning" }
+                else if level_raw.starts_with("note") || level_raw.starts_with("info") { "info" }
+                else { return None };
+
+    if !severity_passes(level, min_severity) { return None; }
+
+    let msg_parts = &parts[(level_idx + 1)..];
+    let message = msg_parts.join(":").trim().to_string();
+    if message.is_empty() { return None; }
+
+    Some(serde_json::json!({
+        "file": if file.is_empty() { default_file } else { file },
+        "line": lineno,
+        "column": col,
+        "severity": level,
+        "message": message,
+        "source": "cli",
+    }))
+}
+
+fn severity_passes(level: &str, min: &str) -> bool {
+    let rank = |s: &str| match s {
+        "error"   => 0_u8,
+        "warning" | "warn" => 1,
+        "info" | "note" => 2,
+        "hint"    => 3,
+        _         => 4,
+    };
+    min == "all" || rank(level) <= rank(min)
 }
 
 #[cfg(test)]

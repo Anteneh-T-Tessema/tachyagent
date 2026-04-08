@@ -4,7 +4,6 @@
 //! to delegate large-scale repository-level goals to parallel sub-agents.
 
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use crate::swarm::{SwarmRefactorInput, plan_swarm_refactor};
 use crate::indexer::CodebaseIndexer;
 

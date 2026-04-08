@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
@@ -73,6 +73,8 @@ pub struct PendingPatch {
 pub struct InferenceStats {
     pub total_requests: u64,
     pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     pub last_ttft_ms: u32,
     pub last_tokens_per_sec: f32,
     pub avg_ttft_ms: f32,
@@ -84,7 +86,17 @@ pub struct InferenceStats {
 }
 
 impl InferenceStats {
+    /// Record an inference with a known total token count.
+    /// Splits evenly between input/output as an approximation.
     pub fn record(&mut self, ttft_ms: u32, tps: f32, tokens: u64) {
+        self.record_with_split(ttft_ms, tps, tokens / 2, tokens - tokens / 2);
+    }
+
+    /// Record an inference with exact input/output token counts.
+    pub fn record_with_split(&mut self, ttft_ms: u32, tps: f32, input_tokens: u64, output_tokens: u64) {
+        let tokens = input_tokens + output_tokens;
+        self.input_tokens += input_tokens;
+        self.output_tokens += output_tokens;
         let count = self.total_requests as f32;
         self.avg_ttft_ms = (self.avg_ttft_ms * count + ttft_ms as f32) / (count + 1.0);
         self.avg_tokens_per_sec = (self.avg_tokens_per_sec * count + tps) / (count + 1.0);

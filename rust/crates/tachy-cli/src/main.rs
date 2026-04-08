@@ -120,6 +120,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Dashboard => run_dashboard()?,
         CliAction::ExportAudit { format, output } => run_export_audit(&format, output.as_deref())?,
         CliAction::Finetune { output, base_model } => run_finetune(output.as_deref(), base_model.as_deref())?,
+        CliAction::Policy { subcommand, file } => run_policy(&subcommand, file.as_deref())?,
+        CliAction::Swarm { goal, files, model } => run_swarm(&goal, &files, model.as_deref())?,
     }
     Ok(())
 }
@@ -179,6 +181,10 @@ enum CliAction {
     ExportAudit { format: String, output: Option<String> },
     /// F3: fine-tuning dataset extraction + LoRA script generation
     Finetune { output: Option<String>, base_model: Option<String> },
+    /// F2: policy-as-code — view/set/validate tachy-policy.yaml
+    Policy { subcommand: String, file: Option<String> },
+    /// D2/D3: swarm — run a multi-agent parallel refactor
+    Swarm { goal: String, files: Vec<String>, model: Option<String> },
 }
 
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
@@ -392,6 +398,38 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                         .and_then(|i| rest.get(i + 1).cloned())
                 });
             Ok(CliAction::Finetune { output: output_opt, base_model })
+        }
+        "policy" => {
+            let subcommand = rest.get(1).map(String::as_str).unwrap_or("show").to_string();
+            let file = rest.iter()
+                .find(|a| a.starts_with("--file="))
+                .map(|a| a[7..].to_string())
+                .or_else(|| rest.iter().position(|a| a == "--file" || a == "-f")
+                    .and_then(|i| rest.get(i + 1).cloned()));
+            Ok(CliAction::Policy { subcommand, file })
+        }
+        "swarm" => {
+            // tachy swarm --goal "..." file1 file2 [--model <m>]
+            let goal = rest.iter()
+                .find(|a| a.starts_with("--goal="))
+                .map(|a| a[7..].to_string())
+                .or_else(|| rest.iter().position(|a| *a == "--goal" || *a == "-g")
+                    .and_then(|i| rest.get(i + 1).cloned()))
+                .unwrap_or_default();
+            let model = rest.iter()
+                .find(|a| a.starts_with("--model="))
+                .map(|a| a[8..].to_string())
+                .or_else(|| rest.iter().position(|a| *a == "--model" || *a == "-m")
+                    .and_then(|i| rest.get(i + 1).cloned()));
+            let files: Vec<String> = rest.iter()
+                .skip(1) // skip "swarm"
+                .filter(|a| !a.starts_with("--") && a.as_str() != goal && Some(a.as_str()) != model.as_deref())
+                .cloned()
+                .collect();
+            if goal.is_empty() {
+                return Err("swarm requires --goal <description>".to_string());
+            }
+            Ok(CliAction::Swarm { goal, files, model })
         }
         other => Err(format!("unknown subcommand: {other}")),
     }
@@ -1667,6 +1705,57 @@ fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut cli = LiveCli::new(model, true)?;
     let editor = input::LineEditor::new("› ");
 
+    // ── A3: TACHY.md staleness check — re-sync if git HEAD changed ────────
+    {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tachy_md_path = cwd.join("TACHY.md");
+        if tachy_md_path.exists() {
+            // Get TACHY.md mtime
+            let md_mtime = std::fs::metadata(&tachy_md_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            // Get git HEAD commit timestamp
+            let git_mtime = std::process::Command::new("git")
+                .args(["log", "-1", "--format=%ct"])
+                .current_dir(&cwd)
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+
+            if let (Some(md_t), Some(git_t)) = (md_mtime, git_mtime) {
+                if git_t > md_t {
+                    // git HEAD is newer than TACHY.md — regenerate
+                    if let Some(project_info) = detect_project(&cwd) {
+                        let content = format!(
+                            "# Project Instructions for Tachy\n\n\
+                             Language: {}\n\
+                             {}\
+                             {}\
+                             \n\
+                             ## Guidelines\n\n\
+                             - Follow existing code style and conventions\n\
+                             - Run tests after making changes\n\
+                             - Keep changes minimal and focused\n",
+                            project_info.language,
+                            if let Some(tc) = &project_info.test_command {
+                                format!("Test command: `{tc}`\n")
+                            } else { String::new() },
+                            if let Some(bc) = &project_info.build_command {
+                                format!("Build command: `{bc}`\n")
+                            } else { String::new() },
+                        );
+                        let _ = std::fs::write(&tachy_md_path, &content);
+                        eprintln!("  ✓ TACHY.md refreshed (git HEAD newer than last sync)");
+                    }
+                }
+            }
+        }
+    }
+
     // ── Auto-resume: prompt if there is a recent saved session ───────────
     let mut stdout = io::stdout();
     if let Some(last_path) = LiveCli::last_session_path() {
@@ -2007,6 +2096,11 @@ impl LiveCli {
             rt.block_on(async move {
                 let mut rx = rx;
                 let mut stdout = io::stdout();
+                let renderer = TerminalRenderer::new();
+                let mut in_code_block = false;
+                let mut code_lang = String::new();
+                let mut code_buf = String::new();
+                let mut text_buf = String::new();
                 while let Some(event) = rx.recv().await {
                     match event {
                         RuntimeEvent::TextDelta(delta) => {
@@ -2018,10 +2112,83 @@ impl LiveCli {
                                     crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
                                 );
                             }
-                            print!("{delta}");
-                            let _ = stdout.flush();
+                            // Stream-aware markdown/code block rendering
+                            let mut i = 0;
+                            let chars: Vec<char> = delta.chars().collect();
+                            while i < chars.len() {
+                                // Detect code block start/end (``` or ~~~)
+                                if !in_code_block && (chars[i] == '`' || chars[i] == '~') {
+                                    // Check for triple backtick or tilde
+                                    let marker = chars[i];
+                                    if i + 2 < chars.len() && chars[i+1] == marker && chars[i+2] == marker {
+                                        // Print any buffered text before code block
+                                        if !text_buf.is_empty() {
+                                            print!("{}", text_buf);
+                                            let _ = stdout.flush();
+                                            text_buf.clear();
+                                        }
+                                        in_code_block = true;
+                                        i += 3;
+                                        // Parse language if present
+                                        let mut lang = String::new();
+                                        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '\n' {
+                                            lang.push(chars[i]);
+                                            i += 1;
+                                        }
+                                        code_lang = lang.trim().to_string();
+                                        // Print code block header
+                                        if !code_lang.is_empty() {
+                                            print!("\n\x1b[36m╭─ {}\x1b[0m\n", code_lang);
+                                        } else {
+                                            print!("\n\x1b[36m╭─ code\x1b[0m\n");
+                                        }
+                                        let _ = stdout.flush();
+                                        continue;
+                                    }
+                                }
+                                if in_code_block && (chars[i] == '`' || chars[i] == '~') {
+                                    let marker = chars[i];
+                                    if i + 2 < chars.len() && chars[i+1] == marker && chars[i+2] == marker {
+                                        // End of code block
+                                        // Print highlighted code
+                                        print!("{}", renderer.highlight_code(&code_buf, &code_lang));
+                                        print!("\x1b[36m╰─\x1b[0m\n\n");
+                                        let _ = stdout.flush();
+                                        code_buf.clear();
+                                        code_lang.clear();
+                                        in_code_block = false;
+                                        i += 3;
+                                        continue;
+                                    }
+                                }
+                                // Buffer or print
+                                if in_code_block {
+                                    code_buf.push(chars[i]);
+                                } else {
+                                    text_buf.push(chars[i]);
+                                }
+                                i += 1;
+                            }
+                            // Print text outside code blocks immediately
+                            if !in_code_block && !text_buf.is_empty() {
+                                print!("{}", text_buf);
+                                let _ = stdout.flush();
+                                text_buf.clear();
+                            }
                         }
-                        RuntimeEvent::Finished(_) => break,
+                        RuntimeEvent::Finished(_) => {
+                            // Flush any remaining code block (incomplete)
+                            if in_code_block && !code_buf.is_empty() {
+                                print!("{}", renderer.highlight_code(&code_buf, &code_lang));
+                                print!("\x1b[36m╰─\x1b[0m\n\n");
+                                let _ = stdout.flush();
+                            }
+                            if !text_buf.is_empty() {
+                                print!("{}", text_buf);
+                                let _ = stdout.flush();
+                            }
+                            break;
+                        }
                         _ => {}
                     }
                 }
@@ -2777,10 +2944,11 @@ steps:
     topological_sort(&pipeline.steps)
         .map_err(|cycle| format!("pipeline has a dependency cycle: {cycle}"))?;
 
+    // ── Visual DAG (D1) ───────────────────────────────────────────────────
+    print_pipeline_dag(&pipeline.steps);
+
     if subcommand == "validate" || dry_run {
-        println!("Pipeline '{}' is valid.", pipeline.name);
-        println!("  {} steps: {}", pipeline.steps.len(),
-            pipeline.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
+        println!("Pipeline '{}' is valid ({} steps).", pipeline.name, pipeline.steps.len());
         return Ok(());
     }
 
@@ -2812,6 +2980,59 @@ steps:
 
     println!("Pipeline '{}' completed all {} steps.", pipeline.name, pipeline.steps.len());
     Ok(())
+}
+
+/// Render an ASCII DAG of pipeline steps showing dependency arrows.
+///
+/// Example output for a 3-step pipeline where `security` and `docs` depend on `review`:
+///
+/// ```text
+/// Pipeline DAG:
+///   [review]
+///      └─▶ [security]
+///      └─▶ [docs]
+/// ```
+fn print_pipeline_dag(steps: &[PipelineStep]) {
+    println!("Pipeline DAG:");
+    // Build: parent → children map
+    let mut children: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut has_parent: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for step in steps {
+        for dep in &step.depends_on {
+            children.entry(dep.as_str()).or_default().push(step.name.as_str());
+            has_parent.insert(step.name.as_str());
+        }
+    }
+    // Roots = steps with no declared dependencies
+    let roots: Vec<&str> = steps.iter()
+        .filter(|s| !has_parent.contains(s.name.as_str()))
+        .map(|s| s.name.as_str())
+        .collect();
+
+    fn render(name: &str, indent: usize, children: &std::collections::BTreeMap<&str, Vec<&str>>) {
+        let pad = "  ".repeat(indent);
+        println!("{pad}[{name}]");
+        if let Some(kids) = children.get(name) {
+            let n = kids.len();
+            for (i, kid) in kids.iter().enumerate() {
+                let connector = if i + 1 == n { "└─▶" } else { "├─▶" };
+                let kid_pad = "  ".repeat(indent + 1);
+                println!("{kid_pad}{connector} [{kid}]");
+                render(kid, indent + 2, children);
+            }
+        }
+    }
+
+    for root in &roots {
+        render(root, 1, &children);
+    }
+    // If nothing printed (all steps have deps = cycle, already caught), just list them
+    if roots.is_empty() {
+        for step in steps {
+            println!("  [{}]", step.name);
+        }
+    }
+    println!();
 }
 
 /// Topological sort of pipeline steps. Returns ordered step names or an error
@@ -3043,6 +3264,164 @@ fn chrono_now_str_iso() -> String {
 
 // ---------------------------------------------------------------------------
 // tachy finetune  (F3)
+// ---------------------------------------------------------------------------
+// tachy policy  (F2)
+// ---------------------------------------------------------------------------
+
+/// View, set, or validate the workspace policy-as-code file (tachy-policy.yaml).
+///
+/// Usage:
+///   tachy policy show                  — pretty-print the current policy
+///   tachy policy init                  — write a starter policy file
+///   tachy policy validate [--file <f>] — validate a policy file
+///   tachy policy set --file <f>        — push a policy file to the running daemon
+fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let default_policy_path = cwd.join("tachy-policy.yaml");
+    let policy_path = file.map(std::path::Path::new).unwrap_or(&default_policy_path);
+
+    match subcommand {
+        "show" => {
+            let pf = audit::PolicyFile::load(policy_path)
+                .unwrap_or_else(|_| audit::PolicyFile::enterprise_default());
+            println!("{}", serde_json::to_string_pretty(&pf)?);
+        }
+        "init" => {
+            if policy_path.exists() {
+                return Err(format!("{} already exists — remove it first", policy_path.display()).into());
+            }
+            let pf = audit::PolicyFile::enterprise_default();
+            pf.save(policy_path).map_err(|e| format!("failed to write policy: {e}"))?;
+            println!("Created {}", policy_path.display());
+            println!("Edit it, then run: tachy policy validate");
+        }
+        "validate" => {
+            match audit::PolicyFile::load(policy_path) {
+                Ok(pf) => {
+                    println!("Policy '{}' is valid.", policy_path.display());
+                    let json = serde_json::to_string_pretty(&pf)?;
+                    let rule_count = json.matches("allow").count() + json.matches("deny").count();
+                    println!("  {} allow/deny rules found", rule_count);
+                }
+                Err(e) => return Err(format!("invalid policy: {e}").into()),
+            }
+        }
+        "set" => {
+            let pf = audit::PolicyFile::load(policy_path)
+                .map_err(|e| format!("cannot load policy '{}': {e}", policy_path.display()))?;
+            let body = serde_json::to_string(&pf)?;
+            let out = std::process::Command::new("curl")
+                .args([
+                    "-sf", "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "-d", &body,
+                    "http://127.0.0.1:7777/api/policy",
+                ])
+                .output();
+            match out {
+                Ok(o) if o.status.success() => println!("Policy pushed to daemon."),
+                Ok(o) => eprintln!("Daemon error: {}", String::from_utf8_lossy(&o.stderr)),
+                Err(_) => eprintln!("Daemon not running — start with: tachy serve"),
+            }
+        }
+        other => return Err(format!("unknown policy subcommand: {other}\n  usage: tachy policy show|init|validate|set").into()),
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+
+/// tachy swarm --goal "..." [file1 file2 ...] [--model <m>]
+///
+/// Decomposes the goal into a parallel agent DAG and prints the plan.
+/// If the daemon is running, submits the run via POST /api/swarm/runs.
+fn run_swarm(goal: &str, files: &[String], model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+
+    // If no files provided, collect all Rust/TypeScript/Python sources under cwd
+    let resolved_files: Vec<String> = if files.is_empty() {
+        let mut found = Vec::new();
+        fn collect(dir: &std::path::Path, out: &mut Vec<String>) {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        if !matches!(name.as_str(), "target" | "node_modules" | ".git" | ".tachy") {
+                            collect(&p, out);
+                        }
+                    } else if let Some(ext) = p.extension() {
+                        if matches!(ext.to_str().unwrap_or(""), "rs" | "ts" | "tsx" | "js" | "py" | "go") {
+                            if let Ok(rel) = p.strip_prefix(std::env::current_dir().unwrap_or_default()) {
+                                out.push(rel.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        collect(&cwd, &mut found);
+        found
+    } else {
+        files.to_vec()
+    };
+
+    if resolved_files.is_empty() {
+        return Err("no source files found — pass file paths explicitly or run from a project root".into());
+    }
+
+    let planner_model = model.unwrap_or("gemma4:26b").to_string();
+    let input = intelligence::SwarmRefactorInput {
+        goal: goal.to_string(),
+        files: resolved_files.clone(),
+        use_llm_planner: true,
+        planner_model: planner_model.clone(),
+    };
+
+    // Generate and print the plan
+    let plan = intelligence::plan_swarm_refactor(&input);
+    println!("Swarm Plan ({:?}, {} tasks):", plan.planner, plan.tasks.len());
+    for task in &plan.tasks {
+        let deps = if task.deps.is_empty() {
+            String::new()
+        } else {
+            format!(" [after: {}]", task.deps.join(", "))
+        };
+        println!("  [{}] template={}{}", task.id, task.template, deps);
+        let preview = task.prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+        println!("      {preview}…");
+    }
+    println!();
+
+    // Try to submit to the running daemon
+    let body = serde_json::to_string(&serde_json::json!({
+        "goal": goal,
+        "files": resolved_files,
+        "use_llm_planner": true,
+        "planner_model": planner_model,
+    }))?;
+
+    let out = std::process::Command::new("curl")
+        .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body,
+               "http://127.0.0.1:7777/api/swarm/runs"])
+        .output();
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let resp = String::from_utf8_lossy(&o.stdout);
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
+                println!("Swarm run submitted: run_id={}", v["run_id"].as_str().unwrap_or("?"));
+                println!("  Poll status: tachy dashboard (or GET http://127.0.0.1:7777/api/swarm/runs)");
+            }
+        }
+        _ => {
+            println!("Daemon not running — plan printed above. Start the daemon with: tachy serve");
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 
 fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {

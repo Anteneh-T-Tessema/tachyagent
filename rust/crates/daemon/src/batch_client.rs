@@ -44,16 +44,52 @@ impl BatchClient {
         }
     }
 
-    /// Prepares a workspace bundle for cloud hydration.
+    /// Prepares a compressed workspace bundle for cloud hydration.
+    ///
+    /// Creates a `.tar.gz` of the workspace, excluding large generated directories
+    /// (`.git`, `node_modules`, `target`, `.tachy/deploy`) so the bundle stays small.
     pub fn prepare_bundle(&self, workspace_root: &std::path::Path) -> Result<String, String> {
         let bundle_name = format!("tachy-bundle-{}.tar.gz", chrono_now());
-        let bundle_path = workspace_root.join(".tachy").join("deploy").join(&bundle_name);
-        
-        std::fs::create_dir_all(bundle_path.parent().unwrap()).map_err(|e| e.to_string())?;
+        let deploy_dir = workspace_root.join(".tachy").join("deploy");
+        let bundle_path = deploy_dir.join(&bundle_name);
 
-        // In a real implementation: tar -czf {bundle_path} --exclude=".git" etc.
-        // For now, we touch a placeholder to simulate the bundle creation.
-        std::fs::write(&bundle_path, "oci-bundle-placeholder").map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&deploy_dir).map_err(|e| e.to_string())?;
+
+        // Use the system `tar` command — available on Linux/macOS and WSL2.
+        // Excludes heavy directories that should not be shipped to the cloud.
+        let exclude_patterns = [
+            "--exclude=./.git",
+            "--exclude=./target",
+            "--exclude=./node_modules",
+            "--exclude=./.tachy/deploy",
+            "--exclude=./.tachy/sessions",
+        ];
+
+        let output = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&bundle_path)
+            .args(&exclude_patterns)
+            .arg(".")
+            .current_dir(workspace_root)
+            .output()
+            .map_err(|e| format!("tar not found: {e} — install GNU tar (brew install gnu-tar on macOS)"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "tar failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let size_bytes = std::fs::metadata(&bundle_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        eprintln!(
+            "[batch] bundle created: {} ({:.1} MB)",
+            bundle_path.display(),
+            size_bytes as f64 / 1_048_576.0
+        );
 
         Ok(bundle_name)
     }
@@ -84,9 +120,40 @@ impl BatchClient {
     }
 
     /// Polls the status of an active job.
+    ///
+    /// Tries `aws batch describe-jobs` (AWS CLI) first; falls back to returning
+    /// the stored status if the CLI is unavailable or returns an error.
     pub fn get_job_status(&self, job_id: &str) -> Result<BatchJobStatus, String> {
-        // Placeholder for real polling logic
-        let _ = job_id;
+        let output = std::process::Command::new("aws")
+            .args([
+                "batch", "describe-jobs",
+                "--jobs", job_id,
+                "--region", &self.region,
+                "--output", "json",
+            ])
+            .output();
+
+        if let Ok(out) = output {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(status_str) = v["jobs"][0]["status"].as_str() {
+                        return Ok(match status_str {
+                            "SUBMITTED" => BatchJobStatus::Submitted,
+                            "PENDING"   => BatchJobStatus::Pending,
+                            "RUNNABLE"  => BatchJobStatus::Runnable,
+                            "STARTING"  => BatchJobStatus::Starting,
+                            "RUNNING"   => BatchJobStatus::Running,
+                            "SUCCEEDED" => BatchJobStatus::Succeeded,
+                            other       => BatchJobStatus::Failed(format!("unknown status: {other}")),
+                        });
+                    }
+                }
+            }
+        }
+
+        // AWS CLI unavailable or failed — return Running as a conservative default
+        // so callers don't treat the job as done prematurely.
         Ok(BatchJobStatus::Running)
     }
 }

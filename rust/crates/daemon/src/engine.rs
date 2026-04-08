@@ -177,6 +177,49 @@ impl AgentEngine {
             );
         }
 
+        // --- Intelligence: Inject dependency graph context ---
+        {
+            let dep_graph = intelligence::DependencyGraph::build(workspace_root);
+            if !dep_graph.nodes.is_empty() {
+                // Find files mentioned in the prompt (by path fragment or module name)
+                let mentioned: Vec<String> = dep_graph.nodes.keys()
+                    .filter(|path| {
+                        let stem = std::path::Path::new(path)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        prompt.contains(path.as_str())
+                            || (!stem.is_empty() && stem.len() > 3 && prompt.contains(stem))
+                    })
+                    .cloned()
+                    .take(5)
+                    .collect();
+
+                if !mentioned.is_empty() {
+                    let mut dep_ctx = String::from("## Dependency Graph Context\n");
+                    for file in &mentioned {
+                        let imports = dep_graph.direct_imports(file);
+                        let imported_by = dep_graph.nodes.get(file)
+                            .map(|n| n.imported_by.clone())
+                            .unwrap_or_default();
+                        dep_ctx.push_str(&format!("### {}\n", file));
+                        if !imports.is_empty() {
+                            dep_ctx.push_str(&format!("- imports: {}\n", imports.join(", ")));
+                        }
+                        if !imported_by.is_empty() {
+                            dep_ctx.push_str(&format!("- imported by: {}\n", imported_by.join(", ")));
+                        }
+                    }
+                    system_prompt.push(dep_ctx);
+                    audit_logger.log(
+                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                            format!("dep graph injected: {} files referenced", mentioned.len()))
+                            .with_agent(agent_id),
+                    );
+                }
+            }
+        }
+
         // --- Load custom tools ---
         let custom_tools = tools::CustomToolRegistry::load(&tachy_dir);
         if !custom_tools.tools().is_empty() {
@@ -252,15 +295,32 @@ impl AgentEngine {
 
         // --- Intelligence: Plan-and-Execute or simple run ---
         let use_planning = intelligence_config.planning_enabled && config.template.use_planning;
-        if use_planning {
+        let result = if use_planning {
             Self::run_with_planning(
                 agent_id, config, prompt, &mut runtime, intelligence_config,
                 workspace_root, &index, governance, audit_logger, registry,
-                file_locks, daemon_state,
+                file_locks, daemon_state.clone(),
             )
         } else {
             Self::run_simple(agent_id, config, prompt, &mut runtime, governance, audit_logger)
+        };
+
+        // ── Fire webhooks on agent completion ────────────────────────────
+        if let Some(ref ds) = daemon_state {
+            if let Ok(state) = ds.lock() {
+                let payload = serde_json::json!({
+                    "agent_id": result.agent_id,
+                    "success": result.success,
+                    "iterations": result.iterations,
+                    "tool_invocations": result.tool_invocations,
+                    "summary": &result.summary,
+                });
+                let event = if result.success { "agent.completed" } else { "agent.failed" };
+                state.fire_webhooks(event, &payload);
+            }
         }
+
+        result
     }
 
     /// Simple execution — single run_turn with output validation.

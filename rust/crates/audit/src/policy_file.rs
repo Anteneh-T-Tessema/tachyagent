@@ -51,8 +51,13 @@ impl PolicyFile {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read policy file: {e}"))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("failed to parse policy file: {e}"))
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        match ext {
+            "yaml" | "yml" => serde_yaml::from_str(&content)
+                .map_err(|e| format!("failed to parse YAML policy: {e}")),
+            _ => serde_json::from_str(&content)
+                .map_err(|e| format!("failed to parse JSON policy: {e}")),
+        }
     }
 
     /// Convert to a GovernancePolicy.
@@ -115,15 +120,28 @@ impl PolicyFile {
         }
     }
 
-    /// Save the policy to a JSON file.
+    /// Save the policy — YAML for `.yaml`/`.yml` paths, JSON otherwise.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("failed to serialize policy: {e}"))?;
+        let content = {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            match ext {
+                "yaml" | "yml" => {
+                    let header = "# tachy-policy.yaml — Policy-as-Code\n\
+                                  # Version-control this file alongside your source code.\n\
+                                  # Docs: https://tachy.dev/docs/policy\n\n";
+                    let body = serde_yaml::to_string(self)
+                        .map_err(|e| format!("failed to serialize YAML policy: {e}"))?;
+                    format!("{header}{body}")
+                }
+                _ => serde_json::to_string_pretty(self)
+                    .map_err(|e| format!("failed to serialize JSON policy: {e}"))?,
+            }
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("failed to create policy dir: {e}"))?;
         }
-        std::fs::write(path, json)
+        std::fs::write(path, content)
             .map_err(|e| format!("failed to write policy file: {e}"))
     }
 }

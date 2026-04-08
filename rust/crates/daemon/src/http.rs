@@ -123,6 +123,7 @@ struct TemplateInfo {
     requires_approval: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RunAgentRequest {
     template: String,
@@ -131,6 +132,7 @@ struct RunAgentRequest {
     model: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ScheduleAgentRequest {
     template: String,
@@ -166,32 +168,38 @@ struct ParallelTaskInput {
 
 fn default_priority() -> u8 { 5 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct CancelRunRequest {
     task_id: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct CreateTeamRequest {
     name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct InviteRequest {
     email: String,
     role: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct JoinTeamRequest {
     token: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct UpdateMemberRequest {
     role: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PublishRequest {
     template: platform::AgentTemplate,
@@ -199,6 +207,7 @@ struct PublishRequest {
     version: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct InstallRequest {
     listing_id: String,
@@ -206,6 +215,7 @@ struct InstallRequest {
     version: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RateRequest {
     rating: u8,
@@ -329,6 +339,7 @@ async fn handle_request(
         ("GET", "/api/agents") => Response::json(200, &handle_list_agents(state)),
         ("GET", "/api/tasks") => Response::json(200, &handle_list_tasks(state)),
         ("GET", "/api/audit") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_log(state)),
+        ("GET", "/api/audit/export") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_export(state)),
         ("GET", "/api/metrics") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_metrics(state)),
         ("GET", "/api/conversations") => handle_list_conversations(state),
         ("POST", "/api/conversations") => handle_create_conversation(&body, state),
@@ -339,13 +350,35 @@ async fn handle_request(
         ("GET", "/api/auth/sso/sessions") => handle_sso_sessions(state),
         ("GET", "/api/license/status") => handle_license_status(state),
         ("GET", "/api/billing/status") => handle_billing_status(state),
+        ("GET", "/api/teams") => handle_list_teams(state),
         ("POST", "/api/teams") => handle_create_team(&body, state),
         ("POST", "/api/teams/join") => handle_join_team(&body, state),
+        _ if method == "GET" && path.starts_with("/api/teams/") => {
+            let rest = path.trim_start_matches("/api/teams/");
+            let (team_id, suffix) = rest.split_once('/').unwrap_or((rest, ""));
+            match suffix {
+                "" => handle_get_team(team_id, state),
+                "agents" => handle_team_agents(team_id, state),
+                "audit" => handle_team_audit(team_id, state),
+                _ => Response::json(404, &ErrorResponse { error: "not found".to_string() }),
+            }
+        }
         ("GET", "/api/marketplace") => handle_marketplace_list(&path, state),
         ("POST", "/api/marketplace/install") => handle_install(&body, state),
+        ("GET", "/api/parallel/runs") => handle_list_parallel_runs(state),
         ("POST", "/api/parallel/runs") => handle_parallel_run(&body, state),
         ("GET", "/api/cloud/jobs") => handle_list_cloud_jobs(state),
+        ("POST", "/api/cloud/jobs") => handle_submit_cloud_job(&body, state),
+        _ if method == "GET" && path.starts_with("/api/cloud/jobs/") => {
+            let job_id = path.trim_start_matches("/api/cloud/jobs/");
+            handle_get_cloud_job(job_id, state)
+        }
         ("GET", "/api/swarm/runs") => handle_list_swarm_runs(state),
+        ("POST", "/api/swarm/runs") => handle_start_swarm_run(&body, state),
+        _ if method == "GET" && path.starts_with("/api/swarm/runs/") => {
+            let run_id = path.trim_start_matches("/api/swarm/runs/");
+            handle_get_swarm_run(run_id, state)
+        }
         ("POST", "/api/agents/run") => gate_action(state, raw, audit::Action::RunAgent, |_| handle_run_agent(&body, state)),
         ("GET", "/api/pending-approvals") => handle_list_pending_approvals(state),
         ("POST", "/api/approve") => gate_action(state, raw, audit::Action::ManageGovernance, |_| handle_approve_patch(&body, state)),
@@ -364,6 +397,11 @@ async fn handle_request(
         ("POST", "/api/tasks/schedule") => handle_schedule_task(&body, state),
         ("POST", "/api/license/activate") => handle_license_activate(&body, state),
 
+        ("POST", "/api/prompt") => handle_prompt_oneshot(&body, state),
+        ("GET", "/api/usage") => handle_usage(state),
+        ("POST", "/api/finetune/extract") => handle_finetune_extract(&body, state),
+        ("POST", "/api/finetune/modelfile") => handle_finetune_modelfile(&body, state),
+        ("GET", "/api/diagnostics") => handle_diagnostics(&query_str, state),
         ("POST", "/api/index") => handle_index_build(&body, state),
         ("GET", "/api/index") => handle_index_status(state),
         ("GET", "/api/graph") => handle_dependency_graph(&query_str, state),
@@ -620,6 +658,31 @@ fn handle_audit_log(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &events)
 }
 
+fn handle_audit_export(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let audit_path = s.workspace_root.join(".tachy").join("audit.jsonl");
+    let content = match std::fs::read_to_string(&audit_path) {
+        Ok(c) => c,
+        Err(_) => String::new(),
+    };
+
+    // Build CSV: sequence,timestamp,session_id,kind,message
+    let mut csv = String::from("sequence,timestamp,session_id,kind,message\n");
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            let seq     = v["sequence"].as_u64().unwrap_or(0);
+            let ts      = v["timestamp"].as_str().unwrap_or("").replace(',', " ");
+            let session = v["session_id"].as_str().unwrap_or("").replace(',', " ");
+            let kind    = v["kind"].as_str().unwrap_or("").replace(',', " ");
+            let msg     = v["message"].as_str().unwrap_or("").replace(',', " ").replace('\n', " ");
+            csv.push_str(&format!("{seq},{ts},{session},{kind},{msg}\n"));
+        }
+    }
+
+    let filename = format!("tachy-audit-{}.csv", chrono_now_str());
+    csv_response(&csv, &filename)
+}
+
 fn handle_metrics(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
     let metrics = serde_json::json!({
@@ -646,10 +709,122 @@ fn handle_list_cloud_jobs(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &s.cloud_jobs)
 }
 
+fn handle_submit_cloud_job(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req {
+        name: String,
+        #[serde(default)]
+        command: Vec<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+        region: Option<String>,
+        queue: Option<String>,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let region = req.region.as_deref().unwrap_or("us-east-1");
+    let queue = req.queue.as_deref().unwrap_or("tachy-default");
+    let client = crate::batch_client::BatchClient::new(region, queue);
+
+    match client.submit_job(&req.name, req.command, req.env) {
+        Ok(job) => {
+            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+            s.cloud_jobs.push(job.clone());
+            Response::json(201, &job)
+        }
+        Err(e) => Response::json(500, &ErrorResponse { error: e }),
+    }
+}
+
+fn handle_get_cloud_job(job_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let idx = s.cloud_jobs.iter().position(|j| j.id == job_id);
+    match idx {
+        None => Response::json(404, &ErrorResponse { error: "job not found".to_string() }),
+        Some(i) => {
+            // Try to refresh status via AWS CLI
+            let region = "us-east-1";
+            let queue = "tachy-default";
+            let client = crate::batch_client::BatchClient::new(region, queue);
+            if let Ok(status) = client.get_job_status(job_id) {
+                s.cloud_jobs[i].status = status;
+                s.cloud_jobs[i].updated_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+            }
+            Response::json(200, &s.cloud_jobs[i])
+        }
+    }
+}
+
 fn handle_list_swarm_runs(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
     let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
     Response::json(200, &orch.list_runs())
+}
+
+fn handle_get_swarm_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
+    match orch.get_run(run_id) {
+        Some(run) => Response::json(200, run),
+        None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
+    }
+}
+
+fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let input: intelligence::SwarmRefactorInput = match serde_json::from_str(body) {
+        Ok(i) => i,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+
+    // Generate the swarm plan synchronously (fast — just builds a DAG)
+    let plan = intelligence::plan_swarm_refactor(&input);
+    let run_id = format!("swarm-{}", chrono_now_secs());
+    eprintln!("[swarm] run={run_id} tasks={} planner={:?}", plan.tasks.len(), plan.planner);
+
+    // Convert swarm plan tasks → AgentTask (the parallel runner's unit of work)
+    let now = chrono_now_secs();
+    let agent_tasks: Vec<AgentTask> = plan.tasks.iter().map(|t| AgentTask {
+        id: format!("{run_id}-{}", t.id),
+        run_id: run_id.clone(),
+        template: t.template.clone(),
+        prompt: audit::sanitize_prompt(&t.prompt, 50_000),
+        model: None,
+        deps: t.deps.iter().map(|d| format!("{run_id}-{d}")).collect(),
+        priority: 128,
+        status: TaskStatus::Pending,
+        result: None,
+        created_at: now,
+        started_at: None,
+        completed_at: None,
+        work_dir: None,
+    }).collect();
+
+    let run = ParallelRun {
+        id: run_id.clone(),
+        tasks: agent_tasks,
+        status: RunStatus::Running,
+        created_at: now,
+        max_concurrency: 4,
+    };
+
+    let bg_state = Arc::clone(state);
+    std::thread::spawn(move || {
+        let completed = parallel::execute_parallel_run(run, &bg_state);
+        // Persist final run state into the shared orchestrator for polling
+        if let Ok(s) = bg_state.lock() {
+            if let Ok(mut orch) = s.orchestrator.lock() {
+                orch.register_completed_run(completed);
+            }
+        }
+    });
+
+    Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "running" }))
 }
 
 fn handle_create_conversation(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -677,6 +852,7 @@ fn handle_add_message(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
 
 fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     struct WebhookTrigger { source: Option<String>, event: Option<String>, template: Option<String>, prompt: Option<String>, payload: Option<serde_json::Value> }
     let trigger: WebhookTrigger = match serde_json::from_str(body) { Ok(t) => t, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid webhook body: {e}") }) };
     let _source = trigger.source.as_deref().unwrap_or("unknown");
@@ -701,7 +877,11 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
             AgentEngine::run_agent(&bg_agent_id, &config, &prompt, &s.registry, &governance, &s.audit_logger, &s.config.intelligence, &s.workspace_root, Some(s.file_locks.clone()), Some(Arc::clone(&bg_state)))
         };
         let mut s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(agent) = s.agents.get_mut(&bg_agent_id) { if result.success { agent.mark_completed(&result.summary); } else { agent.mark_failed(&result.summary); } }
+        if let Some(agent) = s.agents.get_mut(&bg_agent_id) {
+            // Truncate summaries to ~4 KB (≈1 000 tokens) before storing to keep state compact.
+            let stored_summary = truncate_completion(&result.summary, 1_000);
+            if result.success { agent.mark_completed(&stored_summary); } else { agent.mark_failed(&stored_summary); }
+        }
         s.save();
     });
 
@@ -710,6 +890,7 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
 
 async fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     struct Req { prefix: String, suffix: Option<String>, model: Option<String>, max_tokens: Option<u32> }
     let req: Req = match serde_json::from_str(body) { Ok(r) => r, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }) };
     let (response, tx) = Response::sse();
@@ -891,28 +1072,110 @@ fn handle_install(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     match s.marketplace.install(&req.listing_id, req.version.as_deref()) { Ok(_) => Response::json(200, &serde_json::json!({ "ok": true })), Err(e) => Response::json(400, &ErrorResponse { error: e.to_string() }) }
 }
 
+fn handle_list_parallel_runs(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
+    let runs: Vec<serde_json::Value> = orch.list_runs().iter().map(|r| serde_json::json!({
+        "run_id": r.id,
+        "status": r.status,
+        "task_count": r.tasks.len(),
+        "created_at": r.created_at,
+    })).collect();
+    Response::json(200, &serde_json::json!({ "runs": runs }))
+}
+
 fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let req: ParallelRunRequest = match serde_json::from_str(body) { Ok(r) => r, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }) };
     let run_id = format!("run-{}", chrono_now_secs());
     let tasks: Vec<AgentTask> = req.tasks.iter().enumerate().map(|(i, t)| AgentTask { id: format!("{run_id}-t{i}"), run_id: run_id.clone(), template: t.template.clone(), prompt: audit::sanitize_prompt(&t.prompt, 50_000), model: t.model.clone(), deps: t.deps.clone(), priority: t.priority, status: TaskStatus::Pending, result: None, created_at: chrono_now_secs(), started_at: None, completed_at: None, work_dir: None }).collect();
     let run = ParallelRun { id: run_id.clone(), tasks, status: RunStatus::Running, created_at: chrono_now_secs(), max_concurrency: req.max_concurrency.min(8).max(1) };
     let bg_state = Arc::clone(state);
-    std::thread::spawn(move || { let _ = parallel::execute_parallel_run(run, &bg_state); });
+    std::thread::spawn(move || {
+        let completed = parallel::execute_parallel_run(run, &bg_state);
+        // Persist final run state so GET /api/parallel/runs/{id} can read it
+        if let Ok(s) = bg_state.lock() {
+            if let Ok(mut orch) = s.orchestrator.lock() {
+                orch.register_completed_run(completed);
+            }
+        }
+    });
     Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "running" }))
 }
 
 fn handle_get_parallel_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let tasks: Vec<_> = s.agents.iter().filter(|(id, _)| id.starts_with(run_id)).map(|(id, agent)| serde_json::json!({ "task_id": id, "status": format!("{:?}", agent.status) })).collect();
-    Response::json(200, &serde_json::json!({ "run_id": run_id, "tasks": tasks }))
+    // Check the orchestrator first (populated when the run completes)
+    let from_orch = s.orchestrator.lock().ok()
+        .and_then(|orch| orch.get_run(run_id).cloned());
+    if let Some(run) = from_orch {
+        return Response::json(200, &run);
+    }
+    // Run still in-flight: derive live status from registered agent instances
+    let tasks: Vec<_> = s.agents.iter()
+        .filter(|(id, _)| id.starts_with(run_id))
+        .map(|(id, agent)| serde_json::json!({
+            "task_id": id,
+            "status": format!("{:?}", agent.status).to_lowercase(),
+            "iterations": agent.iterations_completed,
+            "tool_invocations": agent.tool_invocations,
+        }))
+        .collect();
+    if tasks.is_empty() {
+        return Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") });
+    }
+    Response::json(200, &serde_json::json!({ "run_id": run_id, "status": "running", "tasks": tasks }))
 }
 
-fn handle_team_agents(team_id: &str, _state: &Arc<Mutex<DaemonState>>) -> Response {
-    Response::json(200, &serde_json::json!({ "team_id": team_id, "agents": [] }))
+fn handle_list_teams(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let teams: Vec<&crate::teams::Team> = s.team_manager.teams().values().collect();
+    Response::json(200, &teams)
 }
 
-fn handle_team_audit(team_id: &str, _state: &Arc<Mutex<DaemonState>>) -> Response {
-    Response::json(200, &serde_json::json!({ "team_id": team_id, "audit": "enabled" }))
+fn handle_get_team(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.team_manager.teams().get(team_id) {
+        Some(team) => Response::json(200, team),
+        None => Response::json(404, &ErrorResponse { error: format!("team not found: {team_id}") }),
+    }
+}
+
+fn handle_team_agents(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    // Verify team exists
+    if s.team_manager.teams().get(team_id).is_none() {
+        return Response::json(404, &ErrorResponse { error: format!("team not found: {team_id}") });
+    }
+    // Return agents whose session_id is prefixed with the team_id (convention used when
+    // agents are launched on behalf of a team) or all agents if no naming convention applies.
+    let agents: Vec<serde_json::Value> = s.agents.iter()
+        .filter(|(id, _)| id.contains(team_id))
+        .map(|(id, a)| serde_json::json!({
+            "id": id,
+            "template": a.config.template.name,
+            "status": format!("{:?}", a.status),
+            "iterations": a.iterations_completed,
+            "tool_invocations": a.tool_invocations,
+        }))
+        .collect();
+    Response::json(200, &serde_json::json!({ "team_id": team_id, "agents": agents }))
+}
+
+fn handle_team_audit(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    // Verify team exists
+    if s.team_manager.teams().get(team_id).is_none() {
+        return Response::json(404, &ErrorResponse { error: format!("team not found: {team_id}") });
+    }
+    let audit_path = s.workspace_root.join(".tachy").join("audit.jsonl");
+    let events: Vec<serde_json::Value> = match std::fs::read_to_string(&audit_path) {
+        Ok(content) => content.lines()
+            .filter(|l| !l.trim().is_empty() && l.contains(team_id))
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    Response::json(200, &serde_json::json!({ "team_id": team_id, "events": events }))
 }
 
 fn handle_list_pending_approvals(state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -979,7 +1242,7 @@ async fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>) -> Respons
     // Collect tokens via channel rather than SSE
     let (t_tx, mut t_rx) = tokio::sync::mpsc::channel(256);
     ollama.set_token_tx(t_tx);
-    let max_toks = req.max_tokens.min(4096) as u32;
+    let _max_toks = req.max_tokens.min(4096) as u32;
     let gen_fut = ollama.send_streaming_generate(backend::OllamaGenerateRequest {
         model: ollama.model().to_string(),
         prompt,
@@ -1221,20 +1484,167 @@ fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
 }
 
 /// POST /api/index — trigger a codebase index (re)build for the daemon workspace.
+///
+/// The build runs in a background thread so the HTTP call returns immediately
+/// with 202 Accepted.  Poll `GET /api/index` to check when it completes.
+/// POST /api/prompt — one-shot synchronous prompt for model comparison UI (E2).
+/// Body: { "prompt": "...", "model": "llama3.3", "session_id": "cmp-..." }
+/// Returns: { "response": "...", "model": "...", "token_usage": { ... } }
+fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { prompt: String, model: Option<String>, session_id: Option<String> }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+    let prompt = sanitize_prompt(&req.prompt, 50_000);
+
+    let (registry, governance, intel_cfg, workspace_root, mut template) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let tmpl = s.config.agent_templates.first().cloned()
+            .unwrap_or_else(platform::AgentTemplate::chat_assistant);
+        (s.registry.clone(), s.config.governance.clone(),
+         s.config.intelligence.clone(), s.workspace_root.clone(), tmpl)
+    };
+    let audit_logger = audit::AuditLogger::new();
+
+    if let Some(m) = &req.model { template.model = m.clone(); }
+    let session_id = req.session_id.unwrap_or_else(|| format!("cmp-{}", template.model.replace(|c: char| !c.is_alphanumeric(), "_")));
+    let config = platform::AgentConfig {
+        template,
+        session_id: session_id.clone(),
+        working_directory: workspace_root.to_string_lossy().to_string(),
+        environment: std::collections::BTreeMap::new(),
+    };
+
+    let result = AgentEngine::run_agent(
+        &session_id, &config, &prompt, &registry, &governance,
+        &audit_logger, &intel_cfg, &workspace_root, None, None,
+    );
+
+    Response::json(200, &serde_json::json!({
+        "model": config.template.model,
+        "response": result.summary,
+        "iterations": result.iterations,
+        "tool_invocations": result.tool_invocations,
+        "success": result.success,
+    }))
+}
+
+/// GET /api/usage — return per-user usage aggregates from MeteringService.
+fn handle_usage(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let counters = s.metering.counters();
+    let users: Vec<serde_json::Value> = counters.values().map(|a| serde_json::json!({
+        "user_id": a.user_id,
+        "team_id": a.team_id,
+        "total_input_tokens": a.total_input_tokens,
+        "total_output_tokens": a.total_output_tokens,
+        "total_tool_invocations": a.total_tool_invocations,
+        "total_agent_runs": a.total_agent_runs,
+        "period_start": a.period_start,
+        "period_end": a.period_end,
+    })).collect();
+    let total_tokens: u64 = counters.values().map(|a| a.total_input_tokens + a.total_output_tokens).sum();
+    let total_tools: u64 = counters.values().map(|a| a.total_tool_invocations).sum();
+    let total_runs: u64 = counters.values().map(|a| a.total_agent_runs).sum();
+    Response::json(200, &serde_json::json!({
+        "users": users,
+        "totals": {
+            "tokens": total_tokens,
+            "tool_invocations": total_tools,
+            "agent_runs": total_runs,
+        }
+    }))
+}
+
+/// POST /api/finetune/extract — extract Alpaca-format JSONL from session history.
+/// Body: { "sessions_dir": ".tachy/sessions" } (optional, defaults to workspace)
+/// Returns: { "entries": N, "source_sessions": N, "jsonl": "..." }
+fn handle_finetune_extract(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { sessions_dir: Option<String> }
+    let req: Req = serde_json::from_str(body).unwrap_or(Req { sessions_dir: None });
+    let workspace_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
+    let sessions_dir = req.sessions_dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join(".tachy").join("sessions"));
+
+    let dataset = intelligence::FinetuneDataset::from_sessions(&sessions_dir);
+    Response::json(200, &serde_json::json!({
+        "entries": dataset.total_pairs,
+        "source_sessions": dataset.source_sessions,
+        "jsonl": dataset.to_jsonl(),
+    }))
+}
+
+/// POST /api/finetune/modelfile — generate an Ollama Modelfile for a LoRA adapter.
+/// Body: { "base_model": "mistral:7b", "adapter_path": "./adapter.gguf", "system_prompt": "..." }
+/// Returns: { "modelfile": "FROM mistral:7b\n..." }
+fn handle_finetune_modelfile(body: &str, _state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { base_model: String, adapter_path: String, system_prompt: Option<String> }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+    let prompt = req.system_prompt.as_deref().unwrap_or("You are a helpful AI coding assistant.");
+    let mf = intelligence::generate_modelfile(&req.base_model, &req.adapter_path, prompt);
+    Response::json(200, &serde_json::json!({ "modelfile": mf }))
+}
+
+/// GET /api/diagnostics?file=<path> — return LSP-style diagnostics for a file.
+/// Falls back to empty list if LSP server not available.
+fn handle_diagnostics(query: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let file_path = {
+        let mut path = String::new();
+        for pair in query.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                if k == "file" || k == "path" { path = urlencoding_decode(v); break; }
+            }
+        }
+        path
+    };
+    if file_path.is_empty() {
+        return Response::json(400, &ErrorResponse { error: "missing ?file= param".to_string() });
+    }
+    let workspace_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
+    let lsp = intelligence::LspManager::new(&workspace_root);
+    let diagnostics = lsp.get_diagnostics(&file_path);
+    Response::json(200, &serde_json::json!({
+        "file": file_path,
+        "diagnostics": diagnostics.iter().map(|d| serde_json::json!({
+            "file": d.file,
+            "line": d.line,
+            "column": d.column,
+            "message": d.message,
+            "severity": match d.severity {
+                intelligence::DiagnosticSeverity::Error => "error",
+                intelligence::DiagnosticSeverity::Warning => "warning",
+                _ => "info",
+            },
+            "source": d.source,
+        })).collect::<Vec<_>>(),
+        "count": diagnostics.len(),
+    }))
+}
+
 fn handle_index_build(_body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let ws = {
         let s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.workspace_root.clone()
     };
-    let cfg = intelligence::IndexerConfig::default();
-    match intelligence::CodebaseIndexer::build_index(&ws, &cfg) {
-        Ok(idx) => Response::json(202, &serde_json::json!({
-            "status": "built",
-            "file_count": idx.files.len(),
-            "workspace": ws.display().to_string()
-        })),
-        Err(e) => Response::json(500, &ErrorResponse { error: format!("index build failed: {e}") }),
-    }
+    let ws_display = ws.display().to_string();
+    std::thread::spawn(move || {
+        let cfg = intelligence::IndexerConfig::default();
+        match intelligence::CodebaseIndexer::build_index(&ws, &cfg) {
+            Ok(idx) => eprintln!("[index] build complete: {} files indexed", idx.files.len()),
+            Err(e) => eprintln!("[index] build failed: {e}"),
+        }
+    });
+    Response::json(202, &serde_json::json!({
+        "status": "building",
+        "workspace": ws_display,
+        "message": "Index build started in background — poll GET /api/index for status"
+    }))
 }
 
 /// GET /api/index — return the current index status (file count + workspace path).
@@ -1307,6 +1717,8 @@ fn handle_dashboard(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &serde_json::json!({
         "total_requests": stats.total_requests,
         "total_tokens": total_tokens,
+        "input_tokens": stats.input_tokens,
+        "output_tokens": stats.output_tokens,
         "avg_tokens_per_sec": stats.avg_tokens_per_sec,
         "last_tokens_per_sec": stats.last_tokens_per_sec,
         "p50_ttft_ms": stats.p50_ttft_ms,

@@ -49,6 +49,7 @@ impl AgentTemplate {
                 "grep_search".to_string(),
                 "glob_search".to_string(),
                 "bash".to_string(),
+                "get_diagnostics".to_string(),
             ],
             model: "gemma4:26b".to_string(),
             max_iterations: 10,
@@ -318,6 +319,45 @@ impl AgentTemplate {
             ],
             model: "gemma4:26b".to_string(),
             max_iterations: 15,
+            requires_approval: true,
+            use_planning: true,
+        }
+    }
+
+    /// Performs large-scale code refactoring while preserving behaviour.
+    #[must_use]
+    pub fn refactor() -> Self {
+        Self {
+            name: "refactor".to_string(),
+            description: "Performs large-scale, semantics-preserving code refactoring".to_string(),
+            system_prompt: concat!(
+                "You are a senior software engineer specialising in code refactoring.\n\n",
+                "APPROACH:\n",
+                "1. Read and understand the existing code before changing anything\n",
+                "2. Identify the refactoring scope: rename, extract, inline, split, merge, or restructure\n",
+                "3. Apply changes incrementally — one logical unit at a time\n",
+                "4. Run the test suite after each batch of changes to catch regressions\n",
+                "5. Commit passing batches with a clear conventional commit message\n",
+                "6. Summarise every rename or structural change in REFACTOR.md\n\n",
+                "RULES:\n",
+                "- Never change observable behaviour — refactoring must be semantics-preserving\n",
+                "- Keep PRs focused: one concern per refactor session\n",
+                "- If tests don't exist for the code being changed, add them first\n",
+                "- Prefer small, verifiable steps over large rewrites in one shot\n",
+                "- Flag anything that would require an API-compatibility bump"
+            ).to_string(),
+            allowed_tools: vec![
+                "list_directory".to_string(),
+                "read_file".to_string(),
+                "write_file".to_string(),
+                "edit_file".to_string(),
+                "bash".to_string(),
+                "grep_search".to_string(),
+                "glob_search".to_string(),
+                "get_diagnostics".to_string(),
+            ],
+            model: "gemma4:26b".to_string(),
+            max_iterations: 30,
             requires_approval: true,
             use_planning: true,
         }

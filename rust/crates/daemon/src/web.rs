@@ -308,6 +308,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div class="nav-item" onclick="showPage('usage', this)">📈 Usage Metering</div>
             <div class="nav-item" onclick="showPage('finetune', this)">🔬 Fine-tuning</div>
             <div class="nav-item" onclick="showPage('depgraph', this)">🕸️ Dep Graph</div>
+            <div class="nav-item" onclick="showPage('events', this)">⚡ Live Events</div>
+            <div class="nav-item" onclick="showPage('runtemplates', this)">📋 DAG Templates</div>
 
             <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
                 <div class="stat-label">Workspace Root</div>
@@ -664,6 +666,42 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 </div>
             </section>
 
+            <!-- Wave 2A: Live SSE event stream -->
+            <section id="page-events" class="content">
+                <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid var(--border);">
+                    <div>
+                        <h3 style="margin:0;">⚡ Live Event Stream</h3>
+                        <div style="font-size:12px; color:var(--muted); margin-top:4px;">Real-time SSE feed from the daemon event bus — no polling.</div>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span id="sse-status-badge" style="font-size:11px; padding:4px 10px; border-radius:20px; background:rgba(239,68,68,0.15); color:var(--error);">● Disconnected</span>
+                        <button onclick="clearEvents()" style="background:rgba(255,255,255,0.06); border:1px solid var(--border); color:var(--text); padding:6px 12px; border-radius:6px; font-size:12px; cursor:pointer;">Clear</button>
+                    </div>
+                </div>
+                <div id="event-feed" style="font-family:monospace; font-size:12px; line-height:1.7; max-height:calc(100vh - 220px); overflow-y:auto; margin-top:12px; padding:0 4px;">
+                    <div style="color:var(--muted); text-align:center; padding:40px 0;">Waiting for events…</div>
+                </div>
+            </section>
+
+            <!-- Wave 2D: Named DAG templates -->
+            <section id="page-runtemplates" class="content">
+                <div class="card">
+                    <h3>New DAG Template</h3>
+                    <div style="display:grid; gap:12px; margin-top:16px;">
+                        <input type="text" id="tpl-name" placeholder="Template name (e.g. refactor-auth)" style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); font-family:monospace; font-size:13px;">
+                        <textarea id="tpl-tasks" rows="6" placeholder='JSON tasks array — e.g.\n[{"template":"chat","prompt":"Refactor auth module"},{"template":"code-reviewer","prompt":"Review changes","deps":["refactor-auth"]}]' style="background:var(--surface-solid); border:1px solid var(--border); color:var(--text); padding:12px; border-radius:var(--radius); resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <button onclick="saveRunTemplate()" style="background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Save Template</button>
+                            <span id="tpl-save-status" style="font-size:13px; color:var(--muted);"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>Saved Templates</h3>
+                    <table id="runtemplates-table" style="width:100%; margin-top:12px; border-collapse:collapse;"></table>
+                </div>
+            </section>
+
             <section id="page-search" class="content">
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -732,6 +770,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 case 'usage': loadUsage(); break;
                 case 'finetune': break; // no auto-load needed
                 case 'depgraph': break; // user triggers manually
+                case 'events': break;   // driven by EventSource, not polling
+                case 'runtemplates': loadRunTemplates(); break;
             }
         }
 
@@ -1006,8 +1046,41 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             const data = await r.json();
             const tbody = document.getElementById('parallel-table-body');
             const runs = data.runs || [];
-            tbody.innerHTML = '<thead><tr><th>Run ID</th><th>Status</th><th>Tasks</th></tr></thead>' + 
-                runs.map(r => `<tr><td><code>${r.run_id}</code></td><td>${r.status}</td><td>${r.task_count}</td></tr>`).join('');
+            tbody.innerHTML = '<thead><tr><th>Run ID</th><th>Status</th><th>Tasks</th><th>Cost</th><th>Actions</th></tr></thead>' +
+                runs.map(run => `<tr>
+                    <td><code style="font-size:11px;">${run.run_id}</code></td>
+                    <td><span class="status-badge ${run.status === 'Running' ? 'status-ok' : 'status-err'}">${run.status}</span></td>
+                    <td>${run.task_count}</td>
+                    <td><span id="cost-${run.run_id.replace(/[^a-z0-9]/gi,'_')}" style="color:var(--muted); font-size:12px;">—</span>
+                        <button onclick="fetchRunCost('${run.run_id}')" style="background:none; border:none; color:var(--accent); font-size:11px; cursor:pointer; margin-left:4px;">💰</button></td>
+                    <td><button onclick="replayRun('${run.run_id}')"
+                        style="background:rgba(99,102,241,0.15); border:1px solid var(--accent); color:var(--accent); padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">↺ Replay</button></td>
+                </tr>`).join('');
+        }
+
+        async function fetchRunCost(runId) {
+            try {
+                const r = await apiFetch(`/api/parallel/runs/${runId}/cost`);
+                const d = await r.json();
+                const el = document.getElementById('cost-' + runId.replace(/[^a-z0-9]/gi, '_'));
+                if (el) el.textContent = `$${(d.estimated_cost_usd || 0).toFixed(4)} · ${(d.total_tokens || 0).toLocaleString()} tok`;
+            } catch(e) {}
+        }
+
+        async function replayRun(runId) {
+            const btn = event.target;
+            btn.disabled = true; btn.textContent = '↺ …';
+            try {
+                const r = await apiFetch(`/api/parallel/runs/${runId}/replay`, { method: 'POST', body: '{}' });
+                const d = await r.json();
+                if (r.ok) {
+                    btn.textContent = `↺ ${d.id || 'queued'}`;
+                    setTimeout(loadParallel, 1500);
+                } else {
+                    btn.textContent = '↺ Error';
+                    btn.disabled = false;
+                }
+            } catch(e) { btn.textContent = '↺ Replay'; btn.disabled = false; }
         }
 
         async function launchSwarm() {
@@ -1536,6 +1609,168 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             } catch(e) { /* daemon may be starting */ }
         }
 
+        // ── Wave 2A: Live SSE event stream ────────────────────────────────────
+        let _sseSource = null;
+
+        function initEventStream() {
+            if (_sseSource) return; // already open
+            const feedEl = document.getElementById('event-feed');
+            const badgeEl = document.getElementById('sse-status-badge');
+
+            try {
+                _sseSource = new EventSource('/api/events');
+            } catch(e) {
+                if (badgeEl) { badgeEl.textContent = '● Unavailable'; }
+                return;
+            }
+
+            _sseSource.onopen = () => {
+                if (badgeEl) {
+                    badgeEl.textContent = '● Connected';
+                    badgeEl.style.background = 'rgba(16,185,129,0.15)';
+                    badgeEl.style.color = 'var(--success)';
+                }
+                if (feedEl && feedEl.querySelector('[style*="Waiting"]')) {
+                    feedEl.innerHTML = '';
+                }
+            };
+
+            _sseSource.onmessage = (ev) => {
+                appendEvent(ev.data, 'message');
+            };
+
+            // Named events from publish_event() — e.g. "event: agent_run_complete"
+            ['agent_run_complete','task_complete','run_replay_started','run_replay_complete',
+             'template_run_started','template_run_complete','worker_heartbeat','lag'].forEach(name => {
+                _sseSource.addEventListener(name, (ev) => {
+                    appendEvent(ev.data, name);
+                    // Reactive refresh
+                    if (name === 'agent_run_complete') loadAgents();
+                    if (name === 'task_complete' || name === 'run_replay_complete') loadParallel();
+                });
+            });
+
+            _sseSource.onerror = () => {
+                if (badgeEl) {
+                    badgeEl.textContent = '● Reconnecting…';
+                    badgeEl.style.background = 'rgba(245,158,11,0.15)';
+                    badgeEl.style.color = 'var(--warning)';
+                }
+            };
+        }
+
+        function appendEvent(dataStr, kind) {
+            const feedEl = document.getElementById('event-feed');
+            if (!feedEl) return;
+            let payload = {};
+            try { payload = JSON.parse(dataStr); } catch(e) { payload = { raw: dataStr }; }
+            const ts = payload.ts ? new Date(payload.ts * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+            const kindColor = {
+                agent_run_complete: 'var(--success)',
+                task_complete: 'var(--accent)',
+                run_replay_started: 'var(--warning)',
+                run_replay_complete: 'var(--success)',
+                template_run_started: 'var(--accent)',
+                template_run_complete: 'var(--success)',
+                lag: 'var(--error)',
+            }[kind] || 'var(--muted)';
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.04); display:flex; gap:12px; align-items:baseline;';
+            row.innerHTML = `<span style="color:var(--muted); min-width:80px; font-size:11px;">${ts}</span>`
+                + `<span style="color:${kindColor}; min-width:160px; font-size:11px; font-weight:500;">${kind}</span>`
+                + `<span style="color:var(--text); font-size:11px; word-break:break-all;">${JSON.stringify(payload.payload ?? payload)}</span>`;
+            feedEl.prepend(row); // newest at top
+            // Keep at most 200 rows
+            while (feedEl.children.length > 200) feedEl.removeChild(feedEl.lastChild);
+        }
+
+        function clearEvents() {
+            const feedEl = document.getElementById('event-feed');
+            if (feedEl) feedEl.innerHTML = '<div style="color:var(--muted); text-align:center; padding:40px 0;">Cleared.</div>';
+        }
+
+        // ── Wave 2D: Named DAG templates ──────────────────────────────────────
+        async function loadRunTemplates() {
+            try {
+                const r = await apiFetch('/api/run-templates');
+                const data = await r.json();
+                const templates = (data.templates || []);
+                const tbl = document.getElementById('runtemplates-table');
+                if (!tbl) return;
+                if (!templates.length) {
+                    tbl.innerHTML = '<tr><td colspan="5" style="color:var(--muted); padding:20px 0; font-size:13px;">No templates saved yet. Create one above.</td></tr>';
+                    return;
+                }
+                tbl.innerHTML = '<thead><tr><th style="text-align:left; padding:8px 0; color:var(--muted); font-size:11px;">NAME</th>'
+                    + '<th style="text-align:left; padding:8px; color:var(--muted); font-size:11px;">DESCRIPTION</th>'
+                    + '<th style="text-align:right; padding:8px; color:var(--muted); font-size:11px;">TASKS</th>'
+                    + '<th style="text-align:right; padding:8px; color:var(--muted); font-size:11px;">CONCURRENCY</th>'
+                    + '<th style="padding:8px;"></th></tr></thead>'
+                    + templates.map(t => `<tr style="border-top:1px solid var(--border);">
+                        <td style="padding:10px 0; font-weight:600; font-family:monospace; font-size:13px;">${t.name}</td>
+                        <td style="padding:10px 8px; color:var(--muted); font-size:12px;">${t.description || '—'}</td>
+                        <td style="padding:10px 8px; text-align:right;">${(t.tasks||[]).length}</td>
+                        <td style="padding:10px 8px; text-align:right;">${t.max_concurrency || 4}</td>
+                        <td style="padding:10px 8px; display:flex; gap:6px; justify-content:flex-end;">
+                            <button onclick="executeRunTemplate('${t.name}')"
+                                style="background:rgba(16,185,129,0.15); border:1px solid var(--success); color:var(--success); padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">▶ Run</button>
+                            <button onclick="deleteRunTemplate('${t.name}')"
+                                style="background:rgba(239,68,68,0.1); border:1px solid var(--error); color:var(--error); padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">✕</button>
+                        </td>
+                    </tr>`).join('');
+            } catch(e) {}
+        }
+
+        async function saveRunTemplate() {
+            const name = document.getElementById('tpl-name').value.trim();
+            const tasksRaw = document.getElementById('tpl-tasks').value.trim();
+            const statusEl = document.getElementById('tpl-save-status');
+            if (!name) { statusEl.textContent = 'Name is required.'; statusEl.style.color = 'var(--error)'; return; }
+            let tasks;
+            try { tasks = JSON.parse(tasksRaw); } catch(e) {
+                statusEl.textContent = 'Invalid JSON in tasks field.'; statusEl.style.color = 'var(--error)'; return;
+            }
+            statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--muted)';
+            try {
+                const r = await apiFetch('/api/run-templates', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, tasks }),
+                });
+                const d = await r.json();
+                if (r.ok) {
+                    statusEl.textContent = `Saved "${d.name}"`;
+                    statusEl.style.color = 'var(--success)';
+                    document.getElementById('tpl-name').value = '';
+                    document.getElementById('tpl-tasks').value = '';
+                    loadRunTemplates();
+                } else {
+                    statusEl.textContent = d.error || 'Save failed.';
+                    statusEl.style.color = 'var(--error)';
+                }
+            } catch(e) { statusEl.textContent = 'Request failed.'; statusEl.style.color = 'var(--error)'; }
+        }
+
+        async function deleteRunTemplate(name) {
+            if (!confirm(`Delete template "${name}"?`)) return;
+            try {
+                await apiFetch(`/api/run-templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                loadRunTemplates();
+            } catch(e) {}
+        }
+
+        async function executeRunTemplate(name) {
+            try {
+                const r = await apiFetch(`/api/run-templates/${encodeURIComponent(name)}/run`, { method: 'POST', body: '{}' });
+                const d = await r.json();
+                if (r.ok) {
+                    alert(`Template "${name}" started — run ID: ${d.id || '(queued)'}`);
+                    showPage('parallel', document.querySelector('[onclick*="parallel"]'));
+                } else {
+                    alert(`Error: ${d.error || r.status}`);
+                }
+            } catch(e) { alert(`Request failed: ${e.message}`); }
+        }
+
         // Initialize
         (async () => {
             const health = await (await apiFetch('/health')).json();
@@ -1545,6 +1780,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             checkHealth();
             checkIndexStatus();
             loadDashboardExtended();
+            initEventStream();
             setInterval(checkHealth, 5000);
             setInterval(() => { if(ttftChart) loadMetrics(); }, 3000);
             setInterval(loadDashboardExtended, 10000);

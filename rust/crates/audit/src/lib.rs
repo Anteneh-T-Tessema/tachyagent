@@ -3,6 +3,7 @@ mod event;
 mod license;
 mod logger;
 pub mod metering;
+pub mod oauth;
 mod policy;
 mod policy_engine;
 mod policy_file;
@@ -27,5 +28,6 @@ pub use security::{
     hash_api_key, verify_api_key, is_safe_path, redact_sensitive, sanitize_prompt,
     RateLimiter,
 };
+pub use oauth::{OAuthClientConfig, OAuthManager, OAuthProvider, OAuthSession};
 pub use sso::{SsoConfig, SsoManager, SsoSession, SamlAssertion};
 pub use telemetry::{TelemetryCollector, TelemetryConfig, TelemetryEvent, TelemetrySummary};

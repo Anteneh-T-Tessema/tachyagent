@@ -221,6 +221,7 @@ fn orchestrator_respects_task_dependencies() {
         status: RunStatus::Running,
         created_at: 0,
         max_concurrency: 4,
+        conflicts: vec![],
     };
     orch.submit(run);
 
@@ -270,6 +271,7 @@ fn orchestrator_partial_failure() {
         status: RunStatus::Running,
         created_at: 0,
         max_concurrency: 4,
+        conflicts: vec![],
     };
     orch.submit(run);
 

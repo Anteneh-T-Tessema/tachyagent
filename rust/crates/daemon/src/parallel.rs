@@ -60,6 +60,21 @@ pub struct TaskResult {
     pub audit_hash: String,
 }
 
+/// A semantic conflict detected between parallel worker outputs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticConflict {
+    /// File where the conflict was detected.
+    pub file: String,
+    /// Line number (1-indexed).
+    pub line: u32,
+    /// Human-readable description of the conflict.
+    pub message: String,
+    /// Severity: "error" | "warning".
+    pub severity: String,
+    /// Which task(s) likely caused the conflict.
+    pub suspected_tasks: Vec<TaskId>,
+}
+
 /// A parallel execution run — a DAG of tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParallelRun {
@@ -68,6 +83,9 @@ pub struct ParallelRun {
     pub status: RunStatus,
     pub created_at: u64,
     pub max_concurrency: usize,
+    /// Semantic conflicts detected during post-merge LSP validation.
+    #[serde(default)]
+    pub conflicts: Vec<SemanticConflict>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +245,33 @@ impl Orchestrator {
     pub fn register_completed_run(&mut self, run: ParallelRun) {
         self.runs.insert(run.id.clone(), run);
     }
+
+    /// Append a completed run to the durable JSONL run log.
+    pub fn persist_run(run: &ParallelRun, workspace_root: &std::path::Path) {
+        let log_path = workspace_root.join(".tachy").join("runs.jsonl");
+        if let Ok(line) = serde_json::to_string(run) {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .unwrap_or_else(|e| panic!("cannot open runs log: {e}"));
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    /// Load historical runs from the JSONL run log on daemon startup.
+    pub fn load_run_history(workspace_root: &std::path::Path) -> Vec<ParallelRun> {
+        let log_path = workspace_root.join(".tachy").join("runs.jsonl");
+        let content = match std::fs::read_to_string(&log_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        content.lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    }
 }
 
 /// Execute a parallel run using a thread pool.
@@ -286,8 +331,95 @@ pub fn execute_parallel_run(
     }
 
     // Return the final run state
-    let orch = orchestrator.lock().unwrap();
-    orch.get_run(&run.id).cloned().unwrap_or(run)
+    let mut completed_run = {
+        let orch = orchestrator.lock().unwrap();
+        orch.get_run(&run.id).cloned().unwrap_or(run)
+    };
+
+    // Post-merge semantic validation: run LSP diagnostics across the workspace
+    // and surface conflicts introduced by the parallel workers.
+    if !completed_run.tasks.is_empty() {
+        let workspace_root = state.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace_root
+            .clone();
+        completed_run.conflicts = validate_merge_semantics(&completed_run, &workspace_root);
+        if !completed_run.conflicts.is_empty() {
+            eprintln!(
+                "[parallel] semantic merge validation found {} conflict(s) in run {}",
+                completed_run.conflicts.len(),
+                completed_run.id
+            );
+        }
+    }
+
+    completed_run
+}
+
+/// Run LSP-based semantic validation after all workers have completed.
+///
+/// Collects diagnostics across every file touched by the run, then filters to
+/// errors/warnings that were introduced (did not exist before the run started).
+/// Since we cannot snapshot the "before" state efficiently here, we report all
+/// errors currently present in touched files and flag them for human review.
+fn validate_merge_semantics(run: &ParallelRun, workspace_root: &std::path::Path) -> Vec<SemanticConflict> {
+    // Collect every file referenced in task prompts — rough but cheap heuristic
+    let touched_files: Vec<String> = run.tasks.iter()
+        .flat_map(|t| extract_file_paths_from_prompt(&t.prompt))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if touched_files.is_empty() {
+        return Vec::new();
+    }
+
+    let lsp = intelligence::LspManager::new(workspace_root);
+    let mut conflicts = Vec::new();
+
+    for file in &touched_files {
+        let diags = lsp.get_diagnostics(file);
+        for diag in diags {
+            use intelligence::lsp::DiagnosticSeverity;
+            let is_actionable = matches!(diag.severity, DiagnosticSeverity::Error | DiagnosticSeverity::Warning);
+            if is_actionable {
+                let severity_str = match diag.severity {
+                    DiagnosticSeverity::Error => "error",
+                    DiagnosticSeverity::Warning => "warning",
+                    _ => "info",
+                };
+                // Find which tasks mention this file — they are the suspects
+                let suspects: Vec<TaskId> = run.tasks.iter()
+                    .filter(|t| t.prompt.contains(file.as_str()))
+                    .map(|t| t.id.clone())
+                    .collect();
+
+                conflicts.push(SemanticConflict {
+                    file: diag.file.clone(),
+                    line: diag.line as u32,
+                    message: diag.message.clone(),
+                    severity: severity_str.to_string(),
+                    suspected_tasks: suspects,
+                });
+            }
+        }
+    }
+
+    conflicts
+}
+
+/// Extract file paths heuristically from a task prompt (workspace-relative).
+fn extract_file_paths_from_prompt(prompt: &str) -> Vec<String> {
+    prompt
+        .split_whitespace()
+        .filter(|w| {
+            (w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".py")
+                || w.ends_with(".go") || w.ends_with(".js") || w.ends_with(".tsx"))
+                && !w.contains("://")
+        })
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn execute_single_task(
@@ -432,6 +564,7 @@ mod tests {
             status: RunStatus::Running,
             created_at: 0,
             max_concurrency: 4,
+            conflicts: vec![],
         };
         orch.submit(run);
         let task = orch.next_task().unwrap();

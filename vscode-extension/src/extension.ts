@@ -3,6 +3,8 @@ import { TachyCompletionProvider } from "./completionProvider";
 import { TachyChatProvider } from "./chatProvider";
 import { TachyClient, ModelInfo } from "./client";
 import { registerFixProvider } from "./fixProvider";
+import { DagTreeProvider } from "./dagProvider";
+import { AuditTreeProvider, PolicyDiagnosticProvider } from "./auditProvider";
 
 let completionProvider: vscode.Disposable | undefined;
 let statusBar: vscode.StatusBarItem;
@@ -173,6 +175,95 @@ export function activate(context: vscode.ExtensionContext) {
       const prompt = `Find and fix bugs in this ${lang} code. Show the corrected version:\n\`\`\`${lang}\n${selection}\n\`\`\``;
       await vscode.commands.executeCommand("tachy.chatView.focus");
       chatProvider.sendMessage(prompt);
+    })
+  );
+
+  // ── DAG panel (execution graph) ───────────────────────────────────────
+  const pollMs = vscode.workspace
+    .getConfiguration("tachy")
+    .get<number>("pollIntervalMs", 3000);
+
+  const dagProvider = new DagTreeProvider(client);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("tachy.dagView", dagProvider)
+  );
+  dagProvider.startPolling(pollMs);
+
+  // ── Audit trail panel ─────────────────────────────────────────────────
+  const auditProvider = new AuditTreeProvider(client);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("tachy.auditView", auditProvider)
+  );
+  auditProvider.startPolling(pollMs);
+
+  // ── Policy diagnostic squiggles ───────────────────────────────────────
+  const policyProvider = new PolicyDiagnosticProvider(client);
+  policyProvider.startPolling(pollMs);
+  context.subscriptions.push({ dispose: () => policyProvider.dispose() });
+
+  // ── Run Swarm Refactor on open files ──────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.runSwarm", async () => {
+      const goal = await vscode.window.showInputBox({
+        prompt: "Swarm goal (e.g. 'Add structured logging to all HTTP handlers')",
+        placeHolder: "Describe the refactor goal…",
+      });
+      if (!goal) { return; }
+
+      // Use open file paths as the target set, falling back to workspace files
+      const openFiles = vscode.workspace.textDocuments
+        .filter((d) => !d.isUntitled && d.uri.scheme === "file")
+        .map((d) => vscode.workspace.asRelativePath(d.uri));
+
+      const files = openFiles.length > 0 ? openFiles : [];
+      if (files.length === 0) {
+        vscode.window.showWarningMessage("Open the files you want to swarm-refactor first.");
+        return;
+      }
+
+      vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Tachy Swarm: ${goal}`, cancellable: false },
+        async (progress) => {
+          progress.report({ message: `Planning DAG for ${files.length} files…` });
+          try {
+            const runId = await client.startSwarmRun(goal, files);
+            progress.report({ message: `Run ${runId} started — watch the DAG panel` });
+            dagProvider.refresh();
+            vscode.window.showInformationMessage(`Swarm run ${runId} started. Monitor in the DAG panel.`);
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Swarm failed: ${e.message}`);
+          }
+        }
+      );
+    })
+  );
+
+  // ── Validate policy ───────────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.validatePolicy", async () => {
+      const result = await client.validatePolicy();
+      if (result.error) {
+        vscode.window.showErrorMessage(`Policy error: ${result.error}`);
+      } else {
+        const violations = result.violations?.length ?? 0;
+        vscode.window.showInformationMessage(
+          violations === 0
+            ? "Policy valid — no violations found."
+            : `Policy has ${violations} violation(s). Check the Audit Trail panel.`
+        );
+        policyProvider.refresh();
+        auditProvider.refresh();
+      }
+    })
+  );
+
+  // ── Open web dashboard ────────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.openDashboard", () => {
+      const url = vscode.workspace
+        .getConfiguration("tachy")
+        .get<string>("endpoint", "http://localhost:7777");
+      vscode.env.openExternal(vscode.Uri.parse(url));
     })
   );
 

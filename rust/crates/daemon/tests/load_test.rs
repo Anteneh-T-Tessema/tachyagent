@@ -65,6 +65,7 @@ fn load_20_independent_tasks_complete_within_timeout() {
         status: RunStatus::Running,
         created_at: 0,
         max_concurrency: 8,
+        conflicts: vec![],
     };
 
     let orch = Arc::new(Mutex::new(Orchestrator::new(8)));
@@ -145,6 +146,7 @@ fn load_deep_dependency_chain_strict_order() {
         status: RunStatus::Running,
         created_at: 0,
         max_concurrency: 8,
+        conflicts: vec![],
     };
 
     let mut orch = Orchestrator::new(8);
@@ -266,6 +268,7 @@ fn load_throughput_100_tasks() {
         status: RunStatus::Running,
         created_at: 0,
         max_concurrency: 100, // no concurrency limit for throughput test
+        conflicts: vec![],
     };
 
     let mut orch = Orchestrator::new(100);
@@ -533,6 +536,7 @@ proptest! {
             status: RunStatus::Running,
             created_at: 0,
             max_concurrency: n, // allow all tasks concurrently — deps enforce order
+            conflicts: vec![],
         };
 
         let mut orch = Orchestrator::new(n);
@@ -572,6 +576,7 @@ proptest! {
             status: RunStatus::Running,
             created_at: 0,
             max_concurrency: n,
+            conflicts: vec![],
         };
 
         let mut orch = Orchestrator::new(n);

@@ -263,6 +263,62 @@ export class TachyClient {
     });
   }
 
+  // ── Control-plane APIs ─────────────────────────────────────────────────────
+
+  async listParallelRuns(): Promise<any[]> {
+    try {
+      const data = await this.get("/api/parallel/runs");
+      const parsed = JSON.parse(data);
+      return parsed.runs ?? parsed ?? [];
+    } catch { return []; }
+  }
+
+  async listSwarmRuns(): Promise<any[]> {
+    try {
+      const data = await this.get("/api/swarm/runs");
+      const parsed = JSON.parse(data);
+      return parsed.runs ?? parsed ?? [];
+    } catch { return []; }
+  }
+
+  async getRunConflicts(runId: string): Promise<any[]> {
+    try {
+      const data = await this.get(`/api/parallel/runs/${runId}/conflicts`);
+      const parsed = JSON.parse(data);
+      return parsed.conflicts ?? [];
+    } catch { return []; }
+  }
+
+  async getAuditLog(limit = 100): Promise<any[]> {
+    try {
+      const data = await this.get(`/api/audit?limit=${limit}`);
+      const parsed = JSON.parse(data);
+      return parsed.events ?? parsed ?? [];
+    } catch { return []; }
+  }
+
+  async getPolicyViolations(): Promise<any[]> {
+    try {
+      const data = await this.get("/api/policy");
+      const parsed = JSON.parse(data);
+      return parsed.violations ?? [];
+    } catch { return []; }
+  }
+
+  async startSwarmRun(goal: string, files: string[], model?: string): Promise<string> {
+    const body = JSON.stringify({ goal, files, planner_model: model ?? this.model });
+    const data = await this.post("/api/swarm/runs", body);
+    const parsed = JSON.parse(data);
+    return parsed.run_id ?? "";
+  }
+
+  async validatePolicy(): Promise<any> {
+    try {
+      const data = await this.get("/api/policy");
+      return JSON.parse(data);
+    } catch (e: any) { return { error: e.message }; }
+  }
+
   /**
    * Stream a chat prompt from the daemon.
    * Calls onToken with each new chunk of text.

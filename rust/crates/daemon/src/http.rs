@@ -366,6 +366,7 @@ async fn handle_request(
         ("GET", "/api/marketplace") => handle_marketplace_list(&path, state),
         ("POST", "/api/marketplace/install") => handle_install(&body, state),
         ("GET", "/api/parallel/runs") => handle_list_parallel_runs(state),
+        ("GET", "/api/runs/history") => handle_run_history(state),
         ("POST", "/api/parallel/runs") => handle_parallel_run(&body, state),
         ("GET", "/api/cloud/jobs") => handle_list_cloud_jobs(state),
         ("POST", "/api/cloud/jobs") => handle_submit_cloud_job(&body, state),
@@ -394,11 +395,35 @@ async fn handle_request(
         ("POST", "/api/parallel/run") => handle_parallel_run(&body, state), // spec uses singular
         ("GET", "/api/webhooks") => handle_list_webhooks(state),
         ("POST", "/api/webhooks") => handle_register_webhook(&body, state),
+        ("POST", "/api/webhooks/verify") => handle_verify_webhook_signature(&body, raw, state),
         ("POST", "/api/tasks/schedule") => handle_schedule_task(&body, state),
         ("POST", "/api/license/activate") => handle_license_activate(&body, state),
 
         ("POST", "/api/prompt") => handle_prompt_oneshot(&body, state),
         ("GET", "/api/usage") => handle_usage(state),
+
+        // OAuth2 endpoints
+        _ if method == "GET" && path.starts_with("/api/auth/oauth/") && path.ends_with("/login") => {
+            let provider = path.trim_start_matches("/api/auth/oauth/").trim_end_matches("/login");
+            handle_oauth_login(provider, state)
+        }
+        _ if method == "GET" && path.starts_with("/api/auth/oauth/") && path.contains("/callback") => {
+            let provider = path.trim_start_matches("/api/auth/oauth/")
+                .split('/').next().unwrap_or("");
+            handle_oauth_callback(provider, &query_str, state)
+        }
+        ("POST", "/api/auth/oauth/logout") => handle_oauth_logout(&body, state),
+        ("GET", "/api/auth/oauth/sessions") => handle_oauth_sessions(state),
+
+        // Telemetry
+        ("POST", "/api/telemetry/flush") => handle_telemetry_flush(state),
+        ("GET", "/api/telemetry/status") => handle_telemetry_status(state),
+
+        // Distributed swarm worker registry
+        ("GET", "/api/workers") => handle_list_workers(state),
+        ("POST", "/api/workers/register") => handle_register_worker(&body, state),
+        ("POST", "/api/workers/heartbeat") => handle_worker_heartbeat(&body, state),
+        ("DELETE", "/api/workers/deregister") => handle_deregister_worker(&body, state),
         ("POST", "/api/finetune/extract") => handle_finetune_extract(&body, state),
         ("POST", "/api/finetune/modelfile") => handle_finetune_modelfile(&body, state),
         ("GET", "/api/diagnostics") => handle_diagnostics(&query_str, state),
@@ -427,6 +452,10 @@ async fn handle_request(
             }
             if method == "DELETE" && path.starts_with("/api/conversations/") {
                 return handle_delete_conversation(&path["/api/conversations/".len()..], state);
+            }
+            if method == "GET" && path.starts_with("/api/parallel/runs/") && path.ends_with("/conflicts") {
+                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/conflicts".len()];
+                return handle_get_run_conflicts(run_id, state);
             }
             if method == "GET" && path.starts_with("/api/parallel/runs/") {
                 return handle_get_parallel_run(&path["/api/parallel/runs/".len()..], state);
@@ -777,12 +806,18 @@ fn handle_get_swarm_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Respon
 }
 
 fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let input: intelligence::SwarmRefactorInput = match serde_json::from_str(body) {
+    let mut input: intelligence::SwarmRefactorInput = match serde_json::from_str(body) {
         Ok(i) => i,
         Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
     };
 
-    // Generate the swarm plan synchronously (fast — just builds a DAG)
+    // Inject coordinator config from daemon state so workers stay local
+    {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        input.coordinator = Some(s.config.coordinator.clone());
+    }
+
+    // Generate the swarm plan synchronously — coordinator may call frontier API here
     let plan = intelligence::plan_swarm_refactor(&input);
     let run_id = format!("swarm-{}", chrono_now_secs());
     eprintln!("[swarm] run={run_id} tasks={} planner={:?}", plan.tasks.len(), plan.planner);
@@ -811,13 +846,15 @@ fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Respon
         status: RunStatus::Running,
         created_at: now,
         max_concurrency: 4,
+        conflicts: Vec::new(),
     };
 
     let bg_state = Arc::clone(state);
     std::thread::spawn(move || {
         let completed = parallel::execute_parallel_run(run, &bg_state);
-        // Persist final run state into the shared orchestrator for polling
+        // Persist to durable JSONL log + in-memory orchestrator
         if let Ok(s) = bg_state.lock() {
+            parallel::Orchestrator::persist_run(&completed, &s.workspace_root);
             if let Ok(mut orch) = s.orchestrator.lock() {
                 orch.register_completed_run(completed);
             }
@@ -872,10 +909,25 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let bg_state = Arc::clone(state);
     let bg_agent_id = agent_id.clone();
     std::thread::spawn(move || {
-        let result = {
+        let t0 = std::time::Instant::now();
+        let (result, tracer, model) = {
             let s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
-            AgentEngine::run_agent(&bg_agent_id, &config, &prompt, &s.registry, &governance, &s.audit_logger, &s.config.intelligence, &s.workspace_root, Some(s.file_locks.clone()), Some(Arc::clone(&bg_state)))
+            let model = config.template.model.clone();
+            let tracer = s.tracer.clone();
+            let r = AgentEngine::run_agent(&bg_agent_id, &config, &prompt, &s.registry, &governance, &s.audit_logger, &s.config.intelligence, &s.workspace_root, Some(s.file_locks.clone()), Some(Arc::clone(&bg_state)));
+            (r, tracer, model)
         };
+        let duration_ms = t0.elapsed().as_millis() as u64;
+        crate::telemetry::record_agent_run(
+            &tracer,
+            &bg_agent_id,
+            &model,
+            &config.template.name,
+            result.success,
+            result.iterations,
+            result.tool_invocations,
+            duration_ms,
+        );
         let mut s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(agent) = s.agents.get_mut(&bg_agent_id) {
             // Truncate summaries to ~4 KB (≈1 000 tokens) before storing to keep state compact.
@@ -1088,12 +1140,13 @@ fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response 
     let req: ParallelRunRequest = match serde_json::from_str(body) { Ok(r) => r, Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }) };
     let run_id = format!("run-{}", chrono_now_secs());
     let tasks: Vec<AgentTask> = req.tasks.iter().enumerate().map(|(i, t)| AgentTask { id: format!("{run_id}-t{i}"), run_id: run_id.clone(), template: t.template.clone(), prompt: audit::sanitize_prompt(&t.prompt, 50_000), model: t.model.clone(), deps: t.deps.clone(), priority: t.priority, status: TaskStatus::Pending, result: None, created_at: chrono_now_secs(), started_at: None, completed_at: None, work_dir: None }).collect();
-    let run = ParallelRun { id: run_id.clone(), tasks, status: RunStatus::Running, created_at: chrono_now_secs(), max_concurrency: req.max_concurrency.min(8).max(1) };
+    let run = ParallelRun { id: run_id.clone(), tasks, status: RunStatus::Running, created_at: chrono_now_secs(), max_concurrency: req.max_concurrency.min(8).max(1), conflicts: Vec::new() };
     let bg_state = Arc::clone(state);
     std::thread::spawn(move || {
         let completed = parallel::execute_parallel_run(run, &bg_state);
-        // Persist final run state so GET /api/parallel/runs/{id} can read it
+        // Persist to durable JSONL log + in-memory orchestrator
         if let Ok(s) = bg_state.lock() {
+            parallel::Orchestrator::persist_run(&completed, &s.workspace_root);
             if let Ok(mut orch) = s.orchestrator.lock() {
                 orch.register_completed_run(completed);
             }
@@ -1290,7 +1343,7 @@ fn handle_list_webhooks(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &serde_json::json!({ "webhooks": s.webhooks }))
 }
 
-/// POST /api/webhooks — register a new webhook.
+/// POST /api/webhooks — register a new webhook (optionally with an HMAC-SHA256 secret).
 fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct RegisterWebhookRequest {
@@ -1299,6 +1352,9 @@ fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Respo
         events: Vec<String>,
         #[serde(default = "bool_true")]
         enabled: bool,
+        /// Optional signing secret. Outbound payloads will include
+        /// `X-Tachy-Signature: sha256=<hmac>` when set.
+        secret: Option<String>,
     }
     fn bool_true() -> bool { true }
 
@@ -1314,11 +1370,41 @@ fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Respo
         return Response::json(400, &ErrorResponse { error: "url must start with http:// or https://".to_string() });
     }
     let events = if req.events.is_empty() { vec!["*".to_string()] } else { req.events };
-    let webhook = crate::state::WebhookConfig { url: req.url, events, enabled: req.enabled };
+    let signed = req.secret.is_some();
+    let webhook = crate::state::WebhookConfig { url: req.url, events, enabled: req.enabled, secret: req.secret };
     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
     s.webhooks.push(webhook.clone());
     s.save();
-    Response::json(201, &serde_json::json!({ "ok": true, "webhook": webhook }))
+    Response::json(201, &serde_json::json!({
+        "ok": true,
+        "webhook": webhook,
+        "signed": signed,
+        "note": if signed { "Outbound payloads will include X-Tachy-Signature header" } else { "No signing secret configured" },
+    }))
+}
+
+/// POST /api/webhooks/verify — validate an inbound webhook signature.
+fn handle_verify_webhook_signature(body: &str, raw: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    // Extract X-Tachy-Signature from raw HTTP request headers
+    let sig_header = raw.lines()
+        .find(|l| l.to_lowercase().starts_with("x-tachy-signature:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    // Extract webhook URL from body
+    #[derive(serde::Deserialize)]
+    struct Req { webhook_url: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(_) => return Response::json(400, &ErrorResponse { error: "missing webhook_url".to_string() }),
+    };
+
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.verify_webhook_signature(&req.webhook_url, body.as_bytes(), &sig_header) {
+        Ok(()) => Response::json(200, &serde_json::json!({ "valid": true })),
+        Err(e) => Response::json(401, &serde_json::json!({ "valid": false, "reason": e })),
+    }
 }
 
 /// POST /api/tasks/schedule — register a new recurring agent task.
@@ -1395,6 +1481,212 @@ fn handle_cancel_parallel_run(run_id: &str, _body: &str, state: &Arc<Mutex<Daemo
     // Signal cancellation by marking tasks: in a full implementation this would
     // set a cancellation token; here we record the intent and return accepted.
     Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "cancellation_requested", "tasks": matching.len() }))
+}
+
+// ── Telemetry handlers ────────────────────────────────────────────────────────
+
+/// POST /api/telemetry/flush — force-flush buffered spans to OTLP endpoint.
+fn handle_telemetry_flush(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.tracer.flush();
+    Response::json(200, &serde_json::json!({ "flushed": true }))
+}
+
+/// GET /api/telemetry/status — whether OTLP export is configured.
+fn handle_telemetry_status(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let enabled = s.tracer.is_enabled();
+    let endpoint = std::env::var("TACHY_OTLP_ENDPOINT").unwrap_or_else(|_| "(not set)".to_string());
+    Response::json(200, &serde_json::json!({
+        "enabled": enabled,
+        "otlp_endpoint": endpoint,
+        "service_name": std::env::var("TACHY_SERVICE_NAME").unwrap_or_else(|_| "tachy-daemon".to_string()),
+    }))
+}
+
+// ── Distributed worker registry handlers ─────────────────────────────────────
+
+/// GET /api/workers — list all registered worker daemons.
+fn handle_list_workers(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.worker_registry.prune_stale();
+    let workers = s.worker_registry.list_workers().into_iter().cloned().collect::<Vec<_>>();
+    Response::json(200, &serde_json::json!({
+        "count": workers.len(),
+        "available": s.worker_registry.available_worker_count(),
+        "workers": workers,
+    }))
+}
+
+/// POST /api/workers/register — register a remote worker daemon.
+fn handle_register_worker(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let worker: crate::worker_registry::WorkerNode = match serde_json::from_str(body) {
+        Ok(w) => w,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid worker registration: {e}") }),
+    };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let id = s.worker_registry.register(worker);
+    Response::json(200, &serde_json::json!({ "registered": true, "worker_id": id }))
+}
+
+/// POST /api/workers/heartbeat — update a worker's liveness + active task count.
+fn handle_worker_heartbeat(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct Req { worker_id: String, active_tasks: usize }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid heartbeat: {e}") }),
+    };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if s.worker_registry.heartbeat(&req.worker_id, req.active_tasks) {
+        Response::json(200, &serde_json::json!({ "ok": true }))
+    } else {
+        Response::json(404, &ErrorResponse { error: format!("worker not found: {}", req.worker_id) })
+    }
+}
+
+/// DELETE /api/workers/deregister — remove a worker from the registry.
+fn handle_deregister_worker(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct Req { worker_id: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+    };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.worker_registry.deregister(&req.worker_id);
+    Response::json(200, &serde_json::json!({ "deregistered": true }))
+}
+
+// ── OAuth2 handlers ───────────────────────────────────────────────────────────
+
+/// GET /api/auth/oauth/{provider}/login → redirect to provider authorization URL.
+fn handle_oauth_login(provider_str: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    use audit::{OAuthClientConfig, OAuthProvider};
+
+    let provider = match OAuthProvider::from_str(provider_str) {
+        Some(p) => p,
+        None => return Response::json(400, &ErrorResponse { error: format!("unknown provider: {provider_str}") }),
+    };
+
+    let config = match OAuthClientConfig::from_env(&provider) {
+        Some(c) => c,
+        None => return Response::json(503, &ErrorResponse {
+            error: format!("OAuth2 not configured for {provider_str}. Set TACHY_{}_CLIENT_ID and TACHY_{}_CLIENT_SECRET.",
+                provider_str.to_uppercase(), provider_str.to_uppercase()),
+        }),
+    };
+
+    let (url, _state_token) = {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.oauth_manager.authorization_url(&config)
+    };
+
+    // HTTP 302 redirect
+    Response::Full {
+        status: 302,
+        content_type: "text/plain".to_string(),
+        body: format!("Location: {url}\r\n"),
+    }
+}
+
+/// GET /api/auth/oauth/{provider}/callback?code=...&state=...
+fn handle_oauth_callback(provider_str: &str, query: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    use audit::{OAuthClientConfig, OAuthProvider};
+
+    let provider = match OAuthProvider::from_str(provider_str) {
+        Some(p) => p,
+        None => return Response::json(400, &ErrorResponse { error: format!("unknown provider: {provider_str}") }),
+    };
+
+    let config = match OAuthClientConfig::from_env(&provider) {
+        Some(c) => c,
+        None => return Response::json(503, &ErrorResponse { error: "OAuth2 not configured".to_string() }),
+    };
+
+    // Parse code and state from query string
+    let mut code = String::new();
+    let mut oauth_state = String::new();
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            match k { "code" => code = v.to_string(), "state" => oauth_state = v.to_string(), _ => {} }
+        }
+    }
+
+    if code.is_empty() {
+        return Response::json(400, &ErrorResponse { error: "missing code parameter".to_string() });
+    }
+
+    let result = {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.oauth_manager.handle_callback(&config, &code, &oauth_state)
+    };
+
+    match result {
+        Ok(session) => Response::json(200, &serde_json::json!({
+            "token": session.token,
+            "provider": provider_str,
+            "user_id": session.user_id,
+            "email": session.email,
+            "display_name": session.display_name,
+            "avatar_url": session.avatar_url,
+            "expires_at": session.expires_at,
+        })),
+        Err(e) => Response::json(401, &ErrorResponse { error: e }),
+    }
+}
+
+/// POST /api/auth/oauth/logout — revoke an OAuth2 session token.
+fn handle_oauth_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct Req { token: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(_) => return Response::json(400, &ErrorResponse { error: "missing token".to_string() }),
+    };
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.oauth_manager.revoke_session(&req.token);
+    Response::json(200, &serde_json::json!({ "revoked": true }))
+}
+
+/// GET /api/auth/oauth/sessions — count active OAuth2 sessions.
+fn handle_oauth_sessions(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    Response::json(200, &serde_json::json!({
+        "active_sessions": s.oauth_manager.active_session_count(),
+    }))
+}
+
+/// GET /api/runs/history — all completed runs from the durable JSONL log.
+fn handle_run_history(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let workspace_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
+    let runs = parallel::Orchestrator::load_run_history(&workspace_root);
+    Response::json(200, &serde_json::json!({
+        "count": runs.len(),
+        "runs": runs,
+    }))
+}
+
+/// GET /api/parallel/runs/{id}/conflicts — semantic merge conflicts for a run.
+fn handle_get_run_conflicts(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+        .get_run(run_id).cloned();
+    match run {
+        None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
+        Some(r) => {
+            let count = r.conflicts.len();
+            Response::json(200, &serde_json::json!({
+                "run_id": run_id,
+                "conflict_count": count,
+                "has_conflicts": count > 0,
+                "conflicts": r.conflicts,
+            }))
+        }
+    }
 }
 
 // Helpers

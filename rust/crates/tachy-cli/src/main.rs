@@ -3376,6 +3376,7 @@ fn run_swarm(goal: &str, files: &[String], model: Option<&str>) -> Result<(), Bo
         files: resolved_files.clone(),
         use_llm_planner: true,
         planner_model: planner_model.clone(),
+        coordinator: Some(backend::CoordinatorConfig::from_env()),
     };
 
     // Generate and print the plan

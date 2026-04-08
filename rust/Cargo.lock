@@ -39,6 +39,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "regex",
+ "reqwest",
  "runtime",
  "serde",
  "serde_json",
@@ -192,6 +193,7 @@ dependencies = [
  "intelligence",
  "platform",
  "proptest",
+ "reqwest",
  "runtime",
  "serde",
  "serde_json",

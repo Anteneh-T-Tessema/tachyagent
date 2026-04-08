@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentTemplate;
 use audit::GovernancePolicy;
-use backend::{BackendConfig, BackendKind};
+use backend::{BackendConfig, BackendKind, CoordinatorConfig};
 use intelligence::IntelligenceConfig;
 
 /// Top-level platform configuration — loaded from a config file.
@@ -27,6 +27,10 @@ pub struct PlatformConfig {
     /// Intelligence features configuration.
     #[serde(default)]
     pub intelligence: IntelligenceConfig,
+    /// Coordinator backend for swarm DAG planning.
+    /// Workers always use local Ollama; only the coordinator may call frontier.
+    #[serde(default)]
+    pub coordinator: CoordinatorConfig,
 }
 
 impl Default for PlatformConfig {
@@ -63,6 +67,7 @@ impl Default for PlatformConfig {
             ],
             api_listen: Some("127.0.0.1:7777".to_string()),
             intelligence: IntelligenceConfig::default(),
+            coordinator: CoordinatorConfig::from_env(),
         }
     }
 }

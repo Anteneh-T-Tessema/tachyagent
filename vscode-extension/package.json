@@ -12,8 +12,13 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Machine Learning"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -33,6 +38,16 @@
           "name": "Chat",
           "icon": "$(comment-discussion)",
           "contextualTitle": "Tachy Chat"
+        },
+        {
+          "id": "tachy.dagView",
+          "name": "Execution DAG",
+          "icon": "$(type-hierarchy)"
+        },
+        {
+          "id": "tachy.auditView",
+          "name": "Audit Trail",
+          "icon": "$(shield)"
         }
       ]
     },
@@ -68,6 +83,16 @@
           "type": "number",
           "default": 300,
           "description": "Debounce delay in milliseconds before requesting completion"
+        },
+        "tachy.pollIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "Polling interval for DAG and audit updates (ms)"
+        },
+        "tachy.showPolicyWarningsInline": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show policy violations as VS Code diagnostics"
         }
       }
     },
@@ -96,6 +121,18 @@
       {
         "command": "tachy.fixDiagnostic",
         "title": "⚡ Fix with Tachy"
+      },
+      {
+        "command": "tachy.runSwarm",
+        "title": "Tachy: Run Swarm Refactor on Open Files"
+      },
+      {
+        "command": "tachy.validatePolicy",
+        "title": "Tachy: Validate Policy"
+      },
+      {
+        "command": "tachy.openDashboard",
+        "title": "Tachy: Open Web Dashboard"
       }
     ],
     "menus": {
@@ -129,6 +166,11 @@
         "command": "tachy.selectModel",
         "key": "ctrl+shift+m",
         "mac": "cmd+shift+m"
+      },
+      {
+        "command": "tachy.runSwarm",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s"
       }
     ]
   },
@@ -138,7 +180,7 @@
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.39",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0"
   }

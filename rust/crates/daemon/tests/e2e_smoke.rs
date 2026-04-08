@@ -321,6 +321,7 @@ fn parallel_execution_two_independent_tasks_complete() {
         status: RunStatus::Running,
         created_at: now,
         max_concurrency: 2,
+        conflicts: vec![],
     };
 
     let completed_run = daemon::execute_parallel_run(run, &state);

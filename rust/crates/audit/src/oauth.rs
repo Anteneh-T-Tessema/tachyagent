@@ -1,6 +1,6 @@
-//! OIDC / OAuth2 login support.
+//! OIDC / `OAuth2` login support.
 //!
-//! Provides Google and GitHub OAuth2 flows alongside the existing SAML 2.0 SSO.
+//! Provides Google and GitHub `OAuth2` flows alongside the existing SAML 2.0 SSO.
 //! Lowers the adoption barrier for mid-market teams that cannot deploy SAML.
 //!
 //! Flow:
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-/// Which OAuth2 provider to use.
+/// Which `OAuth2` provider to use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OAuthProvider {
@@ -23,6 +23,8 @@ pub enum OAuthProvider {
 }
 
 impl OAuthProvider {
+    #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "google" => Some(Self::Google),
@@ -31,7 +33,7 @@ impl OAuthProvider {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    #[must_use] pub fn name(&self) -> &'static str {
         match self { Self::Google => "google", Self::GitHub => "github" }
     }
 
@@ -64,7 +66,7 @@ impl OAuthProvider {
     }
 }
 
-/// Per-provider OAuth2 credentials.
+/// Per-provider `OAuth2` credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthClientConfig {
     pub provider: OAuthProvider,
@@ -79,7 +81,7 @@ impl OAuthClientConfig {
     ///
     /// Google: `TACHY_GOOGLE_CLIENT_ID`, `TACHY_GOOGLE_CLIENT_SECRET`, `TACHY_GOOGLE_REDIRECT_URI`
     /// GitHub: `TACHY_GITHUB_CLIENT_ID`, `TACHY_GITHUB_CLIENT_SECRET`, `TACHY_GITHUB_REDIRECT_URI`
-    pub fn from_env(provider: &OAuthProvider) -> Option<Self> {
+    #[must_use] pub fn from_env(provider: &OAuthProvider) -> Option<Self> {
         let prefix = match provider {
             OAuthProvider::Google => "TACHY_GOOGLE",
             OAuthProvider::GitHub => "TACHY_GITHUB",
@@ -99,7 +101,7 @@ impl OAuthClientConfig {
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
-/// An active OAuth2 session.
+/// An active `OAuth2` session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthSession {
     pub token: String,
@@ -112,7 +114,7 @@ pub struct OAuthSession {
 }
 
 impl OAuthSession {
-    pub fn is_expired(&self) -> bool {
+    #[must_use] pub fn is_expired(&self) -> bool {
         now_epoch() >= self.expires_at
     }
 }
@@ -128,7 +130,7 @@ pub struct OAuthManager {
 }
 
 impl OAuthManager {
-    pub fn new() -> Self { Self::default() }
+    #[must_use] pub fn new() -> Self { Self::default() }
 
     /// Generate the authorization URL for a provider.
     /// Returns `(url, state_token)` — state must be stored and validated in callback.
@@ -159,7 +161,7 @@ impl OAuthManager {
         (url, state)
     }
 
-    /// Handle the OAuth2 callback: validate state, exchange code, fetch profile.
+    /// Handle the `OAuth2` callback: validate state, exchange code, fetch profile.
     /// Returns the created session on success.
     pub fn handle_callback(
         &mut self,
@@ -213,7 +215,7 @@ impl OAuthManager {
         self.pending.retain(|_, _| true); // they expire implicitly after ~10 min
     }
 
-    pub fn active_session_count(&self) -> usize {
+    #[must_use] pub fn active_session_count(&self) -> usize {
         self.sessions.values().filter(|s| !s.is_expired()).count()
     }
 }
@@ -325,12 +327,12 @@ fn random_token(bytes: usize) -> String {
     // Encode as hex-ish via repeated FNV-1a
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in raw.bytes() {
-        h ^= b as u64;
+        h ^= u64::from(b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{h:016x}{ts:032x}")
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .take(bytes)
         .collect()
 }

@@ -130,7 +130,7 @@ impl AuditEvent {
         )
     }
 
-    /// Sign this event with a hash chain. Sets sequence, prev_hash, and hash.
+    /// Sign this event with a hash chain. Sets sequence, `prev_hash`, and hash.
     pub fn sign(&mut self, sequence: u64, prev_hash: &str) {
         self.sequence = sequence;
         self.prev_hash = prev_hash.to_string();
@@ -177,6 +177,7 @@ pub fn sha256_bytes_public(message: &[u8]) -> [u8; 32] {
     sha256_bytes(message)
 }
 
+#[allow(clippy::unreadable_literal)]
 fn sha256_bytes(message: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,

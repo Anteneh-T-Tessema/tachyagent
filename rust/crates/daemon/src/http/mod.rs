@@ -13,13 +13,13 @@ mod workers;
 
 // Pull all pub(super) handler functions into scope so handle_request() can
 // call them directly, exactly as before the split.
-use self::agent::*;
-use self::auth::*;
-use self::governance::*;
-use self::intel::*;
-use self::runs::*;
-use self::webhooks::*;
-use self::workers::*;
+use self::agent::{handle_complete_stream, handle_chat_stream, handle_run_agent, handle_complete, handle_prompt_oneshot, handle_get_agent, handle_cancel_agent, handle_delete_agent};
+use self::auth::{handle_sso_login, handle_sso_callback, handle_sso_logout, handle_sso_sessions, handle_license_status, handle_billing_status, handle_sso_config, handle_license_activate, handle_usage, handle_oauth_login, handle_oauth_callback, handle_oauth_logout, handle_oauth_sessions};
+use self::governance::{handle_audit_log, handle_audit_export, handle_metrics, handle_list_conversations, handle_create_conversation, handle_add_message, handle_list_teams, handle_create_team, handle_join_team, handle_get_team, handle_team_agents, handle_team_audit, handle_marketplace_list, handle_install, handle_list_cloud_jobs, handle_submit_cloud_job, handle_get_cloud_job, handle_list_pending_approvals, handle_approve_patch, handle_list_file_locks, handle_get_mission_feed, handle_get_policy, handle_set_policy, handle_schedule_task, handle_dashboard, handle_get_conversation, handle_delete_conversation};
+use self::intel::{handle_search, handle_finetune_extract, handle_finetune_modelfile, handle_diagnostics, handle_index_build, handle_index_status, handle_dependency_graph, handle_monorepo};
+use self::runs::{handle_list_parallel_runs, handle_run_history, handle_parallel_run, handle_list_swarm_runs, handle_start_swarm_run, handle_get_swarm_run, handle_event_stream, handle_list_run_templates, handle_save_run_template, handle_get_run_cost, handle_get_run_conflicts, handle_get_parallel_run, handle_replay_run, handle_cancel_parallel_run, handle_get_run_template, handle_delete_run_template, handle_run_template};
+use self::webhooks::{handle_list_webhooks, handle_register_webhook, handle_verify_webhook_signature};
+use self::workers::{handle_telemetry_flush, handle_telemetry_status, handle_list_workers, handle_register_worker, handle_worker_heartbeat, handle_deregister_worker};
 
 use std::sync::{Arc, Mutex};
 
@@ -164,7 +164,7 @@ pub async fn serve(
         let origin = Arc::clone(&allowed_origin);
 
         tokio::spawn(async move {
-            let mut buf = vec![0u8; 131072];
+            let mut buf = vec![0u8; 131_072];
             let n = match stream.read(&mut buf).await {
                 Ok(n) if n > 0 => n,
                 _ => return,
@@ -221,7 +221,7 @@ async fn handle_request(
     let (method, path_raw, body) = parse_http_request(raw);
     let path_full = path_raw.split('?').next().unwrap_or("/").trim_end_matches('/');
     let path = if path_full.is_empty() { "/" } else { path_full };
-    let query_str = path_raw.find('?').map(|i| &path_raw[i + 1..]).unwrap_or("").to_string();
+    let query_str = path_raw.find('?').map_or("", |i| &path_raw[i + 1..]).to_string();
 
     if method == "OPTIONS" {
         return Response::Full {
@@ -232,7 +232,7 @@ async fn handle_request(
     }
 
     if !path.starts_with("/api/inference/stats") && !matches!(path, "" | "/" | "/index.html" | "/health") {
-        let mut limiter = rate_limiter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut limiter = rate_limiter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let rate_key = if path == "/api/complete" { format!("complete:{client_ip}") } else { client_ip.to_string() };
         if !limiter.check(&rate_key) {
             return Response::json(429, &ErrorResponse { error: "rate limit exceeded".to_string() });
@@ -240,7 +240,7 @@ async fn handle_request(
     }
 
     if !matches!(path, "" | "/" | "/index.html" | "/health") {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(required_key) = &s.api_key {
             let provided = extract_auth_header(raw);
             match provided {
@@ -252,15 +252,15 @@ async fn handle_request(
 
     match (method.as_str(), path) {
         ("GET", "/" | "/index.html") => Response::html(200, web::INDEX_HTML),
-        ("GET", "/health") => Response::json(200, &handle_health(state)),
-        ("GET", "/api/models") => Response::json(200, &handle_list_models(state)),
+        ("GET", "/health") => Response::json(200, handle_health(state)),
+        ("GET", "/api/models") => Response::json(200, handle_list_models(state)),
         ("GET", "/api/inference/stats") => handle_inference_stats(state),
         ("POST", "/api/models/pull") => handle_pull_model(&body, state),
         ("POST", "/api/complete/stream") => handle_complete_stream(&body, state).await,
         ("POST", "/api/chat/stream") => handle_chat_stream(&body, state).await,
-        ("GET", "/api/templates") => Response::json(200, &handle_list_templates(state)),
-        ("GET", "/api/agents") => Response::json(200, &handle_list_agents(state)),
-        ("GET", "/api/tasks") => Response::json(200, &handle_list_tasks(state)),
+        ("GET", "/api/templates") => Response::json(200, handle_list_templates(state)),
+        ("GET", "/api/agents") => Response::json(200, handle_list_agents(state)),
+        ("GET", "/api/tasks") => Response::json(200, handle_list_tasks(state)),
         ("GET", "/api/audit") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_log(state)),
         ("GET", "/api/audit/export") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_export(state)),
         ("GET", "/api/metrics") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_metrics(state)),
@@ -445,7 +445,7 @@ async fn route_dynamic(
 // ---------------------------------------------------------------------------
 
 fn handle_inference_stats(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Response::json(200, &s.inference_stats)
 }
 
@@ -458,11 +458,11 @@ fn handle_pull_model(body: &str, _state: &Arc<Mutex<DaemonState>>) -> Response {
     };
     let model = req.model.clone();
     tokio::spawn(async move { let _ = backend::pull_model(&model); });
-    Response::json(202, &serde_json::json!({ "message": format!("Pulling {} in background", req.model) }))
+    Response::json(202, serde_json::json!({ "message": format!("Pulling {} in background", req.model) }))
 }
 
 fn handle_health(state: &Arc<Mutex<DaemonState>>) -> HealthResponse {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     HealthResponse {
         status: "ok",
         models: s.registry.list_models().len(),
@@ -473,7 +473,7 @@ fn handle_health(state: &Arc<Mutex<DaemonState>>) -> HealthResponse {
 }
 
 fn handle_list_models(state: &Arc<Mutex<DaemonState>>) -> Vec<ModelInfo> {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.registry.list_models().iter().map(|m| ModelInfo {
         name: m.name.clone(),
         backend: format!("{:?}", m.backend),
@@ -483,7 +483,7 @@ fn handle_list_models(state: &Arc<Mutex<DaemonState>>) -> Vec<ModelInfo> {
 }
 
 fn handle_list_templates(state: &Arc<Mutex<DaemonState>>) -> Vec<TemplateInfo> {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.config.agent_templates.iter().map(|t| TemplateInfo {
         name: t.name.clone(),
         description: t.description.clone(),
@@ -495,7 +495,7 @@ fn handle_list_templates(state: &Arc<Mutex<DaemonState>>) -> Vec<TemplateInfo> {
 }
 
 fn handle_list_agents(state: &Arc<Mutex<DaemonState>>) -> Vec<AgentInfo> {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.agents.values().map(|a| AgentInfo {
         id: a.id.clone(),
         template: a.config.template.name.clone(),
@@ -507,7 +507,7 @@ fn handle_list_agents(state: &Arc<Mutex<DaemonState>>) -> Vec<AgentInfo> {
 }
 
 fn handle_list_tasks(state: &Arc<Mutex<DaemonState>>) -> Vec<TaskInfo> {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.scheduler.list_tasks().iter().map(|t| TaskInfo {
         id: t.id.clone(),
         name: t.name.clone(),
@@ -522,18 +522,18 @@ fn handle_list_tasks(state: &Arc<Mutex<DaemonState>>) -> Vec<TaskInfo> {
 // Shared utilities (used by sub-modules via `use super::...`)
 // ---------------------------------------------------------------------------
 
-pub(self) fn chrono_now_secs() -> u64 {
+ fn chrono_now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
 
-pub(self) fn chrono_now_str() -> String {
+ fn chrono_now_str() -> String {
     format!("{}s", chrono_now_secs())
 }
 
-pub(self) fn urlencoding_decode(s: &str) -> String {
+ fn urlencoding_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -555,16 +555,16 @@ pub(self) fn urlencoding_decode(s: &str) -> String {
     out
 }
 
-pub(self) fn truncate_completion(text: &str, max_tokens: usize) -> String {
+ fn truncate_completion(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens * 4;
     if text.len() <= max_chars { text.to_string() } else { text[..max_chars].to_string() }
 }
 
-pub(self) fn csv_response(body: &str, _filename: &str) -> Response {
+ fn csv_response(body: &str, _filename: &str) -> Response {
     Response::Full { status: 200, content_type: "text/csv".to_string(), body: body.to_string() }
 }
 
-pub(self) fn gate_action<F>(state: &Arc<Mutex<DaemonState>>, raw: &str, action: audit::Action, f: F) -> Response
+ fn gate_action<F>(state: &Arc<Mutex<DaemonState>>, raw: &str, action: audit::Action, f: F) -> Response
 where F: FnOnce(&audit::User) -> Response {
     let user = match extract_user(state, raw) {
         Some(u) => u,
@@ -576,8 +576,8 @@ where F: FnOnce(&audit::User) -> Response {
     }
 }
 
-pub(self) fn extract_user(state: &Arc<Mutex<DaemonState>>, raw: &str) -> Option<audit::User> {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+ fn extract_user(state: &Arc<Mutex<DaemonState>>, raw: &str) -> Option<audit::User> {
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let auth = extract_auth_header(raw)?;
     if let Some(user) = s.user_store.authenticate(&audit::hash_api_key(&auth)) {
         return Some(user.clone());
@@ -592,8 +592,8 @@ fn parse_http_request(raw: &str) -> (String, String, String) {
     let mut lines = raw.lines();
     let first_line = lines.next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
-    let method = parts.first().unwrap_or(&"GET").to_string();
-    let path = parts.get(1).unwrap_or(&"/").to_string();
+    let method = (*parts.first().unwrap_or(&"GET")).to_string();
+    let path = (*parts.get(1).unwrap_or(&"/")).to_string();
     let body = if let Some(pos) = raw.find("\r\n\r\n") {
         raw[pos + 4..].to_string()
     } else if let Some(pos) = raw.find("\n\n") {
@@ -604,7 +604,7 @@ fn parse_http_request(raw: &str) -> (String, String, String) {
     (method, path, body)
 }
 
-pub(self) fn extract_auth_header(raw: &str) -> Option<String> {
+ fn extract_auth_header(raw: &str) -> Option<String> {
     for line in raw.lines() {
         let lower = line.to_lowercase();
         if lower.starts_with("authorization:") {

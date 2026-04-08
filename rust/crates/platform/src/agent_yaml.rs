@@ -66,8 +66,8 @@ fn default_max_iter() -> usize { 16 }
 fn default_true() -> bool { true }
 
 impl AgentDefinition {
-    /// Convert to an AgentTemplate for execution.
-    pub fn to_template(&self) -> AgentTemplate {
+    /// Convert to an `AgentTemplate` for execution.
+    #[must_use] pub fn to_template(&self) -> AgentTemplate {
         AgentTemplate {
             name: self.name.clone(),
             description: if self.description.is_empty() {
@@ -86,7 +86,7 @@ impl AgentDefinition {
 }
 
 /// Load all agent definitions from `.tachy/agents/`.
-pub fn load_agent_definitions(tachy_dir: &Path) -> Vec<AgentDefinition> {
+#[must_use] pub fn load_agent_definitions(tachy_dir: &Path) -> Vec<AgentDefinition> {
     let agents_dir = tachy_dir.join("agents");
     if !agents_dir.exists() {
         return Vec::new();
@@ -204,12 +204,11 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
             let val = val.trim();
 
             // Check for multi-line indicator
-            if val == "|" || val == ">" {
-                if key == "system_prompt" {
+            if (val == "|" || val == ">")
+                && key == "system_prompt" {
                     in_system_prompt = true;
                     continue;
                 }
-            }
 
             let val = val.trim_matches('"').trim_matches('\'');
             if !key.is_empty() && !val.is_empty() {

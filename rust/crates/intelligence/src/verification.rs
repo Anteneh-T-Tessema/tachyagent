@@ -51,7 +51,7 @@ pub enum IssueSeverity {
 }
 
 /// Build the verification prompt to send to the model.
-pub fn build_verification_prompt(original_prompt: &str, generated_code: &str) -> String {
+#[must_use] pub fn build_verification_prompt(original_prompt: &str, generated_code: &str) -> String {
     format!(
         "You are a code reviewer. The following code was generated in response to this task:\n\n\
          Task: {original_prompt}\n\n\
@@ -70,14 +70,14 @@ pub fn build_verification_prompt(original_prompt: &str, generated_code: &str) ->
 }
 
 /// Check if a response contains code blocks (indicates the model generated code).
-pub fn contains_code(text: &str) -> bool {
+#[must_use] pub fn contains_code(text: &str) -> bool {
     text.contains("```") || text.contains("fn ") || text.contains("def ")
         || text.contains("function ") || text.contains("class ")
         || text.contains("pub fn ") || text.contains("impl ")
 }
 
 /// Extract code blocks from a response.
-pub fn extract_code_blocks(text: &str) -> Vec<String> {
+#[must_use] pub fn extract_code_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut in_block = false;
     let mut current = String::new();
@@ -103,7 +103,7 @@ pub fn extract_code_blocks(text: &str) -> Vec<String> {
 }
 
 /// Parse verification response to determine if code passed review.
-pub fn parse_verification_response(response: &str) -> VerificationResult {
+#[must_use] pub fn parse_verification_response(response: &str) -> VerificationResult {
     let upper = response.to_uppercase();
 
     if upper.contains("VERIFIED") && !upper.contains("ISSUES") {

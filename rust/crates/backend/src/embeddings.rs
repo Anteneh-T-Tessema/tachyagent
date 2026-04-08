@@ -76,13 +76,13 @@ impl EmbeddingClient {
 
     /// Try to create a client, checking Ollama reachability first.
     /// Returns `None` if Ollama is not running — caller falls back to keyword scoring.
-    pub fn try_new() -> Option<Self> {
+    #[must_use] pub fn try_new() -> Option<Self> {
         let client = Self::new();
         if client.is_reachable() { Some(client) } else { None }
     }
 
     /// Probe the Ollama health endpoint.
-    pub fn is_reachable(&self) -> bool {
+    #[must_use] pub fn is_reachable(&self) -> bool {
         let url = format!("{}/api/tags", self.base_url);
         self.http
             .head(&url)
@@ -148,7 +148,7 @@ impl EmbeddingClient {
     /// Embed a batch of texts. Returns only the successful embeddings paired
     /// with their original index. Failures are silently skipped so a single
     /// bad file doesn't abort the whole index build.
-    pub fn embed_batch(&self, texts: &[&str]) -> Vec<(usize, Vec<f32>)> {
+    #[must_use] pub fn embed_batch(&self, texts: &[&str]) -> Vec<(usize, Vec<f32>)> {
         texts
             .iter()
             .enumerate()

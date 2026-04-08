@@ -23,7 +23,7 @@ pub struct EditTransaction {
 }
 
 impl EditTransaction {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             edits: Vec::new(),
             applied: Vec::new(),
@@ -37,7 +37,7 @@ impl EditTransaction {
         self.edits.push(PendingEdit { path, new_content, original_content: original });
     }
 
-    /// Stage a file edit (replace old_string with new_string). Does NOT write to disk yet.
+    /// Stage a file edit (replace `old_string` with `new_string`). Does NOT write to disk yet.
     pub fn stage_edit(
         &mut self,
         path: impl Into<PathBuf>,
@@ -65,17 +65,17 @@ impl EditTransaction {
     }
 
     /// Number of staged edits.
-    pub fn len(&self) -> usize {
+    #[must_use] pub fn len(&self) -> usize {
         self.edits.len()
     }
 
     /// Whether the transaction is empty.
-    pub fn is_empty(&self) -> bool {
+    #[must_use] pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
     /// List the files that will be modified.
-    pub fn files(&self) -> Vec<&Path> {
+    #[must_use] pub fn files(&self) -> Vec<&Path> {
         self.edits.iter().map(|e| e.path.as_path()).collect()
     }
 

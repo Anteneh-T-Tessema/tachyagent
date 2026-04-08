@@ -115,14 +115,13 @@ impl TaskScheduler {
             .iter()
             .filter(|t| {
                 t.enabled
-                    && match (&t.schedule, t.status) {
-                        (ScheduleRule::Once, TaskStatus::Pending) => true,
-                        (ScheduleRule::Interval { .. }, TaskStatus::Pending | TaskStatus::Completed) => true,
-                        (ScheduleRule::OnFileChange { .. }, TaskStatus::Pending) => true,
-                        (ScheduleRule::OnWebhook { .. }, TaskStatus::Pending) => true,
-                        (ScheduleRule::OnGitEvent { .. }, TaskStatus::Pending) => true,
-                        _ => false,
-                    }
+                    && matches!(
+                        (&t.schedule, t.status),
+                        (ScheduleRule::Once | ScheduleRule::OnFileChange { .. } |
+ScheduleRule::OnWebhook { .. } | ScheduleRule::OnGitEvent { .. },
+TaskStatus::Pending) |
+(ScheduleRule::Interval { .. }, TaskStatus::Pending | TaskStatus::Completed)
+                    )
             })
             .collect()
     }

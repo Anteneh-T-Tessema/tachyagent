@@ -3,7 +3,7 @@
 //! Split into focused sub-modules:
 //!   simple    — single-turn execution + shared helpers
 //!   planning  — plan-and-execute pipeline (multi-step + edit-test-fix)
-//!   executor  — IntelligentToolExecutor (tool dispatch, governance, MCP)
+//!   executor  — `IntelligentToolExecutor` (tool dispatch, governance, MCP)
 
 mod executor;
 mod planning;
@@ -132,8 +132,7 @@ impl AgentEngine {
             if let Some(idx) = &index {
                 let ctx_window = registry
                     .find_model(model)
-                    .map(|m| m.context_window)
-                    .unwrap_or(8192);
+                    .map_or(8192, |m| m.context_window);
 
                 match ContextSelector::select_context(
                     prompt, idx, workspace_root, ctx_window, &intelligence_config.context,
@@ -196,8 +195,7 @@ impl AgentEngine {
                         prompt.contains(path.as_str())
                             || (!stem.is_empty() && stem.len() > 3 && prompt.contains(stem))
                     })
-                    .cloned()
-                    .take(5)
+                    .take(5).cloned()
                     .collect();
 
                 if !mentioned.is_empty() {
@@ -207,7 +205,7 @@ impl AgentEngine {
                         let imported_by = dep_graph.nodes.get(file)
                             .map(|n| n.imported_by.clone())
                             .unwrap_or_default();
-                        dep_ctx.push_str(&format!("### {}\n", file));
+                        dep_ctx.push_str(&format!("### {file}\n"));
                         if !imports.is_empty() {
                             dep_ctx.push_str(&format!("- imports: {}\n", imports.join(", ")));
                         }

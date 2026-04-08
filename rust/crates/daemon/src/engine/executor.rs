@@ -1,4 +1,4 @@
-//! IntelligentToolExecutor — tool dispatch with git, RAG, custom tools, MCP, and governance.
+//! `IntelligentToolExecutor` — tool dispatch with git, RAG, custom tools, MCP, and governance.
 
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +16,7 @@ pub(super) struct IntelligentToolExecutor {
     pub(super) git_enabled: bool,
     pub(super) custom_tools: tools::CustomToolRegistry,
     pub(super) workspace_root: std::path::PathBuf,
-    /// Registry for call_agent tool — allows agents to call other agents.
+    /// Registry for `call_agent` tool — allows agents to call other agents.
     pub(super) registry: Option<Arc<BackendRegistry>>,
     pub(super) governance: Option<GovernancePolicy>,
     pub(super) audit_logger: Option<Arc<AuditLogger>>,
@@ -138,7 +138,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                     .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
 
                 if let Some(ref ds) = self.daemon_state {
-                    let s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                    let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let event = if let Some(discovery) = &input_val.discovery {
                         crate::internal_bus::MissionEvent::Discovery {
                             agent_id: self.agent_id.clone(),
@@ -155,7 +155,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                     };
                     let listeners = s.mission_control.broadcast(event.clone()).unwrap_or(0);
                     {
-                        let mut feed = s.mission_feed.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut feed = s.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         feed.push_front(event);
                         if feed.len() > 100 { feed.pop_back(); }
                     }
@@ -170,8 +170,8 @@ impl ToolExecutor for IntelligentToolExecutor {
                     .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
 
                 if let Some(ref ds) = self.daemon_state {
-                    let s = ds.lock().unwrap_or_else(|e| e.into_inner());
-                    let feed = s.mission_feed.lock().unwrap_or_else(|e| e.into_inner());
+                    let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let feed = s.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let events = feed.iter().take(input_val.limit).map(|e| {
                         intelligence::collaboration::MissionFeedEvent {
                             agent_id: match e {
@@ -180,7 +180,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                                 crate::internal_bus::MissionEvent::ConflictAlert { agent_id, .. } => agent_id.clone(),
                                 _ => "system".to_string(),
                             },
-                            event_type: format!("{:?}", e).split('{').next().unwrap_or("unknown").trim().to_string(),
+                            event_type: format!("{e:?}").split('{').next().unwrap_or("unknown").trim().to_string(),
                             payload: serde_json::to_value(e).unwrap(),
                             timestamp: 0,
                         }
@@ -204,7 +204,7 @@ impl ToolExecutor for IntelligentToolExecutor {
             let value: serde_json::Value = serde_json::from_str(input)
                 .map_err(|e| ToolError::new(format!("invalid input: {e}")))?;
             if let Some(ref ds) = self.daemon_state {
-                let mut s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                let mut s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 return s.mcp_client.call_tool(tool_name, &value).map_err(ToolError::new);
             }
             return Err(ToolError::new("MCP tools not available in this context"));
@@ -233,14 +233,13 @@ impl ToolExecutor for IntelligentToolExecutor {
                     if let Some(audit) = &self.audit_logger {
                         audit.log(
                             &AuditEvent::new("", AuditEventKind::PermissionDenied,
-                                format!("write to '{}' requires approval (governance policy)", file_path))
+                                format!("write to '{file_path}' requires approval (governance policy)"))
                                 .with_tool(tool_name),
                         );
                     }
                     return Err(ToolError::new(format!(
-                        "governance: write to '{}' requires human approval (matches approval_required_paths policy). \
-                         The change was NOT applied. An administrator must approve this change.",
-                        file_path
+                        "governance: write to '{file_path}' requires human approval (matches approval_required_paths policy). \
+                         The change was NOT applied. An administrator must approve this change."
                     )));
                 }
             }
@@ -251,7 +250,7 @@ impl ToolExecutor for IntelligentToolExecutor {
             } else {
                 let old_s = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
                 let new_s = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-                let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let replace_all = value.get("replace_all").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 runtime::preview_edit_file(file_path, old_s, new_s, replace_all).ok()
             };
 
@@ -274,7 +273,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                     };
 
                     let decision = {
-                        let s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                        let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         s.policy_engine.evaluate(&patch)
                     };
 
@@ -293,7 +292,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                                     let original = std::fs::read_to_string(file_path).unwrap_or_default();
                                     let old_s = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
                                     let new_s = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-                                    let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let replace_all = value.get("replace_all").and_then(serde_json::Value::as_bool).unwrap_or(false);
                                     if replace_all { original.replace(old_s, new_s) }
                                     else { original.replacen(old_s, new_s, 1) }
                                 };
@@ -307,7 +306,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                                     agent_id: self.agent_id.clone(),
                                     task_id: None,
                                 };
-                                let mut s = ds.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                                 s.queue_pending_patch(queued_patch, reason.clone())
                             };
                             if let Some(ref locks) = self.file_locks {

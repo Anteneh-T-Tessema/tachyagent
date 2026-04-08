@@ -59,7 +59,7 @@ pub enum Action {
 }
 
 /// Check if a role is allowed to perform an action.
-pub fn check_permission(role: Role, action: Action) -> AccessResult {
+#[must_use] pub fn check_permission(role: Role, action: Action) -> AccessResult {
     let allowed = match action {
         // Everyone can view health and models
         Action::ViewHealth | Action::ListModels | Action::ListTemplates => true,
@@ -90,7 +90,7 @@ pub fn check_permission(role: Role, action: Action) -> AccessResult {
 ///
 /// The caller must resolve the user's role in the team (via `TeamManager::get_member_role`)
 /// and pass it as `team_role`. If the user is not a member, pass `None`.
-pub fn check_team_permission(
+#[must_use] pub fn check_team_permission(
     user_id: &str,
     team_id: &str,
     action: Action,
@@ -117,7 +117,7 @@ impl UserStore {
     }
 
     /// Create a default admin user.
-    pub fn with_default_admin(api_key_hash: &str) -> Self {
+    #[must_use] pub fn with_default_admin(api_key_hash: &str) -> Self {
         let mut store = Self::new();
         store.users.insert("admin".to_string(), User {
             id: "admin".to_string(),
@@ -131,7 +131,7 @@ impl UserStore {
     }
 
     /// Authenticate a user by API key hash. Returns the user if found and enabled.
-    pub fn authenticate(&self, api_key_hash: &str) -> Option<&User> {
+    #[must_use] pub fn authenticate(&self, api_key_hash: &str) -> Option<&User> {
         self.users.values().find(|u| u.enabled && u.api_key_hash == api_key_hash)
     }
 
@@ -146,7 +146,7 @@ impl UserStore {
     }
 
     /// List all users.
-    pub fn list_users(&self) -> Vec<&User> {
+    #[must_use] pub fn list_users(&self) -> Vec<&User> {
         self.users.values().collect()
     }
 }

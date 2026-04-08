@@ -1,7 +1,6 @@
 /// Embedded web UI served from the daemon.
 /// Single HTML file with everything inline — no build step, no npm, no webpack.
 /// Modern, premium dark-mode interface with real-time performance analytics.
-
 pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>

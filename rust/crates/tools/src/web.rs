@@ -1,7 +1,7 @@
 //! Browser/web search tools — give agents access to the internet.
 //!
 //! Two tools:
-//! - `web_search`: Search the web via DuckDuckGo Lite (no API key needed)
+//! - `web_search`: Search the web via `DuckDuckGo` Lite (no API key needed)
 //! - `web_fetch`: Fetch and extract text content from a URL
 //!
 //! Both use `curl` under the hood — no extra Rust dependencies.
@@ -10,7 +10,7 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-/// Input for web_search tool.
+/// Input for `web_search` tool.
 #[derive(Debug, Deserialize)]
 pub struct WebSearchInput {
     pub query: String,
@@ -26,7 +26,7 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-/// Output of web_search.
+/// Output of `web_search`.
 #[derive(Debug, Serialize)]
 pub struct WebSearchOutput {
     pub query: String,
@@ -34,7 +34,7 @@ pub struct WebSearchOutput {
     pub result_count: usize,
 }
 
-/// Input for web_fetch tool.
+/// Input for `web_fetch` tool.
 #[derive(Debug, Deserialize)]
 pub struct WebFetchInput {
     pub url: String,
@@ -42,7 +42,7 @@ pub struct WebFetchInput {
     pub max_length: Option<usize>,
 }
 
-/// Output of web_fetch.
+/// Output of `web_fetch`.
 #[derive(Debug, Serialize)]
 pub struct WebFetchOutput {
     pub url: String,
@@ -51,7 +51,7 @@ pub struct WebFetchOutput {
     pub truncated: bool,
 }
 
-/// Execute a web search using DuckDuckGo Lite HTML scraping.
+/// Execute a web search using `DuckDuckGo` Lite HTML scraping.
 pub fn web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
     let max = input.max_results.unwrap_or(5).min(10);
     let encoded_query = urlencod(&input.query);
@@ -137,7 +137,7 @@ fn curl_get(url: &str, timeout_secs: u64) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Parse DuckDuckGo Lite HTML results.
+/// Parse `DuckDuckGo` Lite HTML results.
 fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
     let mut results = Vec::new();
 
@@ -153,14 +153,8 @@ fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
         };
 
         // Extract href
-        let href_start = match html[..link_pos].rfind("href=\"") {
-            Some(p) => p + 6,
-            None => { pos = link_pos + link_marker.len(); continue; }
-        };
-        let href_end = match html[href_start..].find('"') {
-            Some(p) => href_start + p,
-            None => { pos = link_pos + link_marker.len(); continue; }
-        };
+        let href_start = if let Some(p) = html[..link_pos].rfind("href=\"") { p + 6 } else { pos = link_pos + link_marker.len(); continue; };
+        let href_end = if let Some(p) = html[href_start..].find('"') { href_start + p } else { pos = link_pos + link_marker.len(); continue; };
         let url = html[href_start..href_end].to_string();
 
         // Skip DDG internal links
@@ -170,22 +164,16 @@ fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
         }
 
         // Extract link text (title)
-        let tag_end = match html[link_pos..].find('>') {
-            Some(p) => link_pos + p + 1,
-            None => { pos = link_pos + link_marker.len(); continue; }
-        };
-        let close_a = match html[tag_end..].find("</a>") {
-            Some(p) => tag_end + p,
-            None => { pos = link_pos + link_marker.len(); continue; }
-        };
+        let tag_end = if let Some(p) = html[link_pos..].find('>') { link_pos + p + 1 } else { pos = link_pos + link_marker.len(); continue; };
+        let close_a = if let Some(p) = html[tag_end..].find("</a>") { tag_end + p } else { pos = link_pos + link_marker.len(); continue; };
         let title = strip_html(&html[tag_end..close_a]).trim().to_string();
 
         // Extract snippet — look for the next <td class="result-snippet">
         let snippet_marker = "result-snippet";
         let snippet = if let Some(sp) = html[close_a..].find(snippet_marker) {
             let snippet_start = close_a + sp;
-            let td_end = html[snippet_start..].find('>').map(|p| snippet_start + p + 1).unwrap_or(snippet_start);
-            let td_close = html[td_end..].find("</td>").map(|p| td_end + p).unwrap_or(td_end);
+            let td_end = html[snippet_start..].find('>').map_or(snippet_start, |p| snippet_start + p + 1);
+            let td_close = html[td_end..].find("</td>").map_or(td_end, |p| td_end + p);
             strip_html(&html[td_end..td_close]).trim().to_string()
         } else {
             String::new()

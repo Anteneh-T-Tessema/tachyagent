@@ -44,6 +44,7 @@ pub use verification::{
 
 /// Top-level configuration for all intelligence features.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct IntelligenceConfig {
     /// Enable codebase indexing
     #[serde(default = "default_true")]

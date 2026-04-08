@@ -68,7 +68,7 @@ pub fn embed_summaries(
             for (start, end, text) in chunks {
                 if let Ok(emb) = client.embed(&text) {
                     vector_store.add_chunk(CodeChunk {
-                        id: format!("{}:{}-{}", path, start, end),
+                        id: format!("{path}:{start}-{end}"),
                         path: path.clone(),
                         start_line: start,
                         end_line: end,
@@ -84,7 +84,7 @@ pub fn embed_summaries(
 
 /// Compute a semantic score for a file given a pre-embedded query vector.
 /// Falls back to keyword scoring when embeddings are unavailable.
-pub fn semantic_score(entry: &FileEntry, query_embedding: Option<&[f32]>, keywords: &[String], prompt: &str) -> f32 {
+#[must_use] pub fn semantic_score(entry: &FileEntry, query_embedding: Option<&[f32]>, keywords: &[String], prompt: &str) -> f32 {
     let mut score = 0.0f32;
 
     // Semantic similarity — dominant signal when available
@@ -123,6 +123,7 @@ pub fn semantic_score(entry: &FileEntry, query_embedding: Option<&[f32]>, keywor
     score
 }
 
+#[allow(clippy::unreadable_literal)]
 pub(crate) fn simple_hash(content: &str) -> String {
     // Simple FNV-1a-like hash for change detection (not cryptographic)
     let mut hash: u64 = 0xcbf29ce484222325;

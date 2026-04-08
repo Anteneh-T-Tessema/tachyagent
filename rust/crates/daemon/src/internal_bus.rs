@@ -48,7 +48,7 @@ pub struct MissionControl {
 
 impl MissionControl {
     /// Create a new Mission Control bus.
-    pub fn new(capacity: usize) -> Self {
+    #[must_use] pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
         Self { tx }
     }
@@ -61,7 +61,7 @@ impl MissionControl {
     }
 
     /// Subscribe to the mission event stream.
-    pub fn subscribe(&self) -> broadcast::Receiver<MissionEvent> {
+    #[must_use] pub fn subscribe(&self) -> broadcast::Receiver<MissionEvent> {
         self.tx.subscribe()
     }
 }

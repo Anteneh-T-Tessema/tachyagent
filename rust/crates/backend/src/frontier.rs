@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub enum CoordinatorProvider {
     /// Call Anthropic Claude API (claude-sonnet-4-6 by default).
     Anthropic,
-    /// Call any OpenAI-compatible API (OpenAI, Together, Fireworks, etc.).
+    /// Call any OpenAI-compatible API (`OpenAI`, Together, Fireworks, etc.).
     OpenAi,
     /// Use local Ollama (default, always available, air-gap safe).
     #[default]
@@ -41,7 +41,7 @@ pub struct CoordinatorConfig {
 
 impl CoordinatorConfig {
     /// Load from environment variables. Falls back to local if unset.
-    pub fn from_env() -> Self {
+    #[must_use] pub fn from_env() -> Self {
         let air_gap = std::env::var("TACHY_AIR_GAP")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
@@ -68,12 +68,12 @@ impl CoordinatorConfig {
     }
 
     /// Effective provider after air-gap enforcement.
-    pub fn effective_provider(&self) -> &CoordinatorProvider {
+    #[must_use] pub fn effective_provider(&self) -> &CoordinatorProvider {
         if self.air_gap { &CoordinatorProvider::Local } else { &self.provider }
     }
 
     /// Effective model name for this configuration.
-    pub fn effective_model(&self) -> String {
+    #[must_use] pub fn effective_model(&self) -> String {
         if self.air_gap {
             return self.model.clone().unwrap_or_else(|| "gemma4:26b".to_string());
         }
@@ -93,7 +93,7 @@ pub struct FrontierPlanner {
 }
 
 impl FrontierPlanner {
-    pub fn new(config: CoordinatorConfig) -> Self {
+    #[must_use] pub fn new(config: CoordinatorConfig) -> Self {
         Self {
             config,
             client: reqwest::blocking::Client::builder()
@@ -105,7 +105,7 @@ impl FrontierPlanner {
 
     /// Send a planning prompt and return the raw text response.
     /// Returns `None` if the provider is local (caller falls back to Ollama).
-    pub fn plan(&self, prompt: &str) -> Option<String> {
+    #[must_use] pub fn plan(&self, prompt: &str) -> Option<String> {
         match self.config.effective_provider() {
             CoordinatorProvider::Local => None,
             CoordinatorProvider::Anthropic => self.call_anthropic(prompt),
@@ -115,7 +115,7 @@ impl FrontierPlanner {
 
     fn call_anthropic(&self, prompt: &str) -> Option<String> {
         let api_key = self.config.api_key.as_deref()
-            .or_else(|| {
+            .or({
                 // borrow checker: can't use .ok() inside closure that borrows self
                 None
             })

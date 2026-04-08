@@ -50,7 +50,7 @@ pub struct GetMissionFeedResult {
 }
 
 /// Specification for the collaboration tools.
-pub fn collaboration_tool_specs() -> Vec<serde_json::Value> {
+#[must_use] pub fn collaboration_tool_specs() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({
             "name": "broadcast_mission_status",

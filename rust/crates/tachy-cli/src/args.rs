@@ -1,4 +1,4 @@
-//! CLI argument parsing: CliAction enum + parse_args + sub-parsers.
+//! CLI argument parsing: `CliAction` enum + `parse_args` + sub-parsers.
 
 use std::path::PathBuf;
 
@@ -54,7 +54,7 @@ pub(crate) enum CliAction {
     Dashboard,
     /// F1: export audit log in various compliance formats
     ExportAudit { format: String, output: Option<String> },
-    /// F3: fine-tuning dataset extraction + LoRA script generation
+    /// F3: fine-tuning dataset extraction + `LoRA` script generation
     Finetune { output: Option<String>, base_model: Option<String> },
     /// F2: policy-as-code — view/set/validate tachy-policy.yaml
     Policy { subcommand: String, file: Option<String> },
@@ -140,7 +140,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "channels" => Ok(CliAction::ListChannels),
         "mcp-server" => Ok(CliAction::McpServer),
         "mcp-connect" => {
-            let server = rest.get(1).map(|s| s.to_string());
+            let server = rest.get(1).map(std::string::ToString::to_string);
             Ok(CliAction::McpConnect { server })
         }
         "publish" => {

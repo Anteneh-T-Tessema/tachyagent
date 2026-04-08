@@ -41,7 +41,7 @@ pub struct AgentMemory {
 
 impl AgentMemory {
     /// Load memory from `.tachy/memory.md`.
-    pub fn load(tachy_dir: &Path) -> Self {
+    #[must_use] pub fn load(tachy_dir: &Path) -> Self {
         let path = tachy_dir.join("memory.md");
         let entries = if path.exists() {
             parse_memory_file(&path)
@@ -53,7 +53,7 @@ impl AgentMemory {
 
     /// Get memory content formatted for injection into the system prompt.
     /// Truncates to fit within token budget.
-    pub fn as_system_context(&self) -> Option<String> {
+    #[must_use] pub fn as_system_context(&self) -> Option<String> {
         if self.entries.is_empty() {
             return None;
         }
@@ -91,7 +91,7 @@ impl AgentMemory {
     }
 
     /// Get all entries.
-    pub fn entries(&self) -> &[MemoryEntry] {
+    #[must_use] pub fn entries(&self) -> &[MemoryEntry] {
         &self.entries
     }
 
@@ -137,7 +137,7 @@ fn parse_memory_file(path: &Path) -> Vec<MemoryEntry> {
     let mut current_content = String::new();
 
     for line in content.lines() {
-        if line.starts_with("## ") {
+        if let Some(header) = line.strip_prefix("## ") {
             // Save previous entry
             if !current_content.trim().is_empty() {
                 entries.push(MemoryEntry {
@@ -147,7 +147,6 @@ fn parse_memory_file(path: &Path) -> Vec<MemoryEntry> {
                 });
             }
             // Parse header: "## 2026-04-03T12:00:00 — preference"
-            let header = &line[3..];
             if let Some((ts, cat)) = header.split_once(" — ") {
                 current_timestamp = ts.trim().to_string();
                 current_category = match cat.trim() {

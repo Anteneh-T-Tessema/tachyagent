@@ -82,7 +82,7 @@ pub struct RunCost {
 }
 
 impl RunCost {
-    pub fn from_run(run: &ParallelRun) -> Self {
+    #[must_use] pub fn from_run(run: &ParallelRun) -> Self {
         let mut total_in: u64 = 0;
         let mut total_out: u64 = 0;
         let mut total_cost: f64 = 0.0;
@@ -150,8 +150,14 @@ pub struct TaskQueue {
     tasks: VecDeque<AgentTask>,
 }
 
+impl Default for TaskQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskQueue {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self { tasks: VecDeque::new() }
     }
 
@@ -174,11 +180,11 @@ impl TaskQueue {
         pos.map(|i| self.tasks.remove(i).unwrap())
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use] pub fn len(&self) -> usize {
         self.tasks.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use] pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 }
@@ -193,7 +199,7 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    pub fn new(max_workers: usize) -> Self {
+    #[must_use] pub fn new(max_workers: usize) -> Self {
         Self {
             runs: BTreeMap::new(),
             queue: TaskQueue::new(),
@@ -270,20 +276,20 @@ impl Orchestrator {
     }
 
     /// Get a run's status.
-    pub fn get_run(&self, run_id: &str) -> Option<&ParallelRun> {
+    #[must_use] pub fn get_run(&self, run_id: &str) -> Option<&ParallelRun> {
         self.runs.get(run_id)
     }
 
     /// List all runs.
-    pub fn list_runs(&self) -> Vec<&ParallelRun> {
+    #[must_use] pub fn list_runs(&self) -> Vec<&ParallelRun> {
         self.runs.values().collect()
     }
 
-    pub fn active_count(&self) -> usize {
+    #[must_use] pub fn active_count(&self) -> usize {
         self.active_workers
     }
 
-    pub fn pending_count(&self) -> usize {
+    #[must_use] pub fn pending_count(&self) -> usize {
         self.queue.len()
     }
 
@@ -308,7 +314,7 @@ impl Orchestrator {
     }
 
     /// Load historical runs from the JSONL run log on daemon startup.
-    pub fn load_run_history(workspace_root: &std::path::Path) -> Vec<ParallelRun> {
+    #[must_use] pub fn load_run_history(workspace_root: &std::path::Path) -> Vec<ParallelRun> {
         let log_path = workspace_root.join(".tachy").join("runs.jsonl");
         let content = match std::fs::read_to_string(&log_path) {
             Ok(c) => c,
@@ -345,40 +351,37 @@ pub fn execute_parallel_run(
             orch.next_task()
         };
 
-        match task {
-            Some(task) => {
-                let orch = Arc::clone(&orchestrator);
-                let bg_state = Arc::clone(state);
-                let task_id = task.id.clone();
+        if let Some(task) = task {
+            let orch = Arc::clone(&orchestrator);
+            let bg_state = Arc::clone(state);
+            let task_id = task.id.clone();
 
-                let handle = std::thread::spawn(move || {
-                    // Execute the agent task
-                    let result = execute_single_task(&task, &bg_state);
-                    // Publish task_complete event to the live SSE bus
-                    bg_state.lock().unwrap_or_else(|e| e.into_inner())
-                        .publish_event("task_complete", serde_json::json!({
-                            "task_id": task_id,
-                            "run_id": task.run_id,
-                            "success": result.success,
-                            "iterations": result.iterations,
-                            "tokens_in": result.tokens_in,
-                            "tokens_out": result.tokens_out,
-                        }));
-                    let mut orch = orch.lock().unwrap();
-                    orch.complete_task(&task_id, result);
-                });
-                handles.push(handle);
+            let handle = std::thread::spawn(move || {
+                // Execute the agent task
+                let result = execute_single_task(&task, &bg_state);
+                // Publish task_complete event to the live SSE bus
+                bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .publish_event("task_complete", serde_json::json!({
+                        "task_id": task_id,
+                        "run_id": task.run_id,
+                        "success": result.success,
+                        "iterations": result.iterations,
+                        "tokens_in": result.tokens_in,
+                        "tokens_out": result.tokens_out,
+                    }));
+                let mut orch = orch.lock().unwrap();
+                orch.complete_task(&task_id, result);
+            });
+            handles.push(handle);
+        } else {
+            // Check if all tasks are done
+            let orch = orchestrator.lock().unwrap();
+            if orch.pending_count() == 0 && orch.active_count() == 0 {
+                break;
             }
-            None => {
-                // Check if all tasks are done
-                let orch = orchestrator.lock().unwrap();
-                if orch.pending_count() == 0 && orch.active_count() == 0 {
-                    break;
-                }
-                drop(orch);
-                // Wait a bit before polling again
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+            drop(orch);
+            // Wait a bit before polling again
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 
@@ -397,7 +400,7 @@ pub fn execute_parallel_run(
     // and surface conflicts introduced by the parallel workers.
     if !completed_run.tasks.is_empty() {
         let workspace_root = state.lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .workspace_root
             .clone();
         completed_run.conflicts = validate_merge_semantics(&completed_run, &workspace_root);
@@ -486,7 +489,7 @@ fn execute_single_task(
     // Extract all cloneable data from state before releasing the lock so that
     // run_agent (which re-locks state for webhook firing) does not deadlock.
     let (workspace_root, file_locks, config, registry, governance, intel_cfg) = {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let workspace_root = task.work_dir.clone().unwrap_or_else(|| s.workspace_root.clone());
         let file_locks = s.file_locks.clone();
 
@@ -544,7 +547,7 @@ fn execute_single_task(
     // Get the final audit hash from the shared state logger (it will have been
     // updated by the daemon's own sink during tool calls via the shared state).
     let audit_hash = state.lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .audit_logger
         .last_hash();
 

@@ -58,19 +58,19 @@ pub struct CustomTool {
     pub description: String,
     #[serde(default = "default_tool_type")]
     pub r#type: ToolType,
-    /// Shell command template (for type: shell). Use {param_name} for substitution.
+    /// Shell command template (for type: shell). Use {`param_name`} for substitution.
     #[serde(default)]
     pub command: Option<String>,
     /// HTTP method (for type: http).
     #[serde(default)]
     pub method: Option<String>,
-    /// HTTP URL template (for type: http). Use {param_name} for substitution.
+    /// HTTP URL template (for type: http). Use {`param_name`} for substitution.
     #[serde(default)]
     pub url: Option<String>,
-    /// HTTP headers (for type: http). Values can contain $ENV_VAR references.
+    /// HTTP headers (for type: http). Values can contain $`ENV_VAR` references.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    /// HTTP body template (for type: http). Use {param_name} for substitution.
+    /// HTTP body template (for type: http). Use {`param_name`} for substitution.
     #[serde(default)]
     pub body_template: Option<String>,
     /// Parameter definitions.
@@ -126,7 +126,7 @@ pub struct CustomToolRegistry {
 
 impl CustomToolRegistry {
     /// Load custom tools from `.tachy/tools.yaml`.
-    pub fn load(tachy_dir: &Path) -> Self {
+    #[must_use] pub fn load(tachy_dir: &Path) -> Self {
         let yaml_path = tachy_dir.join("tools.yaml");
         let yml_path = tachy_dir.join("tools.yml");
 
@@ -153,16 +153,16 @@ impl CustomToolRegistry {
         }
     }
 
-    pub fn tools(&self) -> &[CustomTool] {
+    #[must_use] pub fn tools(&self) -> &[CustomTool] {
         &self.tools
     }
 
-    pub fn find(&self, name: &str) -> Option<&CustomTool> {
+    #[must_use] pub fn find(&self, name: &str) -> Option<&CustomTool> {
         self.tools.iter().find(|t| t.name == name)
     }
 
     /// Generate tool specs for the LLM (same format as built-in tools).
-    pub fn tool_specs(&self) -> Vec<super::ToolSpec> {
+    #[must_use] pub fn tool_specs(&self) -> Vec<super::ToolSpec> {
         self.tools.iter().map(|t| {
             let mut properties = serde_json::Map::new();
             let mut required = Vec::new();
@@ -290,7 +290,7 @@ fn execute_http_tool(tool: &CustomTool, input: &Value) -> Result<String, String>
     }
 }
 
-/// Substitute {param_name} placeholders in a template string.
+/// Substitute {`param_name`} placeholders in a template string.
 fn substitute_params(
     template: &str,
     param_defs: &BTreeMap<String, ParamDef>,
@@ -304,7 +304,7 @@ fn substitute_params(
         if result.contains(&placeholder) {
             let value = obj
                 .and_then(|o| o.get(name))
-                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| Some(v.to_string())))
+                .and_then(|v| v.as_str().map(std::string::ToString::to_string).or_else(|| Some(v.to_string())))
                 .or_else(|| def.default.clone())
                 .ok_or_else(|| {
                     if def.required {
@@ -333,14 +333,12 @@ fn sanitize_param_value(value: &str) -> String {
         .replace('`', "")
         .replace("$(", "")
         .replace("${", "")
-        .replace(';', "")
-        .replace('|', "")
-        .replace('&', "")
+        .replace([';', '|', '&'], "")
         .replace('\n', " ")
         .replace('\r', "")
 }
 
-/// Expand $ENV_VAR references in a string.
+/// Expand $`ENV_VAR` references in a string.
 fn expand_env_vars(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut output = String::new();
@@ -370,7 +368,7 @@ fn expand_env_vars(s: &str) -> String {
     output
 }
 
-/// Simple YAML parser for tools.yaml (avoids serde_yaml dependency).
+/// Simple YAML parser for tools.yaml (avoids `serde_yaml` dependency).
 /// Handles the specific structure we need: a list of tool objects.
 fn parse_tools_yaml(content: &str) -> Result<Vec<CustomTool>, String> {
     // Use serde_json by converting our simple YAML to JSON

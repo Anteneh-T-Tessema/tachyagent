@@ -12,7 +12,7 @@ use crate::info::json_output_enabled;
 
 pub(crate) fn run_serve(addr: &str, workspace: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = workspace
-        .map(|p| p.to_path_buf())
+        .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| env::current_dir().unwrap_or_default());
     let state = DaemonState::init(cwd.clone()).map_err(|e| e.to_string())?;
     let state = std::sync::Arc::new(std::sync::Mutex::new(state));
@@ -71,7 +71,7 @@ pub(crate) fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result
 }
 
 pub(crate) fn run_pull(model: &str) -> Result<(), Box<dyn std::error::Error>> {
-    backend::pull_model(model).map_err(|e| e.into())
+    backend::pull_model(model).map_err(std::convert::Into::into)
 }
 
 pub(crate) fn publish_agent(path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +116,7 @@ pub(crate) fn run_mcp_connect(server_filter: Option<&str>) -> Result<(), Box<dyn
             servers.iter()
                 .filter_map(|s| serde_json::from_value(s.clone()).ok())
                 .filter(|s: &daemon::McpServerConfig| {
-                    server_filter.map_or(true, |f| s.name == f)
+                    server_filter.is_none_or(|f| s.name == f)
                 })
                 .collect()
         } else {
@@ -286,14 +286,14 @@ pub(crate) fn run_deploy(profile: Option<&str>, region: Option<&str>) -> Result<
     println!("✓ (ready for packaging)");
 
     println!("☁ Checking AWS environment:");
-    if let Some(p) = profile { println!("  Profile: {}", p); }
-    if let Some(r) = region { println!("  Region:  {}", r); }
+    if let Some(p) = profile { println!("  Profile: {p}"); }
+    if let Some(r) = region { println!("  Region:  {r}"); }
 
     let has_aws_cli = std::process::Command::new("aws").arg("--version").output().is_ok();
-    if !has_aws_cli {
-        println!("  ⚠ Warning: 'aws' CLI not found. Job submission will require native SDK.");
-    } else {
+    if has_aws_cli {
         println!("  ✓ AWS CLI detected");
+    } else {
+        println!("  ⚠ Warning: 'aws' CLI not found. Job submission will require native SDK.");
     }
 
     print!("🐳 Packaging OCI container... ");

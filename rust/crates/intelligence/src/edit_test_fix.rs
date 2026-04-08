@@ -71,7 +71,7 @@ pub struct DiagnosticResult {
 }
 
 impl DiagnosticResult {
-    pub fn has_errors(&self) -> bool {
+    #[must_use] pub fn has_errors(&self) -> bool {
         self.error_count > 0
     }
 }
@@ -80,7 +80,7 @@ pub struct EditTestFix;
 
 impl EditTestFix {
     /// Detect the project's test command.
-    pub fn detect_test_command(
+    #[must_use] pub fn detect_test_command(
         workspace_root: &Path,
         index: Option<&CodebaseIndex>,
     ) -> Option<String> {
@@ -141,7 +141,7 @@ impl EditTestFix {
     }
 
     /// Build the fix prompt to send to the LLM after test failure.
-    pub fn build_fix_prompt(
+    #[must_use] pub fn build_fix_prompt(
         test_command: &str,
         result: &TestResult,
         edited_files: &[String],
@@ -175,7 +175,7 @@ impl EditTestFix {
 
     /// Run LSP diagnostics on the edited files.
     /// Returns errors/warnings without needing to run the full test suite.
-    pub fn run_diagnostics(
+    #[must_use] pub fn run_diagnostics(
         workspace_root: &Path,
         edited_files: &[String],
     ) -> DiagnosticResult {
@@ -205,7 +205,7 @@ impl EditTestFix {
     }
 
     /// Build a fix prompt from LSP diagnostics (faster than test-based fix prompts).
-    pub fn build_diagnostic_fix_prompt(
+    #[must_use] pub fn build_diagnostic_fix_prompt(
         diag_result: &DiagnosticResult,
         edited_files: &[String],
     ) -> String {
@@ -238,7 +238,7 @@ impl EditTestFix {
 
     /// Combined diagnostic + test cycle. Runs diagnostics first (fast), then tests.
     /// Returns early if diagnostics find errors — no point running tests on broken code.
-    pub fn run_diagnostic_then_test(
+    #[must_use] pub fn run_diagnostic_then_test(
         workspace_root: &Path,
         edited_files: &[String],
         test_command: &str,

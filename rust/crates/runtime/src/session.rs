@@ -131,7 +131,7 @@ impl Session {
     }
 
     /// List all branches.
-    pub fn list_branches(&self) -> Vec<&SessionBranch> {
+    #[must_use] pub fn list_branches(&self) -> Vec<&SessionBranch> {
         self.branches.iter().collect()
     }
 

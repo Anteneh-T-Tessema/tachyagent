@@ -44,7 +44,7 @@ pub struct DependencyGraph {
 
 impl DependencyGraph {
     /// Build a full dependency graph by scanning all source files under `root`.
-    pub fn build(root: &Path) -> Self {
+    #[must_use] pub fn build(root: &Path) -> Self {
         let built_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -82,7 +82,7 @@ impl DependencyGraph {
     /// Return all transitive dependents of `file` via BFS over reverse edges.
     ///
     /// These are files that could be affected if `file` changes.
-    pub fn transitive_dependents(&self, file: &str) -> Vec<String> {
+    #[must_use] pub fn transitive_dependents(&self, file: &str) -> Vec<String> {
         let mut visited = BTreeSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(file.to_string());
@@ -101,7 +101,7 @@ impl DependencyGraph {
     }
 
     /// Return the direct imports of `file`.
-    pub fn direct_imports(&self, file: &str) -> Vec<String> {
+    #[must_use] pub fn direct_imports(&self, file: &str) -> Vec<String> {
         self.nodes
             .get(file)
             .map(|n| n.imports.clone())

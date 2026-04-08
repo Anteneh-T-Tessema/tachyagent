@@ -123,29 +123,7 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
             let mut delimiter = "";
             for line in content.lines().take(40) {
                 let t = line.trim();
-                if !in_doc {
-                    if t.starts_with("\"\"\"") || t.starts_with("'''") {
-                        delimiter = if t.starts_with("\"\"\"") { "\"\"\"" } else { "'''" };
-                        let rest = t.trim_start_matches(delimiter);
-                        // Single-line docstring
-                        if let Some(end) = rest.find(delimiter) {
-                            let single = rest[..end].trim();
-                            if !single.is_empty() {
-                                return Some(single.to_string());
-                            }
-                            return None;
-                        }
-                        if !rest.trim().is_empty() {
-                            doc_lines.push(rest.trim());
-                        }
-                        in_doc = true;
-                    } else if t.starts_with('#') || t.is_empty()
-                        || t.starts_with("import ") || t.starts_with("from ") {
-                        continue;
-                    } else {
-                        break; // hit code, no module docstring
-                    }
-                } else {
+                if in_doc {
                     if t.contains(delimiter) {
                         let before = t.split(delimiter).next().unwrap_or("").trim();
                         if !before.is_empty() {
@@ -159,6 +137,26 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                     if doc_lines.len() >= 4 {
                         break;
                     }
+                } else if t.starts_with("\"\"\"") || t.starts_with("'''") {
+                    delimiter = if t.starts_with("\"\"\"") { "\"\"\"" } else { "'''" };
+                    let rest = t.trim_start_matches(delimiter);
+                    // Single-line docstring
+                    if let Some(end) = rest.find(delimiter) {
+                        let single = rest[..end].trim();
+                        if !single.is_empty() {
+                            return Some(single.to_string());
+                        }
+                        return None;
+                    }
+                    if !rest.trim().is_empty() {
+                        doc_lines.push(rest.trim());
+                    }
+                    in_doc = true;
+                } else if t.starts_with('#') || t.is_empty()
+                    || t.starts_with("import ") || t.starts_with("from ") {
+                    // skip imports/comments
+                } else {
+                    break; // hit code, no module docstring
                 }
             }
             if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
@@ -169,25 +167,7 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
             let mut doc_lines = Vec::new();
             for line in content.lines().take(30) {
                 let t = line.trim();
-                if !in_block {
-                    if t.starts_with("/**") {
-                        in_block = true;
-                        let rest = t.trim_start_matches("/**").trim_end_matches("*/").trim();
-                        if !rest.is_empty() {
-                            doc_lines.push(rest.to_string());
-                        }
-                    } else if t.starts_with("//") {
-                        let rest = t.trim_start_matches("//").trim();
-                        if !rest.is_empty() {
-                            doc_lines.push(rest.to_string());
-                        }
-                        if doc_lines.len() >= 3 {
-                            break;
-                        }
-                    } else if !t.is_empty() && !t.starts_with("import") && !t.starts_with("'use") {
-                        break;
-                    }
-                } else {
+                if in_block {
                     if t.contains("*/") {
                         let before = t.split("*/").next().unwrap_or("")
                             .trim_start_matches('*').trim();
@@ -203,6 +183,22 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                     if doc_lines.len() >= 4 {
                         break;
                     }
+                } else if t.starts_with("/**") {
+                    in_block = true;
+                    let rest = t.trim_start_matches("/**").trim_end_matches("*/").trim();
+                    if !rest.is_empty() {
+                        doc_lines.push(rest.to_string());
+                    }
+                } else if t.starts_with("//") {
+                    let rest = t.trim_start_matches("//").trim();
+                    if !rest.is_empty() {
+                        doc_lines.push(rest.to_string());
+                    }
+                    if doc_lines.len() >= 3 {
+                        break;
+                    }
+                } else if !t.is_empty() && !t.starts_with("import") && !t.starts_with("'use") {
+                    break;
                 }
             }
             if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
@@ -235,7 +231,7 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
 /// "daemon/src/http.rs"    → "daemon http"
 fn path_to_module_hint(path: &str) -> String {
     let without_ext = path.rsplit('.').nth(1).map_or(path, |_| {
-        path.rsplit_once('.').map(|(l, _)| l).unwrap_or(path)
+        path.rsplit_once('.').map_or(path, |(l, _)| l)
     });
     let parts: Vec<&str> = without_ext
         .split('/')

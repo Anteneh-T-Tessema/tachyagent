@@ -32,7 +32,7 @@ pub struct SearchResultEntry {
 
 
 /// Returns the tool specifications for RAG tools.
-pub fn rag_tool_specs() -> Vec<tools::ToolSpec> {
+#[must_use] pub fn rag_tool_specs() -> Vec<tools::ToolSpec> {
     vec![
         tools::ToolSpec {
             name: "search_codebase",

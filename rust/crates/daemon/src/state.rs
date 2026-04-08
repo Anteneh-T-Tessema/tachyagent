@@ -149,7 +149,7 @@ pub struct DaemonState {
     pub patch_counter: u64,
     /// SSO/SAML manager for enterprise authentication.
     pub sso_manager: SsoManager,
-    /// OAuth2 manager for Google/GitHub login.
+    /// `OAuth2` manager for Google/GitHub login.
     pub oauth_manager: OAuthManager,
     /// User store for RBAC.
     pub user_store: audit::UserStore,
@@ -163,7 +163,7 @@ pub struct DaemonState {
     pub team_manager: TeamManager,
     /// Agent marketplace.
     pub marketplace: Marketplace,
-    /// SaaS platform (None if not in SaaS mode).
+    /// `SaaS` platform (None if not in `SaaS` mode).
     pub saas: Option<SaaSPlatform>,
     /// Real-time inference performance tracking.
     pub inference_stats: InferenceStats,
@@ -177,7 +177,7 @@ pub struct DaemonState {
     pub mission_feed: Arc<Mutex<VecDeque<crate::internal_bus::MissionEvent>>>,
     /// Distributed swarm worker registry (multi-machine execution).
     pub worker_registry: crate::worker_registry::WorkerRegistry,
-    /// OpenTelemetry-compatible tracer (no-op when TACHY_OTLP_ENDPOINT not set).
+    /// OpenTelemetry-compatible tracer (no-op when `TACHY_OTLP_ENDPOINT` not set).
     pub tracer: crate::telemetry::Tracer,
     /// Live event bus — subscribers receive SSE messages in real time.
     /// Capacity 256: oldest events dropped if no consumer keeps up.
@@ -196,7 +196,7 @@ pub struct RunTemplate {
     pub created_at: u64,
 }
 
-/// A task definition inside a RunTemplate.
+/// A task definition inside a `RunTemplate`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateTask {
     pub template: String,
@@ -406,7 +406,7 @@ impl DaemonState {
     /// Approve a pending patch — apply it to disk.
     pub fn approve_patch(&mut self, patch_id: &str) -> Result<String, String> {
         let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
-            .ok_or_else(|| format!("patch '{}' not found", patch_id))?;
+            .ok_or_else(|| format!("patch '{patch_id}' not found"))?;
         let pending = self.pending_patches.remove(idx);
         // Apply the patch
         std::fs::write(&pending.patch.file_path, &pending.patch.new_content)
@@ -423,7 +423,7 @@ impl DaemonState {
     /// Reject a pending patch — discard it.
     pub fn reject_patch(&mut self, patch_id: &str) -> Result<String, String> {
         let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
-            .ok_or_else(|| format!("patch '{}' not found", patch_id))?;
+            .ok_or_else(|| format!("patch '{patch_id}' not found"))?;
         let pending = self.pending_patches.remove(idx);
         self.audit_logger.log(
             &AuditEvent::new("daemon", AuditEventKind::PermissionDenied,
@@ -655,6 +655,7 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> String {
 }
 
 /// Minimal SHA-256 implementation (RFC 6234 compliant).
+#[allow(clippy::unreadable_literal)]
 fn sha256(msg: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
         0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,

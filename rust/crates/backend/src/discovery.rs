@@ -91,7 +91,7 @@ impl HealthReport {
 }
 
 /// Query Ollama for locally installed models.
-pub fn discover_local_models(base_url: &str) -> Vec<LocalModel> {
+#[must_use] pub fn discover_local_models(base_url: &str) -> Vec<LocalModel> {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -123,7 +123,7 @@ pub fn discover_local_models(base_url: &str) -> Vec<LocalModel> {
 }
 
 /// Check if Ollama is running and get its version.
-pub fn check_ollama(base_url: &str) -> (bool, Option<String>) {
+#[must_use] pub fn check_ollama(base_url: &str) -> (bool, Option<String>) {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -251,7 +251,7 @@ pub fn recommend_model(models: &[LocalModel], _gpu_info: &Option<String>) -> Opt
 }
 
 /// Public wrapper for system RAM detection.
-pub fn detect_system_ram_gb_public() -> u64 {
+#[must_use] pub fn detect_system_ram_gb_public() -> u64 {
     detect_system_ram_gb()
 }
 
@@ -296,7 +296,7 @@ fn detect_system_ram_gb() -> u64 {
 }
 
 /// Run a full health check.
-pub fn run_health_check(base_url: &str) -> HealthReport {
+#[must_use] pub fn run_health_check(base_url: &str) -> HealthReport {
     let (ollama_running, ollama_version) = check_ollama(base_url);
     let local_models = if ollama_running {
         discover_local_models(base_url)

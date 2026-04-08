@@ -69,7 +69,7 @@ impl MemoryAuditSink {
 
     #[must_use]
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
@@ -105,7 +105,7 @@ impl AuditLogger {
     }
 
     /// Create a logger that continues the hash chain from an existing audit file.
-    pub fn resume_from_file(path: &Path) -> Self {
+    #[must_use] pub fn resume_from_file(path: &Path) -> Self {
         let logger = Self::new();
         if let Ok(content) = std::fs::read_to_string(path) {
             let mut max_seq = 0u64;
@@ -130,8 +130,8 @@ impl AuditLogger {
 
     /// Log an event with proper hash chain signing.
     pub fn log(&self, event: &AuditEvent) {
-        let mut seq = self.sequence.lock().unwrap_or_else(|e| e.into_inner());
-        let mut last = self.last_hash.lock().unwrap_or_else(|e| e.into_inner());
+        let mut seq = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = self.last_hash.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         *seq += 1;
         let mut signed = event.clone();
@@ -154,13 +154,13 @@ impl AuditLogger {
     /// Get the current sequence number.
     #[must_use]
     pub fn sequence(&self) -> u64 {
-        *self.sequence.lock().unwrap_or_else(|e| e.into_inner())
+        *self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Get the last hash in the chain.
     #[must_use]
     pub fn last_hash(&self) -> String {
-        self.last_hash.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.last_hash.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 

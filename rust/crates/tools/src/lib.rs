@@ -419,12 +419,12 @@ fn run_get_diagnostics(input: GetDiagnosticsInput) -> Result<String, String> {
     };
 
     // Detect language by presence of marker files
-    let is_rust   = workspace.join("Cargo.toml").exists() || path.extension().map(|e| e == "rs").unwrap_or(false);
-    let is_ts     = workspace.join("tsconfig.json").exists() || path.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false);
-    let is_python = path.extension().map(|e| e == "py").unwrap_or(false)
+    let is_rust   = workspace.join("Cargo.toml").exists() || path.extension().is_some_and(|e| e == "rs");
+    let is_ts     = workspace.join("tsconfig.json").exists() || path.extension().is_some_and(|e| e == "ts" || e == "tsx");
+    let is_python = path.extension().is_some_and(|e| e == "py")
                     || workspace.join("pyproject.toml").exists()
                     || workspace.join("setup.py").exists();
-    let is_go     = workspace.join("go.mod").exists() || path.extension().map(|e| e == "go").unwrap_or(false);
+    let is_go     = workspace.join("go.mod").exists() || path.extension().is_some_and(|e| e == "go");
 
     let (cmd, args): (&str, Vec<&str>) = if is_rust {
         ("cargo", vec!["check", "--message-format=json", "--quiet"])
@@ -522,7 +522,7 @@ fn parse_text_diagnostics(output: &str, min_severity: &str, default_file: &str) 
 fn try_parse_diagnostic_line(line: &str, default_file: &str, min_severity: &str) -> Option<serde_json::Value> {
     // Pattern: <file>:<line>:<col>: <level>: <message>
     // or:      <file>(<line>,<col>): <level> <code>: <message>
-    let line = line.replace('(', ":").replace(')', ":");
+    let line = line.replace(['(', ')'], ":");
     let parts: Vec<&str> = line.splitn(6, ':').collect();
     if parts.len() < 3 { return None; }
 

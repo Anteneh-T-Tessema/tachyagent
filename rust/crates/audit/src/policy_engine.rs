@@ -72,12 +72,12 @@ pub struct PolicyEngine {
 }
 
 impl PolicyEngine {
-    pub fn new(rules: Vec<PolicyRule>) -> Self {
+    #[must_use] pub fn new(rules: Vec<PolicyRule>) -> Self {
         Self { rules }
     }
 
     /// Load default enterprise rules.
-    pub fn enterprise_default() -> Self {
+    #[must_use] pub fn enterprise_default() -> Self {
         Self::new(vec![
             PolicyRule {
                 name: "protect_auth".to_string(),
@@ -114,17 +114,17 @@ impl PolicyEngine {
     }
 
     /// Evaluate a patch against all rules.
-    pub fn evaluate(&self, patch: &FilePatch) -> PolicyDecision {
+    #[must_use] pub fn evaluate(&self, patch: &FilePatch) -> PolicyDecision {
         for rule in &self.rules {
-            match self.check_rule(rule, patch) {
-                PolicyDecision::AutoApprove => continue,
+            match Self::check_rule(rule, patch) {
+                PolicyDecision::AutoApprove => {}
                 decision => return decision,
             }
         }
         PolicyDecision::AutoApprove
     }
 
-    fn check_rule(&self, rule: &PolicyRule, patch: &FilePatch) -> PolicyDecision {
+    fn check_rule(rule: &PolicyRule, patch: &FilePatch) -> PolicyDecision {
         match &rule.rule_type {
             PolicyRuleType::PathMatch { patterns } => {
                 for pattern in patterns {
@@ -200,10 +200,8 @@ impl PolicyEngine {
 
 /// Simple glob-like path matching.
 fn path_matches(path: &str, pattern: &str) -> bool {
-    if pattern.starts_with("**/") {
-        let suffix = &pattern[3..];
-        if suffix.ends_with("/**") {
-            let middle = &suffix[..suffix.len() - 3];
+    if let Some(suffix) = pattern.strip_prefix("**/") {
+        if let Some(middle) = suffix.strip_suffix("/**") {
             return path.contains(&format!("/{middle}/")) || path.contains(&format!("{middle}/"));
         }
         // Handle patterns like **/.env* — match any path containing the suffix
@@ -229,7 +227,6 @@ fn path_matches(path: &str, pattern: &str) -> bool {
     path == pattern || path.ends_with(pattern)
 }
 
-use regex;
 
 #[cfg(test)]
 mod tests {

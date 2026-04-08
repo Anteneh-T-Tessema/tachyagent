@@ -30,7 +30,7 @@ pub struct WorkspaceInvitation {
     pub email: String,
     pub role: Role,
     pub created_at: u64,
-    /// Expiry time: created_at + 72h (259200 seconds).
+    /// Expiry time: `created_at` + 72h (259200 seconds).
     pub expires_at: u64,
     pub used: bool,
 }
@@ -84,17 +84,17 @@ impl TeamManager {
     }
 
     /// Returns a reference to the teams map.
-    pub fn teams(&self) -> &BTreeMap<String, Team> {
+    #[must_use] pub fn teams(&self) -> &BTreeMap<String, Team> {
         &self.teams
     }
 
     /// Returns a reference to the invitations map.
-    pub fn invitations(&self) -> &BTreeMap<String, WorkspaceInvitation> {
+    #[must_use] pub fn invitations(&self) -> &BTreeMap<String, WorkspaceInvitation> {
         &self.invitations
     }
 
     /// Look up a user's role in a specific team.
-    pub fn get_member_role(&self, team_id: &str, user_id: &str) -> Option<Role> {
+    #[must_use] pub fn get_member_role(&self, team_id: &str, user_id: &str) -> Option<Role> {
         self.teams
             .get(team_id)
             .and_then(|t| t.members.get(user_id))

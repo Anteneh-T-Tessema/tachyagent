@@ -42,7 +42,7 @@ pub struct ModelEntry {
 pub enum ModelTier {
     /// Frontier-class local model (Gemma 4 31B, Qwen3-coder:30b).
     Frontier,
-    /// Strong general-purpose model (Gemma 4 26B MoE, Qwen3:8b, Mistral:7b).
+    /// Strong general-purpose model (Gemma 4 26B `MoE`, Qwen3:8b, Mistral:7b).
     #[default]
     Standard,
     /// Fast/small edge model (Gemma 4 E4B, Llama3.2:3b).
@@ -148,7 +148,7 @@ impl BackendRegistry {
 
     /// Build a default registry — all models run locally via Ollama.
     /// No cloud, no Gemini API. Families: Gemma 4, Qwen3, Llama 3, Mistral.
-    /// Default model: gemma4:26b  (recommended — 256K ctx, MoE fast).
+    /// Default model: gemma4:26b  (recommended — 256K ctx, `MoE` fast).
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();

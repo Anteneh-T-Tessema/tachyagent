@@ -190,7 +190,7 @@ impl CodebaseIndexer {
             let name = entry.file_name().to_string_lossy().to_string();
 
             if path.is_dir() {
-                if is_ignored_dir(&name) || config.ignore_paths.iter().any(|p| name == *p) {
+                if is_ignored_dir(&name) || config.ignore_paths.contains(&name) {
                     continue;
                 }
                 Self::walk_directory(root, &path, config, files, total_lines, lang_counts)?;
@@ -299,7 +299,7 @@ impl CodebaseIndexer {
     }
 
     /// Search the index for files matching a query.
-    pub fn search<'a>(
+    #[must_use] pub fn search<'a>(
         index: &'a CodebaseIndex,
         query: &str,
         max_results: usize,

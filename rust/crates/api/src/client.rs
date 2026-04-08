@@ -158,7 +158,7 @@ impl AnthropicClient {
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json");
 
-        let auth_header = self.auth_token.as_ref().map(|_| "Bearer [REDACTED]").unwrap_or("<absent>");
+        let auth_header = self.auth_token.as_ref().map_or("<absent>", |_| "Bearer [REDACTED]");
         eprintln!("[anthropic-client] headers x-api-key=[REDACTED] authorization={auth_header} anthropic-version={ANTHROPIC_VERSION} content-type=application/json");
 
         if let Some(auth_token) = &self.auth_token {

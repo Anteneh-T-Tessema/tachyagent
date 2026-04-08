@@ -36,7 +36,7 @@ pub struct BatchClient {
 }
 
 impl BatchClient {
-    pub fn new(region: &str, queue: &str) -> Self {
+    #[must_use] pub fn new(region: &str, queue: &str) -> Self {
         Self {
             region: region.to_string(),
             queue: queue.to_string(),
@@ -68,7 +68,7 @@ impl BatchClient {
         let output = std::process::Command::new("tar")
             .arg("-czf")
             .arg(&bundle_path)
-            .args(&exclude_patterns)
+            .args(exclude_patterns)
             .arg(".")
             .current_dir(workspace_root)
             .output()

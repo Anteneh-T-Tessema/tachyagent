@@ -85,12 +85,12 @@ impl From<runtime::RuntimeError> for PlanError {
     }
 }
 
-/// The plan executor — wraps ConversationRuntime in a planning loop.
+/// The plan executor — wraps `ConversationRuntime` in a planning loop.
 pub struct PlanExecutor;
 
 impl PlanExecutor {
     /// Build the planning prompt for the LLM.
-    pub fn build_planning_prompt(user_prompt: &str, codebase_summary: Option<&str>) -> String {
+    #[must_use] pub fn build_planning_prompt(user_prompt: &str, codebase_summary: Option<&str>) -> String {
         let context = codebase_summary.unwrap_or("No codebase index available.");
         format!(
             "You are a planning agent. Given the user's task, create a numbered plan.\n\
@@ -131,7 +131,7 @@ impl PlanExecutor {
             .iter()
             .enumerate()
             .map(|(i, step)| PlanStep {
-                number: step.get("number").and_then(|v| v.as_u64()).unwrap_or(i as u64 + 1) as usize,
+                number: step.get("number").and_then(serde_json::Value::as_u64).unwrap_or(i as u64 + 1) as usize,
                 description: step.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 instruction: step.get("instruction").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 expected_files: step

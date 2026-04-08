@@ -94,8 +94,14 @@ pub struct SpanCollector {
     service_name: String,
 }
 
+impl Default for SpanCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpanCollector {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             spans: Vec::new(),
             otlp_endpoint: std::env::var("TACHY_OTLP_ENDPOINT").ok(),
@@ -104,7 +110,7 @@ impl SpanCollector {
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
+    #[must_use] pub fn is_enabled(&self) -> bool {
         self.otlp_endpoint.is_some()
     }
 
@@ -192,7 +198,7 @@ impl Tracer {
         Self { collector }
     }
 
-    pub fn is_enabled(&self) -> bool {
+    #[must_use] pub fn is_enabled(&self) -> bool {
         self.collector.lock().map(|c| c.is_enabled()).unwrap_or(false)
     }
 
@@ -240,7 +246,7 @@ pub fn record_agent_run(
     span.set_attr("agent.model", model);
     span.set_attr("agent.template", template);
     span.set_attr("agent.iterations", iterations as i64);
-    span.set_attr("agent.tool_invocations", tool_invocations as i64);
+    span.set_attr("agent.tool_invocations", i64::from(tool_invocations));
     span.set_attr("agent.duration_ms", duration_ms as i64);
     if success { span.finish(); } else { span.finish_error("agent run failed"); }
 }
@@ -275,7 +281,7 @@ pub fn record_llm_call(
     span.set_attr("llm.model", model);
     span.set_attr("llm.input_tokens", input_tokens as i64);
     span.set_attr("llm.output_tokens", output_tokens as i64);
-    span.set_attr("llm.ttft_ms", ttft_ms as i64);
+    span.set_attr("llm.ttft_ms", i64::from(ttft_ms));
     if success { span.finish(); } else { span.finish_error("LLM call failed"); }
 }
 
@@ -292,10 +298,10 @@ fn random_id(bytes: usize) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ts = now_nano();
-    let pid = std::process::id() as u64;
+    let pid = u64::from(std::process::id());
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in format!("{ts}:{pid}:{n}").bytes() {
-        h ^= b as u64;
+        h ^= u64::from(b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{h:016x}{ts:016x}")

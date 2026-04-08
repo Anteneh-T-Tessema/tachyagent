@@ -19,7 +19,7 @@ pub fn execute_swarm_refactor(
     for file in &input.files {
         let abs = workspace_root.join(file);
         if !abs.exists() {
-            return Err(format!("target file not found: {}", file));
+            return Err(format!("target file not found: {file}"));
         }
     }
 
@@ -36,7 +36,7 @@ pub fn execute_swarm_refactor(
 }
 
 /// Returns the tool specifications for Swarm tools.
-pub fn swarm_tool_specs() -> Vec<tools::ToolSpec> {
+#[must_use] pub fn swarm_tool_specs() -> Vec<tools::ToolSpec> {
     vec![
         tools::ToolSpec {
             name: "swarm_refactor",

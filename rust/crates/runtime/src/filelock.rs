@@ -29,7 +29,7 @@ struct LockEntry {
 }
 
 impl FileLockManager {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(LockState {
                 locks: BTreeMap::new(),
@@ -100,7 +100,7 @@ impl FileLockManager {
     }
 
     /// List all currently held locks.
-    pub fn list_locks(&self) -> Vec<(String, String)> {
+    #[must_use] pub fn list_locks(&self) -> Vec<(String, String)> {
         let state = self.inner.lock().unwrap();
         state.locks.iter()
             .filter(|(_, entry)| entry.acquired_at.elapsed() < entry.ttl)

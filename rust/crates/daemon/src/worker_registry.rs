@@ -7,9 +7,9 @@
 //! Architecture:
 //!   Coordinator daemon      Worker daemons (any machine)
 //!   ┌──────────────┐        ┌─────────────────────────┐
-//!   │ WorkerRegistry│◄──────│ POST /api/workers/register│
+//!   │ `WorkerRegistry`│◄──────│ POST /api/workers/register│
 //!   │  (this module)│       │ POST /api/workers/heartbeat│
-//!   │  dispatch()   │──────►│ POST /api/tasks/assign   │
+//!   │  `dispatch()`   │──────►│ POST /api/tasks/assign   │
 //!   └──────────────┘        └─────────────────────────┘
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub struct WorkerNode {
     pub id: String,
     /// Human-readable hostname or IP.
     pub host: String,
-    /// HTTP URL of the worker's daemon (e.g. http://10.0.0.5:7777).
+    /// HTTP URL of the worker's daemon (e.g. <http://10.0.0.5:7777>).
     pub url: String,
     /// Maximum concurrent tasks this worker supports.
     pub max_concurrency: usize,
@@ -37,12 +37,12 @@ pub struct WorkerNode {
 
 impl WorkerNode {
     /// True if the worker has been silent for more than `timeout_secs`.
-    pub fn is_stale(&self, timeout_secs: u64) -> bool {
+    #[must_use] pub fn is_stale(&self, timeout_secs: u64) -> bool {
         now_epoch().saturating_sub(self.last_seen) > timeout_secs
     }
 
-    /// Available capacity (max_concurrency - active_tasks).
-    pub fn available_slots(&self) -> usize {
+    /// Available capacity (`max_concurrency` - `active_tasks`).
+    #[must_use] pub fn available_slots(&self) -> usize {
         self.max_concurrency.saturating_sub(self.active_tasks)
     }
 }
@@ -56,7 +56,7 @@ pub struct WorkerRegistry {
 }
 
 impl WorkerRegistry {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             workers: BTreeMap::new(),
             heartbeat_timeout_secs: 30,
@@ -101,7 +101,7 @@ impl WorkerRegistry {
     }
 
     /// Pick the least-loaded available worker.
-    pub fn pick_worker(&self) -> Option<&WorkerNode> {
+    #[must_use] pub fn pick_worker(&self) -> Option<&WorkerNode> {
         self.workers.values()
             .filter(|w| !w.is_stale(self.heartbeat_timeout_secs) && w.available_slots() > 0)
             .max_by_key(|w| w.available_slots())
@@ -109,7 +109,7 @@ impl WorkerRegistry {
 
     /// Dispatch a task to the least-loaded worker via HTTP.
     /// Falls back to `None` if no workers are available (caller uses local execution).
-    pub fn dispatch_task(&self, task_json: &str) -> Option<String> {
+    #[must_use] pub fn dispatch_task(&self, task_json: &str) -> Option<String> {
         let worker = self.pick_worker()?;
         let url = format!("{}/api/tasks/assign", worker.url);
 
@@ -133,15 +133,15 @@ impl WorkerRegistry {
         }
     }
 
-    pub fn list_workers(&self) -> Vec<&WorkerNode> {
+    #[must_use] pub fn list_workers(&self) -> Vec<&WorkerNode> {
         self.workers.values().collect()
     }
 
-    pub fn worker_count(&self) -> usize {
+    #[must_use] pub fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
-    pub fn available_worker_count(&self) -> usize {
+    #[must_use] pub fn available_worker_count(&self) -> usize {
         let timeout = self.heartbeat_timeout_secs;
         self.workers.values()
             .filter(|w| !w.is_stale(timeout) && w.available_slots() > 0)

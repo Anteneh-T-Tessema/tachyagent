@@ -94,7 +94,7 @@ impl Marketplace {
     }
 
     /// Returns a reference to the listings map.
-    pub fn listings(&self) -> &BTreeMap<String, MarketplaceListing> {
+    #[must_use] pub fn listings(&self) -> &BTreeMap<String, MarketplaceListing> {
         &self.listings
     }
 
@@ -196,7 +196,7 @@ impl Marketplace {
     /// Results are sorted by `average_rating` descending.
     /// Optional query filters on listing name (case-insensitive substring match).
     /// Paginated with `page` (0-indexed) and `page_size`.
-    pub fn search(
+    #[must_use] pub fn search(
         &self,
         query: Option<&str>,
         page: usize,
@@ -214,7 +214,7 @@ impl Marketplace {
                 true
             })
             .filter(|l| {
-                query.map_or(true, |q| {
+                query.is_none_or(|q| {
                     l.name.to_lowercase().contains(&q.to_lowercase())
                 })
             })
@@ -291,7 +291,7 @@ impl Marketplace {
     /// Rate a marketplace listing.
     ///
     /// Rating must be 1-5. One rating per user per listing; subsequent calls update.
-    /// Recalculates average_rating and rating_count.
+    /// Recalculates `average_rating` and `rating_count`.
     pub fn rate(
         &mut self,
         listing_id: &str,

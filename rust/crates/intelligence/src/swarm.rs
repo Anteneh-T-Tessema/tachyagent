@@ -66,7 +66,7 @@ pub struct SwarmTask {
 /// 1. Frontier model (Claude/GPT-4o) if coordinator config is set and not air-gapped.
 /// 2. Local Ollama LLM-driven planning if `use_llm_planner` is true.
 /// 3. Static one-task-per-file decomposition (always available).
-pub fn plan_swarm_refactor(input: &SwarmRefactorInput) -> SwarmPlan {
+#[must_use] pub fn plan_swarm_refactor(input: &SwarmRefactorInput) -> SwarmPlan {
     // 1. Try frontier coordinator first
     if let Some(coord_cfg) = &input.coordinator {
         if let Some(plan) = try_frontier_plan(input, coord_cfg) {
@@ -261,9 +261,9 @@ fn parse_llm_plan_response(text: &str, input: &SwarmRefactorInput) -> Option<Swa
 
 fn strip_markdown_fences(s: &str) -> &str {
     let s = if s.starts_with("```") {
-        s.find('\n').map(|i| &s[i + 1..]).unwrap_or(s)
+        s.find('\n').map_or(s, |i| &s[i + 1..])
     } else { s };
-    if s.ends_with("```") { &s[..s.len() - 3] } else { s }
+    s.strip_suffix("```").unwrap_or(s)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

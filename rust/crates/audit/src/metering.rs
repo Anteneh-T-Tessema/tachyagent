@@ -50,7 +50,7 @@ pub struct UsageAggregate {
 /// Errors from the metering service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeteringError {
-    /// Event has empty user_id or other invalid fields.
+    /// Event has empty `user_id` or other invalid fields.
     InvalidEvent(String),
 }
 
@@ -64,7 +64,7 @@ impl fmt::Display for MeteringError {
 
 impl std::error::Error for MeteringError {}
 
-/// Tracks usage events and maintains in-memory counters keyed by user_id.
+/// Tracks usage events and maintains in-memory counters keyed by `user_id`.
 pub struct MeteringService {
     counters: BTreeMap<String, UsageAggregate>,
     audit_logger: AuditLogger,
@@ -142,10 +142,10 @@ impl MeteringService {
         match event.event_type {
             UsageEventType::AgentRun => {
                 agg.total_agent_runs += 1;
-                agg.total_tool_invocations += event.tool_invocation_count as u64;
+                agg.total_tool_invocations += u64::from(event.tool_invocation_count);
             }
             UsageEventType::ToolInvocation => {
-                agg.total_tool_invocations += event.tool_invocation_count as u64;
+                agg.total_tool_invocations += u64::from(event.tool_invocation_count);
             }
         }
 
@@ -220,7 +220,7 @@ impl MeteringService {
         result
     }
 
-    /// Drain all counters, setting period_end on each aggregate, and return them.
+    /// Drain all counters, setting `period_end` on each aggregate, and return them.
     /// Resets the in-memory counters.
     pub fn drain_period(&mut self, period_end: u64) -> Vec<UsageAggregate> {
         let old = std::mem::take(&mut self.counters);

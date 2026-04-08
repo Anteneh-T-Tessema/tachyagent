@@ -1,5 +1,5 @@
-//! Interactive REPL: LiveCli session holder, CliToolExecutor, streaming token display,
-//! run_repl loop, session save/restore, tool-executor helpers.
+//! Interactive REPL: `LiveCli` session holder, `CliToolExecutor`, streaming token display,
+//! `run_repl` loop, session save/restore, tool-executor helpers.
 
 use std::env;
 use std::io::{self, Write};
@@ -141,7 +141,7 @@ impl LiveCli {
                                     let marker = chars[i];
                                     if i + 2 < chars.len() && chars[i+1] == marker && chars[i+2] == marker {
                                         if !text_buf.is_empty() {
-                                            print!("{}", text_buf);
+                                            print!("{text_buf}");
                                             let _ = stdout.flush();
                                             text_buf.clear();
                                         }
@@ -153,10 +153,10 @@ impl LiveCli {
                                             i += 1;
                                         }
                                         code_lang = lang.trim().to_string();
-                                        if !code_lang.is_empty() {
-                                            print!("\n\x1b[36m╭─ {}\x1b[0m\n", code_lang);
-                                        } else {
+                                        if code_lang.is_empty() {
                                             print!("\n\x1b[36m╭─ code\x1b[0m\n");
+                                        } else {
+                                            print!("\n\x1b[36m╭─ {code_lang}\x1b[0m\n");
                                         }
                                         let _ = stdout.flush();
                                         continue;
@@ -183,7 +183,7 @@ impl LiveCli {
                                 i += 1;
                             }
                             if !in_code_block && !text_buf.is_empty() {
-                                print!("{}", text_buf);
+                                print!("{text_buf}");
                                 let _ = stdout.flush();
                                 text_buf.clear();
                             }
@@ -195,7 +195,7 @@ impl LiveCli {
                                 let _ = stdout.flush();
                             }
                             if !text_buf.is_empty() {
-                                print!("{}", text_buf);
+                                print!("{text_buf}");
                                 let _ = stdout.flush();
                             }
                             break;
@@ -209,7 +209,7 @@ impl LiveCli {
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
         let renderer = TerminalRenderer::new();
-        let theme = renderer.color_theme().clone();
+        let theme = *renderer.color_theme();
 
         let turn_start = std::time::Instant::now();
         spinner.tick("Thinking", &theme, &mut stdout)?;
@@ -369,9 +369,9 @@ impl LiveCli {
             .map(|d| d.join(".tachy").join("config.json"));
         if let Some(path) = &config_path {
             let mut val: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(path) {
-                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::default()))
             } else {
-                serde_json::Value::Object(Default::default())
+                serde_json::Value::Object(serde_json::Map::default())
             };
             val["model"] = serde_json::Value::String(new_model.to_string());
             if let Ok(serialized) = serde_json::to_string_pretty(&val) {
@@ -427,11 +427,11 @@ impl LiveCli {
 pub(crate) fn last_session_path() -> Option<PathBuf> {
     let sessions_dir = env::current_dir().ok()?.join(".tachy").join("sessions");
     let mut entries: Vec<_> = std::fs::read_dir(&sessions_dir).ok()?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
         .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
-    entries.first().map(|e| e.path())
+    entries.first().map(std::fs::DirEntry::path)
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +510,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                         format!("{secs}s ago")
                     } else if secs < 7200 {
                         format!("{}m ago", secs / 60)
-                    } else if secs < 172800 {
+                    } else if secs < 172_800 {
                         format!("{}h ago", secs / 3600)
                     } else {
                         format!("{}d ago", secs / 86400)
@@ -518,7 +518,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                     execute!(
                         stdout,
                         SetForegroundColor(Color::DarkYellow),
-                        Print(format!("Resume session from {}? [y/N] ", age)),
+                        Print(format!("Resume session from {age}? [y/N] ")),
                         ResetColor,
                     )?;
                     stdout.flush()?;
@@ -635,7 +635,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                 match std::fs::read_dir(&sessions_dir) {
                     Ok(entries) => {
                         let mut sessions: Vec<_> = entries
-                            .filter_map(|e| e.ok())
+                            .filter_map(std::result::Result::ok)
                             .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
                             .collect();
                         sessions.sort_by_key(|e| std::cmp::Reverse(
@@ -710,7 +710,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
         }
     }
 
-    if cli.runtime.session().messages.len() > 0 {
+    if !cli.runtime.session().messages.is_empty() {
         if let Ok(path) = cli.save_session() {
             eprintln!("Session saved to {path}");
         }
@@ -764,7 +764,7 @@ impl ToolExecutor for CliToolExecutor {
                 let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let old_str = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
                 let new_str = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-                let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let replace_all = value.get("replace_all").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 preview_edit_file(path, old_str, new_str, replace_all).ok()
             };
 
@@ -879,7 +879,7 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .unwrap_or_default(),
         "read_file" | "write_file" | "edit_file" => input.get("path")
             .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_default(),
         "grep_search" => input.get("pattern")
             .and_then(|v| v.as_str())
@@ -887,7 +887,7 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .unwrap_or_default(),
         "glob_search" => input.get("pattern")
             .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_default(),
         "list_directory" => input.get("path")
             .and_then(|v| v.as_str())
@@ -914,7 +914,7 @@ fn summarize_tool_params(tool_name: &str, input_json: &str) -> String {
             .unwrap_or_default(),
         "read_file" | "write_file" | "list_directory" => obj.get("path")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_else(|| ".".to_string()),
         "edit_file" => {
             let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or("?");
@@ -928,7 +928,7 @@ fn summarize_tool_params(tool_name: &str, input_json: &str) -> String {
             .unwrap_or_default(),
         "glob_search" => obj.get("pattern")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_default(),
         _ => {
             obj.values()

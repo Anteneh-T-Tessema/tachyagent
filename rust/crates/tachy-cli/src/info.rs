@@ -28,7 +28,7 @@ pub(crate) fn list_channels() {
         let status = if ch.enabled { "enabled" } else { "disabled" };
         println!("  {:12} {:10} template={:15} [{}]",
             format!("{:?}", ch.r#type).to_lowercase(),
-            if !ch.channel.is_empty() { &ch.channel } else { &ch.channel_id },
+            if ch.channel.is_empty() { &ch.channel_id } else { &ch.channel },
             if ch.template.is_empty() { "chat" } else { &ch.template },
             status,
         );
@@ -43,7 +43,9 @@ pub(crate) fn list_tools() {
 
     let tachy_dir = env::current_dir().unwrap_or_default().join(".tachy");
     let custom = tools::CustomToolRegistry::load(&tachy_dir);
-    if !custom.tools().is_empty() {
+    if custom.tools().is_empty() {
+        println!("\nNo custom tools defined. Create .tachy/tools.yaml to add custom tools.");
+    } else {
         println!("\nCustom tools (.tachy/tools.yaml):\n");
         for tool in custom.tools() {
             let type_str = match tool.r#type {
@@ -53,8 +55,6 @@ pub(crate) fn list_tools() {
             let approval = if tool.approval_required { " [approval required]" } else { "" };
             println!("  {:20} {} ({}){}", tool.name, tool.description, type_str, approval);
         }
-    } else {
-        println!("\nNo custom tools defined. Create .tachy/tools.yaml to add custom tools.");
     }
 }
 

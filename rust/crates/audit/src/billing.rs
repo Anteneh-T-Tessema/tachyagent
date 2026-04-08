@@ -2,7 +2,7 @@
 //!
 //! Uses a `BillingBackend` trait for testability. The `StripeBillingConnector`
 //! drains the `MeteringService` each billing period, aggregates per user,
-//! and reports three dimensions: tokens_consumed, tool_invocations, agent_runs.
+//! and reports three dimensions: `tokens_consumed`, `tool_invocations`, `agent_runs`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -132,18 +132,18 @@ impl StripeBillingConnector {
     }
 
     /// Override the billing period (seconds).
-    pub fn with_billing_period(mut self, secs: u64) -> Self {
+    #[must_use] pub fn with_billing_period(mut self, secs: u64) -> Self {
         self.billing_period_secs = secs;
         self
     }
 
     /// Override the max retry count.
-    pub fn with_max_retries(mut self, retries: u32) -> Self {
+    #[must_use] pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
     }
 
-    /// Pre-populate the user → subscription_item_id mapping.
+    /// Pre-populate the user → `subscription_item_id` mapping.
     pub fn set_user_mapping(&mut self, user_id: &str, subscription_item_id: &str) {
         self.user_subscription_map
             .insert(user_id.to_string(), subscription_item_id.to_string());
@@ -173,14 +173,11 @@ impl StripeBillingConnector {
         };
 
         for agg in &aggregates {
-            let sub_item_id = match self.user_subscription_map.get(&agg.user_id) {
-                Some(id) => id.clone(),
-                None => {
-                    let msg = format!("no subscription mapping for user: {}", agg.user_id);
-                    Self::log_billing_error(metering.audit_logger(), &msg);
-                    report.errors.push(msg);
-                    continue;
-                }
+            let sub_item_id = if let Some(id) = self.user_subscription_map.get(&agg.user_id) { id.clone() } else {
+                let msg = format!("no subscription mapping for user: {}", agg.user_id);
+                Self::log_billing_error(metering.audit_logger(), &msg);
+                report.errors.push(msg);
+                continue;
             };
 
             let tokens = agg.total_input_tokens + agg.total_output_tokens;

@@ -1,6 +1,6 @@
 //! Opt-in telemetry — anonymous usage analytics for improving Tachy.
 //!
-//! Disabled by default. Enable with TACHY_TELEMETRY=1 or in config.
+//! Disabled by default. Enable with `TACHY_TELEMETRY=1` or in config.
 //! Data collected: model name, tool success rates, iteration counts.
 //! NO prompts, NO file contents, NO code, NO PII.
 
@@ -47,7 +47,7 @@ pub struct TelemetryCollector {
 }
 
 impl TelemetryCollector {
-    pub fn new(config: TelemetryConfig, tachy_dir: &Path) -> Self {
+    #[must_use] pub fn new(config: TelemetryConfig, tachy_dir: &Path) -> Self {
         Self {
             config,
             events: Vec::new(),
@@ -55,7 +55,7 @@ impl TelemetryCollector {
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
+    #[must_use] pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
@@ -112,7 +112,7 @@ impl TelemetryCollector {
     }
 
     /// Get a summary of collected telemetry.
-    pub fn summary(&self) -> TelemetrySummary {
+    #[must_use] pub fn summary(&self) -> TelemetrySummary {
         let total = self.events.len();
         let successes = self.events.iter().filter(|e| e.success).count();
         let mut by_model: BTreeMap<String, usize> = BTreeMap::new();

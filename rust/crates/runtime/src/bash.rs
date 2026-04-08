@@ -93,7 +93,7 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
                 rt.block_on(execute_bash_async(input))
             })
             .join()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "bash thread panicked"))?
+            .map_err(|_| io::Error::other("bash thread panicked"))?
         })
     } else {
         let runtime = Builder::new_current_thread().enable_all().build()?;

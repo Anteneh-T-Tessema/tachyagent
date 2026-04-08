@@ -41,12 +41,12 @@ pub enum LicenseStatus {
 
 impl LicenseStatus {
     /// Can the user run Tachy?
-    pub fn is_active(&self) -> bool {
+    #[must_use] pub fn is_active(&self) -> bool {
         matches!(self, Self::TrialActive { .. } | Self::Licensed { .. })
     }
 
     /// Human-readable status for display.
-    pub fn display(&self) -> String {
+    #[must_use] pub fn display(&self) -> String {
         match self {
             Self::TrialActive { remaining_secs } => {
                 let days = remaining_secs / 86400;
@@ -101,7 +101,7 @@ pub struct LicenseData {
 
 impl LicenseFile {
     /// Create a new trial license file.
-    pub fn new_trial() -> Self {
+    #[must_use] pub fn new_trial() -> Self {
         Self {
             first_run_at: now_epoch(),
             machine_id: compute_machine_id(),
@@ -111,7 +111,7 @@ impl LicenseFile {
     }
 
     /// Load from disk, or create a new trial if not found.
-    pub fn load_or_create(tachy_dir: &Path) -> Self {
+    #[must_use] pub fn load_or_create(tachy_dir: &Path) -> Self {
         let path = license_path(tachy_dir);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(file) = serde_json::from_str::<LicenseFile>(&content) {
@@ -134,7 +134,7 @@ impl LicenseFile {
     }
 
     /// Check current license status.
-    pub fn status(&self) -> LicenseStatus {
+    #[must_use] pub fn status(&self) -> LicenseStatus {
         // If we have a verified license, check it
         if let Some(license) = &self.license {
             // Check expiry
@@ -188,14 +188,14 @@ impl LicenseFile {
 
         // Decode payload
         let payload_bytes = base64_decode(payload_b64)
-            .map_err(|_| "invalid key: payload decode failed".to_string())?;
+            .map_err(|()| "invalid key: payload decode failed".to_string())?;
         let payload_str = String::from_utf8(payload_bytes)
             .map_err(|_| "invalid key: payload is not UTF-8".to_string())?;
 
         // Verify signature (HMAC-SHA256)
         let expected_sig = hmac_sha256(secret.as_bytes(), payload_str.as_bytes());
         let provided_sig = base64_decode(sig_b64)
-            .map_err(|_| "invalid key: signature decode failed".to_string())?;
+            .map_err(|()| "invalid key: signature decode failed".to_string())?;
 
         if expected_sig != provided_sig {
             return Err("invalid license key — signature verification failed".to_string());
@@ -229,9 +229,7 @@ fn now_epoch() -> u64 {
 
 fn compute_machine_id() -> String {
     let hostname = std::process::Command::new("hostname")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
+        .output().map_or_else(|_| "unknown".to_string(), |o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());

@@ -58,16 +58,13 @@ pub(super) fn run_with_planning(
         Err(_) => String::new(),
     };
 
-    let plan = match intelligence::PlanExecutor::parse_plan(&plan_text, prompt) {
-        Ok(p) => p,
-        Err(_) => {
-            audit_logger.log(
-                &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
-                    "plan generation failed, falling back to simple execution")
-                    .with_agent(agent_id),
-            );
-            return run_simple(agent_id, config, prompt, runtime, governance, audit_logger);
-        }
+    let plan = if let Ok(p) = intelligence::PlanExecutor::parse_plan(&plan_text, prompt) { p } else {
+        audit_logger.log(
+            &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
+                "plan generation failed, falling back to simple execution")
+                .with_agent(agent_id),
+        );
+        return run_simple(agent_id, config, prompt, runtime, governance, audit_logger);
     };
 
     audit_logger.log(
@@ -269,18 +266,14 @@ pub(super) fn run_with_planning(
                 }
 
                 // Git commit after successful step
-                if intelligence_config.git_enabled && intelligence_config.plan.auto_commit {
-                    if intelligence::GitTools::is_git_repo() {
+                if intelligence_config.git_enabled && intelligence_config.plan.auto_commit
+                    && intelligence::GitTools::is_git_repo() {
                         let msg = format!("tachy: step {} — {}", step.number, step.description);
-                        match intelligence::GitTools::commit(&msg) {
-                            Ok(result) => audit_logger.log(
-                                &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                    format!("committed: {}", result.hash)).with_agent(agent_id),
-                            ),
-                            Err(_) => {}
-                        }
+                        if let Ok(result) = intelligence::GitTools::commit(&msg) { audit_logger.log(
+                            &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
+                                format!("committed: {}", result.hash)).with_agent(agent_id),
+                        ); }
                     }
-                }
             }
             Err(error) => {
                 audit_logger.log(
@@ -330,7 +323,7 @@ pub(super) fn run_with_planning(
 /// Build a focused system prompt for a single plan step.
 ///
 /// Pre-loads the content of `step.expected_files` into the prompt so the
-/// model has the relevant file context immediately — no read_file tool call
+/// model has the relevant file context immediately — no `read_file` tool call
 /// needed for files the plan already knows about.
 pub(super) fn build_step_system_prompt(
     config: &platform::AgentConfig,

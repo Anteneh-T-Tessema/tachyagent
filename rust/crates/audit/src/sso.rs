@@ -1,8 +1,8 @@
 //! SSO/SAML integration for enterprise authentication.
 //!
 //! Supports SAML 2.0 SP-initiated flow:
-//!   1. User hits /api/auth/sso/login → redirect to IdP
-//!   2. IdP authenticates → POST /api/auth/sso/callback with SAMLResponse
+//!   1. User hits /api/auth/sso/login → redirect to `IdP`
+//!   2. `IdP` authenticates → POST /api/auth/sso/callback with `SAMLResponse`
 //!   3. We validate the response → create a session token
 //!
 //! Also supports simple OIDC-style token exchange for lighter integrations.
@@ -20,20 +20,20 @@ use crate::security::hash_api_key;
 pub struct SsoConfig {
     /// Whether SSO is enabled.
     pub enabled: bool,
-    /// SAML IdP metadata URL or entity ID.
+    /// SAML `IdP` metadata URL or entity ID.
     pub idp_entity_id: String,
-    /// SAML IdP SSO URL (where to redirect for login).
+    /// SAML `IdP` SSO URL (where to redirect for login).
     pub idp_sso_url: String,
-    /// SAML IdP certificate (PEM) for signature validation.
+    /// SAML `IdP` certificate (PEM) for signature validation.
     pub idp_certificate: String,
     /// Our SP entity ID.
     pub sp_entity_id: String,
-    /// Our SP ACS URL (where IdP posts the SAMLResponse).
+    /// Our SP ACS URL (where `IdP` posts the `SAMLResponse`).
     pub sp_acs_url: String,
     /// Default role for SSO-provisioned users.
     #[serde(default = "default_role")]
     pub default_role: Role,
-    /// Map of IdP group names to Tachy roles.
+    /// Map of `IdP` group names to Tachy roles.
     #[serde(default)]
     pub role_mapping: BTreeMap<String, Role>,
     /// Session duration in seconds (default: 8 hours).
@@ -60,14 +60,14 @@ impl Default for SsoConfig {
     }
 }
 
-/// A parsed SAML assertion (extracted from SAMLResponse).
+/// A parsed SAML assertion (extracted from `SAMLResponse`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamlAssertion {
     pub subject_name_id: String,
     pub issuer: String,
     pub attributes: BTreeMap<String, String>,
     pub session_index: Option<String>,
-    /// Groups/roles from the IdP.
+    /// Groups/roles from the `IdP`.
     pub groups: Vec<String>,
 }
 
@@ -90,23 +90,23 @@ pub struct SsoManager {
 }
 
 impl SsoManager {
-    pub fn new(config: SsoConfig) -> Self {
+    #[must_use] pub fn new(config: SsoConfig) -> Self {
         Self {
             config,
             sessions: BTreeMap::new(),
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
+    #[must_use] pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
-    pub fn config(&self) -> &SsoConfig {
+    #[must_use] pub fn config(&self) -> &SsoConfig {
         &self.config
     }
 
-    /// Build the SAML AuthnRequest redirect URL.
-    pub fn build_login_url(&self, relay_state: Option<&str>) -> String {
+    /// Build the SAML `AuthnRequest` redirect URL.
+    #[must_use] pub fn build_login_url(&self, relay_state: Option<&str>) -> String {
         let request_id = format!("_tachy_{}", now_epoch());
         let issue_instant = iso8601_now();
 
@@ -202,7 +202,7 @@ impl SsoManager {
     }
 
     /// Validate a session token. Returns the session if valid and not expired.
-    pub fn validate_session(&self, token: &str) -> Option<&SsoSession> {
+    #[must_use] pub fn validate_session(&self, token: &str) -> Option<&SsoSession> {
         let session = self.sessions.get(token)?;
         if now_epoch() > session.expires_at {
             return None;
@@ -222,12 +222,12 @@ impl SsoManager {
     }
 
     /// List active sessions.
-    pub fn active_sessions(&self) -> Vec<&SsoSession> {
+    #[must_use] pub fn active_sessions(&self) -> Vec<&SsoSession> {
         let now = now_epoch();
         self.sessions.values().filter(|s| s.expires_at > now).collect()
     }
 
-    /// Resolve a role from IdP groups using the role mapping.
+    /// Resolve a role from `IdP` groups using the role mapping.
     fn resolve_role(&self, groups: &[String]) -> Role {
         for group in groups {
             if let Some(role) = self.config.role_mapping.get(group) {
@@ -322,15 +322,8 @@ fn extract_saml_attributes(xml: &str) -> BTreeMap<String, String> {
     let mut attrs = BTreeMap::new();
     let mut search_from = 0;
 
-    loop {
-        // Find next Attribute element
-        let attr_tag = match find_next_attr_tag(xml, search_from) {
-            Some((pos, name)) => { search_from = pos + 1; (pos, name) }
-            None => break,
-        };
-
-        let (pos, name) = attr_tag;
-
+    while let Some((pos, name)) = find_next_attr_tag(xml, search_from) {
+        search_from = pos + 1;
         // Find the AttributeValue within this Attribute
         if let Some(value) = extract_attr_value_after(xml, pos) {
             attrs.insert(name, value);
@@ -399,7 +392,7 @@ fn now_epoch() -> u64 {
 fn iso8601_now() -> String {
     let secs = now_epoch();
     // Approximate ISO 8601 without chrono
-    format!("{}Z", secs)
+    format!("{secs}Z")
 }
 
 fn urlencod(s: &str) -> String {
@@ -416,13 +409,13 @@ fn urlencod(s: &str) -> String {
     out
 }
 
-pub fn base64_encode(data: &[u8]) -> String {
+#[must_use] pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
         let triple = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
         out.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);

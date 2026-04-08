@@ -156,7 +156,7 @@ impl ContextSelector {
     }
 
     /// Render the injection as a system prompt section.
-    pub fn render_injection(injection: &ContextInjection, index: &CodebaseIndex) -> String {
+    #[must_use] pub fn render_injection(injection: &ContextInjection, index: &CodebaseIndex) -> String {
         let mut sections = vec!["# Codebase Context\n".to_string()];
 
         // Project info

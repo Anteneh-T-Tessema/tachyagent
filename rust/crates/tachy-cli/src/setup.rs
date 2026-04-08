@@ -257,12 +257,10 @@ pub(crate) fn install_ollama() -> Result<(), String> {
     } else if cfg!(target_os = "windows") {
         println!("    Downloading Ollama for Windows...");
         let status = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &format!(
-                "$ProgressPreference = 'SilentlyContinue'; \
+            .args(["-NoProfile", "-Command", "$ProgressPreference = 'SilentlyContinue'; \
                  Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile \"$env:TEMP\\OllamaSetup.exe\"; \
                  Start-Process -Wait -FilePath \"$env:TEMP\\OllamaSetup.exe\" -ArgumentList '/S'; \
-                 Remove-Item \"$env:TEMP\\OllamaSetup.exe\" -ErrorAction SilentlyContinue"
-            )])
+                 Remove-Item \"$env:TEMP\\OllamaSetup.exe\" -ErrorAction SilentlyContinue"])
             .status()
             .map_err(|e| format!("download failed: {e}"))?;
         if !status.success() {

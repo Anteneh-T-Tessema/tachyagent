@@ -8,8 +8,8 @@ use crate::state::DaemonState;
 use super::{Response, ErrorResponse};
 
 pub(super) fn handle_list_webhooks(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    Response::json(200, &serde_json::json!({ "webhooks": s.webhooks }))
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    Response::json(200, serde_json::json!({ "webhooks": s.webhooks }))
 }
 
 pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -37,10 +37,10 @@ pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>
     let events = if req.events.is_empty() { vec!["*".to_string()] } else { req.events };
     let signed = req.secret.is_some();
     let webhook = crate::state::WebhookConfig { url: req.url, events, enabled: req.enabled, secret: req.secret };
-    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.webhooks.push(webhook.clone());
     s.save();
-    Response::json(201, &serde_json::json!({
+    Response::json(201, serde_json::json!({
         "ok": true,
         "webhook": webhook,
         "signed": signed,
@@ -51,7 +51,7 @@ pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>
 pub(super) fn handle_verify_webhook_signature(body: &str, raw: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let sig_header = raw.lines()
         .find(|l| l.to_lowercase().starts_with("x-tachy-signature:"))
-        .and_then(|l| l.splitn(2, ':').nth(1))
+        .and_then(|l| l.split_once(':').map(|x| x.1))
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
@@ -61,9 +61,9 @@ pub(super) fn handle_verify_webhook_signature(body: &str, raw: &str, state: &Arc
         Ok(r) => r,
         Err(_) => return Response::json(400, &ErrorResponse { error: "missing webhook_url".to_string() }),
     };
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.verify_webhook_signature(&req.webhook_url, body.as_bytes(), &sig_header) {
-        Ok(()) => Response::json(200, &serde_json::json!({ "valid": true })),
-        Err(e) => Response::json(401, &serde_json::json!({ "valid": false, "reason": e })),
+        Ok(()) => Response::json(200, serde_json::json!({ "valid": true })),
+        Err(e) => Response::json(401, serde_json::json!({ "valid": false, "reason": e })),
     }
 }

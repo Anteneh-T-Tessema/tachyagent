@@ -1,11 +1,11 @@
 //! LSP (Language Server Protocol) integration layer.
 //!
 //! Wraps LSP capabilities into tools the agent can use:
-//! - go_to_definition(file, line, col)
-//! - find_references(file, line, col)
-//! - get_diagnostics(file)
-//! - rename_symbol(file, line, col, new_name)
-//! - hover_info(file, line, col)
+//! - `go_to_definition(file`, line, col)
+//! - `find_references(file`, line, col)
+//! - `get_diagnostics(file)`
+//! - `rename_symbol(file`, line, col, `new_name`)
+//! - `hover_info(file`, line, col)
 //!
 //! Architecture:
 //!   Agent Loop → LSP Tool Interface → LSP Client → Language Server (tsserver, pylsp)
@@ -68,12 +68,12 @@ pub struct LspManager {
 }
 
 impl LspManager {
-    pub fn new(workspace_root: &Path) -> Self {
+    #[must_use] pub fn new(workspace_root: &Path) -> Self {
         Self { workspace_root: workspace_root.to_path_buf() }
     }
 
     /// Get diagnostics for a file using the appropriate language tool.
-    pub fn get_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
+    #[must_use] pub fn get_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
         let path = self.resolve_path(file);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
@@ -87,7 +87,7 @@ impl LspManager {
     }
 
     /// Get type/hover info for a symbol.
-    pub fn hover(&self, file: &str, line: usize, col: usize) -> Option<HoverInfo> {
+    #[must_use] pub fn hover(&self, file: &str, line: usize, col: usize) -> Option<HoverInfo> {
         // For now, use grep-based symbol lookup
         // Full LSP hover requires a running language server
         let path = self.resolve_path(file);
@@ -99,10 +99,10 @@ impl LspManager {
         let chars: Vec<char> = target_line.chars().collect();
         let mut start = col.saturating_sub(1);
         let mut end = col.saturating_sub(1);
-        while start > 0 && chars.get(start - 1).map(|c| c.is_alphanumeric() || *c == '_').unwrap_or(false) {
+        while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
             start -= 1;
         }
-        while end < chars.len() && chars.get(end).map(|c| c.is_alphanumeric() || *c == '_').unwrap_or(false) {
+        while end < chars.len() && chars.get(end).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
             end += 1;
         }
         let symbol: String = chars[start..end].iter().collect();
@@ -116,7 +116,7 @@ impl LspManager {
     }
 
     /// Find all references to a symbol in the workspace.
-    pub fn find_references(&self, file: &str, line: usize, col: usize) -> Vec<Location> {
+    #[must_use] pub fn find_references(&self, file: &str, line: usize, col: usize) -> Vec<Location> {
         let path = self.resolve_path(file);
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
@@ -133,10 +133,10 @@ impl LspManager {
         let chars: Vec<char> = target_line.chars().collect();
         let mut start = col.saturating_sub(1).min(chars.len().saturating_sub(1));
         let mut end = start;
-        while start > 0 && chars.get(start - 1).map(|c| c.is_alphanumeric() || *c == '_').unwrap_or(false) {
+        while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
             start -= 1;
         }
-        while end < chars.len() && chars.get(end).map(|c| c.is_alphanumeric() || *c == '_').unwrap_or(false) {
+        while end < chars.len() && chars.get(end).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
             end += 1;
         }
         let symbol: String = chars[start..end].iter().collect();
@@ -258,7 +258,7 @@ fn parse_tsc_output(output: &str, _target: &Path) -> Vec<Diagnostic> {
 
         let severity = if rest.starts_with("error") { DiagnosticSeverity::Error }
             else { DiagnosticSeverity::Warning };
-        let message = rest.splitn(2, ": ").nth(1).unwrap_or(rest);
+        let message = rest.split_once(": ").map_or(rest, |x| x.1);
 
         Some(Diagnostic { file: file.to_string(), line: line_num, column: col,
             severity, message: message.to_string(), source: "tsc".to_string() })
@@ -315,7 +315,7 @@ fn parse_go_errors(stderr: &str, _target: &Path) -> Vec<Diagnostic> {
     }).collect()
 }
 
-/// Execute the get_diagnostics tool — called by the LLM.
+/// Execute the `get_diagnostics` tool — called by the LLM.
 pub fn execute_get_diagnostics(input: &serde_json::Value, workspace_root: &Path) -> Result<String, String> {
     let file = input.get("file").and_then(|v| v.as_str())
         .ok_or("'file' parameter required")?;
@@ -335,11 +335,11 @@ pub fn execute_get_diagnostics(input: &serde_json::Value, workspace_root: &Path)
     }
 }
 
-/// Execute the find_references tool.
+/// Execute the `find_references` tool.
 pub fn execute_find_references(input: &serde_json::Value, workspace_root: &Path) -> Result<String, String> {
     let file = input.get("file").and_then(|v| v.as_str()).ok_or("'file' required")?;
-    let line = input.get("line").and_then(|v| v.as_u64()).ok_or("'line' required")? as usize;
-    let col = input.get("column").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let line = input.get("line").and_then(serde_json::Value::as_u64).ok_or("'line' required")? as usize;
+    let col = input.get("column").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
 
     let lsp = LspManager::new(workspace_root);
     let refs = lsp.find_references(file, line, col);

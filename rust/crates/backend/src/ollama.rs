@@ -108,12 +108,12 @@ impl OllamaBackend {
         self.token_tx = Some(tx);
     }
 
-    pub fn model(&self) -> &str {
+    #[must_use] pub fn model(&self) -> &str {
         &self.model
     }
 
     /// Return the correct FIM (Fill-in-the-Middle) tokens for this model.
-    pub fn get_fim_tokens(&self) -> (&str, &str, &str) {
+    #[must_use] pub fn get_fim_tokens(&self) -> (&str, &str, &str) {
         let m = self.model.to_lowercase();
         if m.contains("codellama") || m.contains("llama-2") {
             ("<PRE>", "<SUF>", "<MID>")
@@ -281,7 +281,7 @@ impl OllamaBackend {
         events.push(AssistantEvent::Usage(TokenUsage { input_tokens: p_tokens, output_tokens: e_tokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }));
         events.push(AssistantEvent::MessageStop);
 
-        Ok((events, InferenceMetrics { ttft_ms, tokens_per_sec: tps, total_tokens: (p_tokens + e_tokens) as u64 }))
+        Ok((events, InferenceMetrics { ttft_ms, tokens_per_sec: tps, total_tokens: u64::from(p_tokens + e_tokens) }))
     }
 
     pub async fn send_streaming_generate(
@@ -327,7 +327,7 @@ impl OllamaBackend {
         events.push(AssistantEvent::Usage(TokenUsage { input_tokens: p_tokens, output_tokens: e_tokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }));
         events.push(AssistantEvent::MessageStop);
 
-        Ok((events, InferenceMetrics { ttft_ms, tokens_per_sec: tps, total_tokens: (p_tokens + e_tokens) as u64 }))
+        Ok((events, InferenceMetrics { ttft_ms, tokens_per_sec: tps, total_tokens: u64::from(p_tokens + e_tokens) }))
     }
 
     async fn send_request(
@@ -353,7 +353,7 @@ fn parse_ollama_response(res: OllamaChatResponse) -> Result<Vec<AssistantEvent>,
             }
             for (i, call) in calls.iter().enumerate() {
                 events.push(AssistantEvent::ToolUse {
-                    id: call.id.clone().unwrap_or_else(|| format!("ollama-{}", i)),
+                    id: call.id.clone().unwrap_or_else(|| format!("ollama-{i}")),
                     name: call.function.name.clone(),
                     input: serde_json::to_string(&call.function.arguments).unwrap_or_default(),
                 });

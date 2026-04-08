@@ -128,8 +128,8 @@ impl GovernancePolicy {
         }
 
         // Destructive shell check
-        if self.block_destructive_shell && tool_name == "bash" {
-            if input.contains("rm -rf /") || input.contains("rm -rf ~") {
+        if self.block_destructive_shell && tool_name == "bash"
+            && (input.contains("rm -rf /") || input.contains("rm -rf ~")) {
                 return Some(GovernanceViolation {
                     rule_name: "block_destructive_shell".to_string(),
                     tool_name: tool_name.to_string(),
@@ -137,7 +137,6 @@ impl GovernancePolicy {
                     severity: AuditSeverity::Critical,
                 });
             }
-        }
 
         // Protected paths check for write operations
         if (tool_name == "write_file" || tool_name == "edit_file") && !self.protected_paths.is_empty() {

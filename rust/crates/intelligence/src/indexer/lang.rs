@@ -3,7 +3,7 @@
 use std::path::Path;
 
 /// Detect the programming language from a file path extension.
-pub fn detect_language(path: &str) -> &str {
+#[must_use] pub fn detect_language(path: &str) -> &str {
     match path.rsplit('.').next() {
         Some("rs") => "rust",
         Some("py") => "python",
@@ -29,7 +29,7 @@ pub fn detect_language(path: &str) -> &str {
 }
 
 /// Detect the test command for the workspace (based on marker files).
-pub fn detect_test_command(workspace_root: &Path) -> Option<String> {
+#[must_use] pub fn detect_test_command(workspace_root: &Path) -> Option<String> {
     if workspace_root.join("Cargo.toml").exists() {
         Some("cargo test".to_string())
     } else if workspace_root.join("package.json").exists() {

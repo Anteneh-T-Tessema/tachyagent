@@ -10,7 +10,7 @@
 //! }
 //! ```
 //!
-//! The agent can then call tools like "mcp__database__query" or "mcp__github__list_issues".
+//! The agent can then call tools like "`mcp__database__query`" or "`mcp__github__list_issues`".
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -43,7 +43,7 @@ pub struct McpTool {
 
 impl McpTool {
     /// The qualified name used in the agent's tool list: mcp__<server>__<tool>
-    pub fn qualified_name(&self) -> String {
+    #[must_use] pub fn qualified_name(&self) -> String {
         format!("mcp__{}_{}", self.server_name, self.tool_name)
     }
 }
@@ -153,7 +153,7 @@ impl McpConnection {
             .map_err(|e| format!("invalid JSON from MCP server: {e}"))?;
 
         if let Some(error) = response.get("error") {
-            return Err(format!("MCP error: {}", error));
+            return Err(format!("MCP error: {error}"));
         }
 
         Ok(response.get("result").cloned().unwrap_or(json!({})))
@@ -186,13 +186,19 @@ pub struct McpClientManager {
     connections: BTreeMap<String, McpConnection>,
 }
 
+impl Default for McpClientManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpClientManager {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self { connections: BTreeMap::new() }
     }
 
     /// Connect to all configured MCP servers.
-    pub fn connect_all(configs: &[McpServerConfig]) -> Self {
+    #[must_use] pub fn connect_all(configs: &[McpServerConfig]) -> Self {
         let mut mgr = Self::new();
         for config in configs {
             if config.enabled == Some(false) {
@@ -212,7 +218,7 @@ impl McpClientManager {
     }
 
     /// Get all discovered tools across all servers.
-    pub fn all_tools(&self) -> Vec<&McpTool> {
+    #[must_use] pub fn all_tools(&self) -> Vec<&McpTool> {
         self.connections.values()
             .flat_map(|c| c.tools.iter())
             .collect()
@@ -229,13 +235,13 @@ impl McpClientManager {
         let tool_name = parts[2];
 
         let conn = self.connections.get_mut(server_name)
-            .ok_or_else(|| format!("MCP server '{}' not connected", server_name))?;
+            .ok_or_else(|| format!("MCP server '{server_name}' not connected"))?;
 
         conn.call_tool(tool_name, arguments)
     }
 
     /// Check if a qualified name is an MCP tool.
-    pub fn is_mcp_tool(&self, name: &str) -> bool {
+    #[must_use] pub fn is_mcp_tool(&self, name: &str) -> bool {
         name.starts_with("mcp__")
     }
 }

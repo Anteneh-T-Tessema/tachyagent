@@ -38,7 +38,7 @@ pub enum DiffLine {
 
 impl UnifiedDiff {
     /// Compute a unified diff between two strings.
-    pub fn compute(file_path: &str, old: &str, new: &str) -> Self {
+    #[must_use] pub fn compute(file_path: &str, old: &str, new: &str) -> Self {
         let old_lines: Vec<&str> = old.lines().collect();
         let new_lines: Vec<&str> = new.lines().collect();
 
@@ -59,7 +59,7 @@ impl UnifiedDiff {
             match edit {
                 Edit::Equal => {
                     if let Some(hunk) = current_hunk.as_mut() {
-                        hunk.lines.push(DiffLine::Context(old_lines.get(old_idx).unwrap_or(&"").to_string()));
+                        hunk.lines.push(DiffLine::Context((*old_lines.get(old_idx).unwrap_or(&"")).to_string()));
                         hunk.old_count += 1;
                         hunk.new_count += 1;
                     }
@@ -88,7 +88,7 @@ impl UnifiedDiff {
                         current_hunk = Some(hunk);
                     }
                     let hunk = current_hunk.as_mut().unwrap();
-                    hunk.lines.push(DiffLine::Deletion(old_lines.get(old_idx).unwrap_or(&"").to_string()));
+                    hunk.lines.push(DiffLine::Deletion((*old_lines.get(old_idx).unwrap_or(&"")).to_string()));
                     hunk.old_count += 1;
                     deletions += 1;
                     old_idx += 1;
@@ -114,7 +114,7 @@ impl UnifiedDiff {
                         current_hunk = Some(hunk);
                     }
                     let hunk = current_hunk.as_mut().unwrap();
-                    hunk.lines.push(DiffLine::Addition(new_lines.get(new_idx).unwrap_or(&"").to_string()));
+                    hunk.lines.push(DiffLine::Addition((*new_lines.get(new_idx).unwrap_or(&"")).to_string()));
                     hunk.new_count += 1;
                     additions += 1;
                     new_idx += 1;
@@ -130,7 +130,7 @@ impl UnifiedDiff {
     }
 
     /// Render as unified diff text (compatible with `git apply`).
-    pub fn render(&self) -> String {
+    #[must_use] pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "--- a/{}", self.file_path);
         let _ = writeln!(out, "+++ b/{}", self.file_path);
@@ -150,7 +150,7 @@ impl UnifiedDiff {
     }
 
     /// Render as colored terminal output.
-    pub fn render_colored(&self) -> String {
+    #[must_use] pub fn render_colored(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "\x1b[1m--- a/{}\x1b[0m", self.file_path);
         let _ = writeln!(out, "\x1b[1m+++ b/{}\x1b[0m", self.file_path);
@@ -173,11 +173,11 @@ impl UnifiedDiff {
     }
 
     /// Summary string.
-    pub fn summary(&self) -> String {
+    #[must_use] pub fn summary(&self) -> String {
         format!("{}: +{} -{}", self.file_path, self.additions, self.deletions)
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use] pub fn is_empty(&self) -> bool {
         self.hunks.is_empty()
     }
 }

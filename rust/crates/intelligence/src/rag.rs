@@ -32,7 +32,7 @@ pub struct VectorStore {
 }
 
 impl VectorStore {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 
@@ -42,7 +42,7 @@ impl VectorStore {
     }
 
     /// Search for the top-k most similar chunks to a query vector.
-    pub fn search(&self, query_emb: &[f32], limit: usize) -> Vec<(&CodeChunk, f32)> {
+    #[must_use] pub fn search(&self, query_emb: &[f32], limit: usize) -> Vec<(&CodeChunk, f32)> {
         let mut scored: Vec<(&CodeChunk, f32)> = self.chunks.iter()
             .map(|chunk| {
                 let score = cosine_similarity(&chunk.embedding, query_emb);
@@ -63,7 +63,7 @@ impl VectorStore {
     }
 
     /// Get total number of chunks.
-    pub fn len(&self) -> usize {
+    #[must_use] pub fn len(&self) -> usize {
         self.chunks.len()
     }
 }
@@ -88,7 +88,7 @@ impl Default for Chunker {
 }
 
 impl Chunker {
-    pub fn chunk_file(&self, _path: &str, content: &str) -> Vec<(usize, usize, String)> {
+    #[must_use] pub fn chunk_file(&self, _path: &str, content: &str) -> Vec<(usize, usize, String)> {
         let mut chunks = Vec::new();
         let mut start_line = 1;
         let mut current_idx = 0;

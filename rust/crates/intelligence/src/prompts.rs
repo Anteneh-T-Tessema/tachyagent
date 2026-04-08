@@ -42,7 +42,7 @@ pub enum ToolInstructionStyle {
 }
 
 /// Detect model family from model name.
-pub fn detect_family(model_name: &str) -> ModelFamily {
+#[must_use] pub fn detect_family(model_name: &str) -> ModelFamily {
     let lower = model_name.to_lowercase();
     if lower.contains("qwen") { return ModelFamily::Qwen; }
     if lower.contains("deepseek") { return ModelFamily::DeepSeek; }
@@ -55,7 +55,7 @@ pub fn detect_family(model_name: &str) -> ModelFamily {
 }
 
 /// Get the optimal prompt template for a model.
-pub fn template_for_model(model_name: &str) -> PromptTemplate {
+#[must_use] pub fn template_for_model(model_name: &str) -> PromptTemplate {
     let family = detect_family(model_name);
     match family {
         ModelFamily::Qwen => PromptTemplate {
@@ -127,7 +127,7 @@ pub fn template_for_model(model_name: &str) -> PromptTemplate {
 }
 
 /// Build an optimized system prompt for a specific model.
-pub fn build_optimized_prompt(
+#[must_use] pub fn build_optimized_prompt(
     model_name: &str,
     base_prompt: &str,
     context_injection: Option<&str>,

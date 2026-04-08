@@ -26,7 +26,7 @@ pub enum ValidationErrorKind {
 }
 
 /// Validate generated code for basic correctness.
-pub fn validate_code(code: &str, language: &str) -> ValidationResult {
+#[must_use] pub fn validate_code(code: &str, language: &str) -> ValidationResult {
     let mut errors = Vec::new();
 
     // Check for empty output
@@ -189,7 +189,7 @@ fn check_suspicious_patterns(code: &str) -> Vec<ValidationError> {
         if code.contains(pattern) {
             errors.push(ValidationError {
                 kind: ValidationErrorKind::SuspiciousPattern,
-                message: message.to_string(),
+                message: (*message).to_string(),
                 line: None,
             });
         }
@@ -199,7 +199,7 @@ fn check_suspicious_patterns(code: &str) -> Vec<ValidationError> {
 }
 
 /// Clean model artifacts from generated code.
-pub fn clean_code_output(code: &str) -> String {
+#[must_use] pub fn clean_code_output(code: &str) -> String {
     let mut cleaned = code.to_string();
 
     // Remove markdown code block markers

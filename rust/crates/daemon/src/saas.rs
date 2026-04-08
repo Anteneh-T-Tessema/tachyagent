@@ -1,4 +1,4 @@
-//! SaaS Multi-Tenant Platform for the Tachy platform.
+//! `SaaS` Multi-Tenant Platform for the Tachy platform.
 //! Tenant isolation, authentication, resource limits, and managed infrastructure.
 
 use audit::hash_api_key;
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// A tenant in the SaaS platform.
+/// A tenant in the `SaaS` platform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tenant {
     pub id: String,
@@ -54,7 +54,7 @@ pub struct DashboardSummary {
     pub billing_status: String,
 }
 
-/// Errors from SaaS platform operations.
+/// Errors from `SaaS` platform operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaaSError {
     TenantNotFound,
@@ -90,7 +90,7 @@ struct UserRecord {
     password_hash: String,
 }
 
-/// The SaaS multi-tenant platform.
+/// The `SaaS` multi-tenant platform.
 #[derive(Debug, Clone)]
 pub struct SaaSPlatform {
     tenants: BTreeMap<String, Tenant>,
@@ -112,8 +112,8 @@ struct TenantUsage {
 }
 
 impl SaaSPlatform {
-    /// Create a new SaaS platform with the given JWT secret.
-    pub fn new(jwt_secret: &str) -> Self {
+    /// Create a new `SaaS` platform with the given JWT secret.
+    #[must_use] pub fn new(jwt_secret: &str) -> Self {
         Self {
             tenants: BTreeMap::new(),
             users: BTreeMap::new(),
@@ -123,8 +123,8 @@ impl SaaSPlatform {
         }
     }
 
-    /// Create a new SaaS platform with a custom JWT expiry.
-    pub fn with_expiry(jwt_secret: &str, jwt_expiry_secs: u64) -> Self {
+    /// Create a new `SaaS` platform with a custom JWT expiry.
+    #[must_use] pub fn with_expiry(jwt_secret: &str, jwt_expiry_secs: u64) -> Self {
         Self {
             tenants: BTreeMap::new(),
             users: BTreeMap::new(),
@@ -414,9 +414,9 @@ fn base64_encode(input: &str) -> String {
     let mut result = String::new();
 
     for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let b0 = u32::from(chunk[0]);
+        let b1 = if chunk.len() > 1 { u32::from(chunk[1]) } else { 0 };
+        let b2 = if chunk.len() > 2 { u32::from(chunk[2]) } else { 0 };
 
         let triple = (b0 << 16) | (b1 << 8) | b2;
 
@@ -472,7 +472,7 @@ fn base64_decode(input: &str) -> Result<String, String> {
         };
 
         let triple =
-            ((b0 as u32) << 18) | ((b1 as u32) << 12) | ((b2 as u32) << 6) | (b3 as u32);
+            (u32::from(b0) << 18) | (u32::from(b1) << 12) | (u32::from(b2) << 6) | u32::from(b3);
 
         result.push((triple >> 16) as u8);
         if remaining > 2 {

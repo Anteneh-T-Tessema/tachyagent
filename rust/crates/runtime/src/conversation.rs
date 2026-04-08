@@ -152,6 +152,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_event_tx(mut self, tx: tokio::sync::mpsc::UnboundedSender<RuntimeEvent>) -> Self {
         self.event_tx = Some(tx);
         self
@@ -237,7 +238,7 @@ where
                     }
                     // Inject a recovery hint so the model can try again
                     self.session.messages.push(ConversationMessage::user_text(
-                        format!("[System: Previous response failed ({}). Please try again. If you need to use a tool, use the function calling mechanism — do not print JSON as text.]", error)
+                        format!("[System: Previous response failed ({error}). Please try again. If you need to use a tool, use the function calling mechanism — do not print JSON as text.]")
                     ));
                     continue;
                 }
@@ -369,7 +370,7 @@ where
         };
 
         if let Some(tx) = &self.event_tx {
-            let _ = tx.send(RuntimeEvent::Usage(summary.usage.clone()));
+            let _ = tx.send(RuntimeEvent::Usage(summary.usage));
             let _ = tx.send(RuntimeEvent::Finished(summary.clone()));
         }
 

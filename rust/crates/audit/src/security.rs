@@ -5,12 +5,12 @@ use std::time::{Duration, Instant};
 
 /// Hash an API key using the same SHA-256 from our audit chain.
 /// Never store raw API keys — always hash them.
-pub fn hash_api_key(key: &str) -> String {
+#[must_use] pub fn hash_api_key(key: &str) -> String {
     sha256_hex(key)
 }
 
 /// Verify an API key against a stored hash.
-pub fn verify_api_key(key: &str, stored_hash: &str) -> bool {
+#[must_use] pub fn verify_api_key(key: &str, stored_hash: &str) -> bool {
     hash_api_key(key) == stored_hash
 }
 
@@ -20,7 +20,7 @@ pub struct RateLimiter {
     max_requests: u32,
     /// Time window duration
     window: Duration,
-    /// Tracking: key → (count, window_start)
+    /// Tracking: key → (count, `window_start`)
     entries: BTreeMap<String, (u32, Instant)>,
 }
 
@@ -65,7 +65,7 @@ impl RateLimiter {
 
 /// Sanitize user input to prevent prompt injection attacks.
 /// Removes control characters and limits length.
-pub fn sanitize_prompt(input: &str, max_length: usize) -> String {
+#[must_use] pub fn sanitize_prompt(input: &str, max_length: usize) -> String {
     let cleaned: String = input
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
@@ -75,12 +75,12 @@ pub fn sanitize_prompt(input: &str, max_length: usize) -> String {
 }
 
 /// Check if a file path is safe (no directory traversal).
-pub fn is_safe_path(path: &str) -> bool {
+#[must_use] pub fn is_safe_path(path: &str) -> bool {
     !path.contains("..") && !path.starts_with('/') && !path.starts_with('~')
 }
 
 /// Redact sensitive patterns from text before logging.
-pub fn redact_sensitive(text: &str) -> String {
+#[must_use] pub fn redact_sensitive(text: &str) -> String {
     let mut redacted = text.to_string();
 
     // Redact common secret patterns
@@ -115,6 +115,7 @@ fn sha256_hex(input: &str) -> String {
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[allow(clippy::unreadable_literal)]
 fn sha256_bytes(message: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,

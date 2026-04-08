@@ -7,7 +7,9 @@
 //!   tachy mcp-server
 //!
 //! In Claude Desktop's config:
-//!   { "mcpServers": { "tachy": { "command": "tachy", "args": ["mcp-server"] } } }
+//! ```json
+//! { "mcpServers": { "tachy": { "command": "tachy", "args": ["mcp-server"] } } }
+//! ```
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

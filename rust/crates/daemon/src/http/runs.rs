@@ -41,15 +41,15 @@ fn default_priority() -> u8 { 5 }
 // ---------------------------------------------------------------------------
 
 pub(super) fn handle_list_parallel_runs(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orch = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let runs: Vec<serde_json::Value> = orch.list_runs().iter().map(|r| serde_json::json!({
         "run_id": r.id,
         "status": r.status,
         "task_count": r.tasks.len(),
         "created_at": r.created_at,
     })).collect();
-    Response::json(200, &serde_json::json!({ "runs": runs }))
+    Response::json(200, serde_json::json!({ "runs": runs }))
 }
 
 pub(super) fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -78,7 +78,7 @@ pub(super) fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -
         tasks,
         status: RunStatus::Running,
         created_at: chrono_now_secs(),
-        max_concurrency: req.max_concurrency.min(8).max(1),
+        max_concurrency: req.max_concurrency.clamp(1, 8),
         conflicts: Vec::new(),
     };
     let bg_state = Arc::clone(state);
@@ -91,11 +91,11 @@ pub(super) fn handle_parallel_run(body: &str, state: &Arc<Mutex<DaemonState>>) -
             }
         }
     });
-    Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "running" }))
+    Response::json(202, serde_json::json!({ "run_id": run_id, "status": "running" }))
 }
 
 pub(super) fn handle_get_parallel_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let from_orch = s.orchestrator.lock().ok()
         .and_then(|orch| orch.get_run(run_id).cloned());
     if let Some(run) = from_orch {
@@ -113,17 +113,17 @@ pub(super) fn handle_get_parallel_run(run_id: &str, state: &Arc<Mutex<DaemonStat
     if tasks.is_empty() {
         return Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") });
     }
-    Response::json(200, &serde_json::json!({ "run_id": run_id, "status": "running", "tasks": tasks }))
+    Response::json(200, serde_json::json!({ "run_id": run_id, "status": "running", "tasks": tasks }))
 }
 
 pub(super) fn handle_cancel_parallel_run(run_id: &str, _body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let matching: Vec<_> = s.agents.keys().filter(|id| id.starts_with(run_id)).cloned().collect();
     if matching.is_empty() {
         return Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") });
     }
     drop(s);
-    Response::json(202, &serde_json::json!({
+    Response::json(202, serde_json::json!({
         "run_id": run_id,
         "status": "cancellation_requested",
         "tasks": matching.len()
@@ -131,20 +131,20 @@ pub(super) fn handle_cancel_parallel_run(run_id: &str, _body: &str, state: &Arc<
 }
 
 pub(super) fn handle_run_history(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let workspace_root = state.lock().unwrap_or_else(|e| e.into_inner()).workspace_root.clone();
+    let workspace_root = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).workspace_root.clone();
     let runs = parallel::Orchestrator::load_run_history(&workspace_root);
-    Response::json(200, &serde_json::json!({ "count": runs.len(), "runs": runs }))
+    Response::json(200, serde_json::json!({ "count": runs.len(), "runs": runs }))
 }
 
 pub(super) fn handle_get_run_conflicts(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let run = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_run(run_id).cloned();
     match run {
         None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
         Some(r) => {
             let count = r.conflicts.len();
-            Response::json(200, &serde_json::json!({
+            Response::json(200, serde_json::json!({
                 "run_id": run_id,
                 "conflict_count": count,
                 "has_conflicts": count > 0,
@@ -159,14 +159,14 @@ pub(super) fn handle_get_run_conflicts(run_id: &str, state: &Arc<Mutex<DaemonSta
 // ---------------------------------------------------------------------------
 
 pub(super) fn handle_list_swarm_runs(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
-    Response::json(200, &orch.list_runs())
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orch = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    Response::json(200, orch.list_runs())
 }
 
 pub(super) fn handle_get_swarm_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let orch = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orch = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match orch.get_run(run_id) {
         Some(run) => Response::json(200, run),
         None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
@@ -179,7 +179,7 @@ pub(super) fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>
         Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
     };
     {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         input.coordinator = Some(s.config.coordinator.clone());
     }
     let plan = intelligence::plan_swarm_refactor(&input);
@@ -219,7 +219,7 @@ pub(super) fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>
             }
         }
     });
-    Response::json(202, &serde_json::json!({ "run_id": run_id, "status": "running" }))
+    Response::json(202, serde_json::json!({ "run_id": run_id, "status": "running" }))
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ pub(super) fn handle_start_swarm_run(body: &str, state: &Arc<Mutex<DaemonState>>
 
 /// GET /api/events — Server-Sent Events stream of all daemon activity.
 pub(super) async fn handle_event_stream(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let rx = state.lock().unwrap_or_else(|e| e.into_inner()).event_bus.subscribe();
+    let rx = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).event_bus.subscribe();
     let (resp, tx) = Response::sse();
     tokio::spawn(async move {
         let mut rx = rx;
@@ -250,8 +250,8 @@ pub(super) async fn handle_event_stream(state: &Arc<Mutex<DaemonState>>) -> Resp
 // ---------------------------------------------------------------------------
 
 pub(super) fn handle_get_run_cost(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
-    let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let run = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_run(run_id).cloned();
     match run {
         None => {
@@ -260,10 +260,10 @@ pub(super) fn handle_get_run_cost(run_id: &str, state: &Arc<Mutex<DaemonState>>)
             let history = parallel::Orchestrator::load_run_history(&workspace_root);
             match history.iter().find(|r| r.id == run_id) {
                 None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
-                Some(r) => Response::json(200, &parallel::RunCost::from_run(r)),
+                Some(r) => Response::json(200, parallel::RunCost::from_run(r)),
             }
         }
-        Some(r) => Response::json(200, &parallel::RunCost::from_run(&r)),
+        Some(r) => Response::json(200, parallel::RunCost::from_run(&r)),
     }
 }
 
@@ -273,21 +273,18 @@ pub(super) fn handle_get_run_cost(run_id: &str, state: &Arc<Mutex<DaemonState>>)
 
 pub(super) fn handle_replay_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let (workspace_root, run_opt) = {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
-        let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let run = s.orchestrator.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_run(run_id).cloned();
         (s.workspace_root.clone(), run)
     };
-    let original = match run_opt {
-        Some(r) => r,
-        None => {
-            let history = parallel::Orchestrator::load_run_history(&workspace_root);
-            match history.into_iter().find(|r| r.id == run_id) {
-                None => return Response::json(404, &ErrorResponse {
-                    error: format!("run not found: {run_id}"),
-                }),
-                Some(r) => r,
-            }
+    let original = if let Some(r) = run_opt { r } else {
+        let history = parallel::Orchestrator::load_run_history(&workspace_root);
+        match history.into_iter().find(|r| r.id == run_id) {
+            None => return Response::json(404, &ErrorResponse {
+                error: format!("run not found: {run_id}"),
+            }),
+            Some(r) => r,
         }
     };
     let new_run_id = format!("replay-{}-{}", run_id, now_epoch());
@@ -314,12 +311,12 @@ pub(super) fn handle_replay_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -
         max_concurrency: original.max_concurrency,
         conflicts: vec![],
     };
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .publish_event("run_replay_started", serde_json::json!({
             "original_run_id": run_id, "replay_run_id": new_run_id,
         }));
     let completed = parallel::execute_parallel_run(replay_run, state);
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .publish_event("run_replay_complete", serde_json::json!({
             "run_id": completed.id, "status": format!("{:?}", completed.status),
         }));
@@ -356,9 +353,9 @@ fn default_conc() -> usize { 4 }
 fn default_pri() -> u8 { 5 }
 
 pub(super) fn handle_list_run_templates(state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let templates: Vec<&crate::state::RunTemplate> = s.run_templates.values().collect();
-    Response::json(200, &serde_json::json!({ "count": templates.len(), "templates": templates }))
+    Response::json(200, serde_json::json!({ "count": templates.len(), "templates": templates }))
 }
 
 pub(super) fn handle_save_run_template(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -385,14 +382,14 @@ pub(super) fn handle_save_run_template(body: &str, state: &Arc<Mutex<DaemonState
         max_concurrency: req.max_concurrency,
         created_at: now_epoch(),
     };
-    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.run_templates.insert(req.name.clone(), template.clone());
     drop(s);
     Response::json(201, &template)
 }
 
 pub(super) fn handle_get_run_template(name: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.run_templates.get(name) {
         None => Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
         Some(t) => Response::json(200, t),
@@ -400,16 +397,16 @@ pub(super) fn handle_get_run_template(name: &str, state: &Arc<Mutex<DaemonState>
 }
 
 pub(super) fn handle_delete_run_template(name: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.run_templates.remove(name) {
         None => Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
-        Some(_) => Response::json(200, &serde_json::json!({ "deleted": name })),
+        Some(_) => Response::json(200, serde_json::json!({ "deleted": name })),
     }
 }
 
 pub(super) fn handle_run_template(name: &str, _body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let template = {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match s.run_templates.get(name).cloned() {
             None => return Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
             Some(t) => t,
@@ -446,10 +443,10 @@ pub(super) fn handle_run_template(name: &str, _body: &str, state: &Arc<Mutex<Dae
         max_concurrency: template.max_concurrency,
         conflicts: vec![],
     };
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .publish_event("template_run_started", serde_json::json!({ "template": name, "run_id": run_id }));
     let completed = parallel::execute_parallel_run(run, state);
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .publish_event("template_run_complete", serde_json::json!({
             "template": name, "run_id": completed.id, "status": format!("{:?}", completed.status),
         }));

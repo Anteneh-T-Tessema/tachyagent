@@ -78,7 +78,7 @@ impl std::error::Error for GitError {}
 pub struct GitTools;
 
 impl GitTools {
-    pub fn is_git_repo() -> bool {
+    #[must_use] pub fn is_git_repo() -> bool {
         Command::new("git")
             .args(["rev-parse", "--is-inside-work-tree"])
             .output()
@@ -263,14 +263,14 @@ pub fn execute_git_status() -> Result<String, String> {
 
 pub fn execute_git_diff(input: &serde_json::Value) -> Result<String, String> {
     let path = input.get("path").and_then(|v| v.as_str());
-    let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    let staged = input.get("staged").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let diff = GitTools::diff(path, staged).map_err(|e| e.to_string())?;
     serde_json::to_string_pretty(&diff).map_err(|e| e.to_string())
 }
 
 pub fn execute_git_branch(input: &serde_json::Value) -> Result<String, String> {
     let name = input.get("name").and_then(|v| v.as_str()).ok_or("missing 'name'")?;
-    let create = input.get("create").and_then(|v| v.as_bool()).unwrap_or(false);
+    let create = input.get("create").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let result = GitTools::branch(name, create).map_err(|e| e.to_string())?;
     serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
 }
@@ -281,7 +281,7 @@ pub fn execute_git_commit(input: &serde_json::Value) -> Result<String, String> {
     serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
 }
 
-pub fn git_tool_specs() -> Vec<tools::ToolSpec> {
+#[must_use] pub fn git_tool_specs() -> Vec<tools::ToolSpec> {
     vec![
         tools::ToolSpec {
             name: "git_status",

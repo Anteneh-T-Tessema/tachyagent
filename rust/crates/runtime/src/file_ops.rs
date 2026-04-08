@@ -141,8 +141,7 @@ pub fn read_file(
     let lines: Vec<&str> = content.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
     let end_index = limit
-        .map(|limit| start_index.saturating_add(limit).min(lines.len()))
-        .unwrap_or(lines.len());
+        .map_or(lines.len(), |limit| start_index.saturating_add(limit).min(lines.len()));
     let selected = lines[start_index..end_index].join("\n");
 
     Ok(ReadFileOutput {
@@ -176,7 +175,7 @@ pub struct DiffPreview {
     pub is_new_file: bool,
 }
 
-/// Generate a diff preview for write_file WITHOUT writing to disk.
+/// Generate a diff preview for `write_file` WITHOUT writing to disk.
 pub fn preview_write_file(path: &str, content: &str) -> io::Result<DiffPreview> {
     let absolute_path = normalize_path_allow_missing(path)?;
     let old_content = fs::read_to_string(&absolute_path).unwrap_or_default();
@@ -194,7 +193,7 @@ pub fn preview_write_file(path: &str, content: &str) -> io::Result<DiffPreview> 
     })
 }
 
-/// Generate a diff preview for edit_file WITHOUT writing to disk.
+/// Generate a diff preview for `edit_file` WITHOUT writing to disk.
 pub fn preview_edit_file(
     path: &str,
     old_string: &str,
@@ -302,21 +301,18 @@ pub fn edit_file(
         (old_string.to_string(), false)
     } else {
         // Fuzzy match: try normalizing whitespace (tabs vs spaces, trailing whitespace)
-        match fuzzy_find_match(&original_file, old_string) {
-            Some(matched) => (matched, true),
-            None => {
-                // Provide a helpful error with nearby context
-                let hint = find_closest_match(&original_file, old_string);
-                let msg = if let Some(h) = hint {
-                    format!(
-                        "old_string not found in file. Did you mean:\n{}",
-                        h.chars().take(200).collect::<String>()
-                    )
-                } else {
-                    "old_string not found in file".to_string()
-                };
-                return Err(io::Error::new(io::ErrorKind::NotFound, msg));
-            }
+        if let Some(matched) = fuzzy_find_match(&original_file, old_string) { (matched, true) } else {
+            // Provide a helpful error with nearby context
+            let hint = find_closest_match(&original_file, old_string);
+            let msg = if let Some(h) = hint {
+                format!(
+                    "old_string not found in file. Did you mean:\n{}",
+                    h.chars().take(200).collect::<String>()
+                )
+            } else {
+                "old_string not found in file".to_string()
+            };
+            return Err(io::Error::new(io::ErrorKind::NotFound, msg));
         }
     };
 
@@ -354,7 +350,7 @@ pub fn edit_file(
     Ok((output, preview))
 }
 
-/// Try to find old_string in the file with normalized whitespace.
+/// Try to find `old_string` in the file with normalized whitespace.
 /// Returns the actual string from the file that matches.
 fn fuzzy_find_match(file_content: &str, old_string: &str) -> Option<String> {
     let normalized_old = normalize_whitespace(old_string);
@@ -537,13 +533,13 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
             for index in matched_lines {
                 let start = index.saturating_sub(input.before.unwrap_or(context));
                 let end = (index + input.after.unwrap_or(context) + 1).min(lines.len());
-                for current in start..end {
+                for (offset, line) in lines[start..end].iter().enumerate() {
                     let prefix = if input.line_numbers.unwrap_or(true) {
-                        format!("{}:{}:", file_path.to_string_lossy(), current + 1)
+                        format!("{}:{}:", file_path.to_string_lossy(), start + offset + 1)
                     } else {
                         format!("{}:", file_path.to_string_lossy())
                     };
-                    content_lines.push(format!("{prefix}{}", lines[current]));
+                    content_lines.push(format!("{prefix}{line}"));
                 }
             }
         }
@@ -587,7 +583,7 @@ fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(base_path) {
         let entry =
-            entry.map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
+            entry.map_err(|error| io::Error::other(error.to_string()))?;
         if entry.file_type().is_file() {
             files.push(entry.path().to_path_buf());
         }

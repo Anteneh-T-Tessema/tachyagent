@@ -126,16 +126,13 @@ pub(crate) fn run_search(query: &str, limit: usize) -> Result<(), Box<dyn std::e
 
     println!("Searching codebase for: {query}\n");
     let cfg = intelligence::IndexerConfig::default();
-    let index = match intelligence::CodebaseIndexer::load_index(&cwd) {
-        Ok(i) => i,
-        Err(_) => {
-            print!("Building index... ");
-            io::stdout().flush().ok();
-            let idx = intelligence::CodebaseIndexer::build_index(&cwd, &cfg)?;
-            let _ = intelligence::CodebaseIndexer::save_index(&cwd, &idx);
-            println!("done ({} files)", idx.project.total_files);
-            idx
-        }
+    let index = if let Ok(i) = intelligence::CodebaseIndexer::load_index(&cwd) { i } else {
+        print!("Building index... ");
+        io::stdout().flush().ok();
+        let idx = intelligence::CodebaseIndexer::build_index(&cwd, &cfg)?;
+        let _ = intelligence::CodebaseIndexer::save_index(&cwd, &idx);
+        println!("done ({} files)", idx.project.total_files);
+        idx
     };
 
     let results = intelligence::CodebaseIndexer::search(&index, query, limit);
@@ -262,7 +259,7 @@ pub(crate) fn run_export_audit(format: &str, output: Option<&str>) -> Result<(),
             std::fs::write(outfile, csv)?;
             println!("✓ Audit log exported to {}", outfile.display());
         }
-        "json" | _ => {
+        _ => {
             std::fs::write(outfile, serde_json::to_string_pretty(&events)?)?;
             println!("✓ Audit log exported to {}", outfile.display());
         }
@@ -275,7 +272,7 @@ fn chrono_now_str_iso() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    format!("{}Z (unix {})", secs, secs)
+    format!("{secs}Z (unix {secs})")
 }
 
 pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
@@ -304,7 +301,7 @@ pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box
                     println!("Policy '{}' is valid.", policy_path.display());
                     let json = serde_json::to_string_pretty(&pf)?;
                     let rule_count = json.matches("allow").count() + json.matches("deny").count();
-                    println!("  {} allow/deny rules found", rule_count);
+                    println!("  {rule_count} allow/deny rules found");
                 }
                 Err(e) => return Err(format!("invalid policy: {e}").into()),
             }

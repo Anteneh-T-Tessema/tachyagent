@@ -10,7 +10,7 @@ use crate::state::DaemonState;
 use super::{Response, ErrorResponse, AgentInfo, truncate_completion};
 
 pub(super) fn handle_get_agent(agent_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.agents.get(agent_id) {
         Some(a) => Response::json(200, &AgentInfo {
             id: a.id.clone(),
@@ -28,9 +28,9 @@ pub(super) fn handle_delete_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> 
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
     }
-    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if s.delete_agent(id) {
-        Response::json(204, &serde_json::json!({}))
+        Response::json(204, serde_json::json!({}))
     } else {
         Response::json(404, &ErrorResponse { error: format!("agent not found: {id}") })
     }
@@ -40,9 +40,9 @@ pub(super) fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> 
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
     }
-    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if s.cancel_agent(id) {
-        Response::json(200, &serde_json::json!({ "id": id, "status": "Failed" }))
+        Response::json(200, serde_json::json!({ "id": id, "status": "Failed" }))
     } else {
         Response::json(404, &ErrorResponse { error: format!("agent not found: {id}") })
     }
@@ -69,7 +69,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
     );
 
     let (agent_id, config, governance) = {
-        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let agent_id = match s.create_agent(template, &prompt) {
             Ok(id) => id,
             Err(e) => return Response::json(400, &ErrorResponse { error: e }),
@@ -88,7 +88,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
     std::thread::spawn(move || {
         let t0 = std::time::Instant::now();
         let (result, tracer, model) = {
-            let s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
+            let s = bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let model = config.template.model.clone();
             let tracer = s.tracer.clone();
             let r = AgentEngine::run_agent(
@@ -103,7 +103,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
             &tracer, &bg_agent_id, &model, &config.template.name,
             result.success, result.iterations, result.tool_invocations, duration_ms,
         );
-        let mut s = bg_state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(agent) = s.agents.get_mut(&bg_agent_id) {
             let stored_summary = truncate_completion(&result.summary, 1_000);
             if result.success { agent.mark_completed(&stored_summary); } else { agent.mark_failed(&stored_summary); }
@@ -118,7 +118,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
         s.save();
     });
 
-    Response::json(202, &serde_json::json!({ "agent_id": agent_id, "status": "running" }))
+    Response::json(202, serde_json::json!({ "agent_id": agent_id, "status": "running" }))
 }
 
 pub(super) async fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -133,7 +133,7 @@ pub(super) async fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonS
     let state = Arc::clone(state);
     tokio::spawn(async move {
         let (v_backend, err_msg) = {
-            let s = state.lock().unwrap_or_else(|e| e.into_inner());
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let model_name = req.model.as_deref().unwrap_or(&s.config.agent_templates[0].model);
             match backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), false) {
                 Ok(b) => (Some(b), None),
@@ -150,11 +150,8 @@ pub(super) async fn handle_complete_stream(body: &str, state: &Arc<Mutex<DaemonS
             let tx_inner = tx.clone();
             tokio::spawn(async move {
                 while let Some(event) = t_rx.recv().await {
-                    match event {
-                        backend::BackendEvent::Text(t) => {
-                            let _ = tx_inner.send(format!("data: {{\"text\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
-                        }
-                        _ => {}
+                    if let backend::BackendEvent::Text(t) = event {
+                        let _ = tx_inner.send(format!("data: {{\"text\":\"{}\"}}\n\n", t.replace('\"', "\\\""))).await;
                     }
                 }
             });
@@ -183,7 +180,7 @@ pub(super) async fn handle_chat_stream(body: &str, state: &Arc<Mutex<DaemonState
     let state = Arc::clone(state);
     tokio::spawn(async move {
         let (v_backend, err_msg) = {
-            let s = state.lock().unwrap_or_else(|e| e.into_inner());
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let model_name = req.model.as_deref().unwrap_or(&s.config.agent_templates[0].model);
             match backend::OllamaBackend::new(model_name.to_string(), "http://localhost:11434".to_string(), false) {
                 Ok(b) => (Some(b), None),
@@ -206,7 +203,7 @@ pub(super) async fn handle_chat_stream(body: &str, state: &Arc<Mutex<DaemonState
                 }
             });
             let prompt = req.messages.iter()
-                .filter_map(|m| m["content"].as_str().map(|s| s.to_string()))
+                .filter_map(|m| m["content"].as_str().map(std::string::ToString::to_string))
                 .collect::<Vec<_>>()
                 .join("\n");
             let _ = ollama_backend.send_streaming_generate(backend::OllamaGenerateRequest {
@@ -242,7 +239,7 @@ pub(super) async fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>)
     }
     let prompt = sanitize_prompt(&req.prompt, 50_000);
     let model = {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         req.model.unwrap_or_else(|| s.config.default_model.clone())
     };
     let model_clone = model.clone();
@@ -285,7 +282,7 @@ pub(super) async fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>)
     } else {
         completion
     };
-    Response::json(200, &serde_json::json!({ "completion": text, "model": model }))
+    Response::json(200, serde_json::json!({ "completion": text, "model": model }))
 }
 
 pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
@@ -297,7 +294,7 @@ pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>)
     };
     let prompt = sanitize_prompt(&req.prompt, 50_000);
     let (registry, governance, intel_cfg, workspace_root, mut template) = {
-        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmpl = s.config.agent_templates.first().cloned()
             .unwrap_or_else(platform::AgentTemplate::chat_assistant);
         (s.registry.clone(), s.config.governance.clone(), s.config.intelligence.clone(), s.workspace_root.clone(), tmpl)
@@ -317,7 +314,7 @@ pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>)
         &session_id, &config, &prompt, &registry, &governance,
         &audit_logger, &intel_cfg, &workspace_root, None, None,
     );
-    Response::json(200, &serde_json::json!({
+    Response::json(200, serde_json::json!({
         "model": config.template.model,
         "response": result.summary,
         "iterations": result.iterations,

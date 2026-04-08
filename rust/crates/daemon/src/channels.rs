@@ -68,7 +68,7 @@ pub struct ChannelsFile {
 }
 
 /// Load channel configurations from `.tachy/channels.yaml`.
-pub fn load_channels(tachy_dir: &Path) -> Vec<ChannelConfig> {
+#[must_use] pub fn load_channels(tachy_dir: &Path) -> Vec<ChannelConfig> {
     let yaml_path = tachy_dir.join("channels.yaml");
     let yml_path = tachy_dir.join("channels.yml");
 
@@ -168,10 +168,10 @@ pub fn telegram_send_message(bot_token: &str, chat_id: &str, text: &str) -> Resu
     else { Err(String::from_utf8_lossy(&output.stderr).to_string()) }
 }
 
-/// Expand $ENV_VAR references in a string.
+/// Expand $`ENV_VAR` references in a string.
 fn expand_env(s: &str) -> String {
-    if s.starts_with('$') {
-        std::env::var(&s[1..]).unwrap_or_else(|_| s.to_string())
+    if let Some(name) = s.strip_prefix('$') {
+        std::env::var(name).unwrap_or_else(|_| s.to_string())
     } else {
         s.to_string()
     }
@@ -227,9 +227,8 @@ fn parse_channels_yaml(content: &str) -> Vec<ChannelConfig> {
                         users.push(user.to_string());
                     }
                     continue;
-                } else {
-                    in_users = false;
                 }
+                in_users = false;
             }
             if let Some((key, val)) = trimmed.split_once(':') {
                 let key = key.trim().trim_start_matches("- ");

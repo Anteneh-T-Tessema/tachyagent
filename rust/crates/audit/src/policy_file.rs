@@ -60,8 +60,8 @@ impl PolicyFile {
         }
     }
 
-    /// Convert to a GovernancePolicy.
-    pub fn to_governance_policy(&self) -> GovernancePolicy {
+    /// Convert to a `GovernancePolicy`.
+    #[must_use] pub fn to_governance_policy(&self) -> GovernancePolicy {
         let tool_rules = self.rules.tool_rules.iter().map(|r| {
             ToolGovernanceRule {
                 tool_name: r.tool.clone(),
@@ -83,7 +83,7 @@ impl PolicyFile {
     }
 
     /// Create a default enterprise policy file.
-    pub fn enterprise_default() -> Self {
+    #[must_use] pub fn enterprise_default() -> Self {
         Self {
             version: 1,
             name: "Enterprise Default".to_string(),

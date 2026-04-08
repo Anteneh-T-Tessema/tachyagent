@@ -1,7 +1,7 @@
-//! Fine-tuning dataset extraction and LoRA workflow helpers.
+//! Fine-tuning dataset extraction and `LoRA` workflow helpers.
 //!
 //! Converts Tachy session history into Alpaca-format JSONL suitable for
-//! LoRA fine-tuning with Unsloth, Axolotl, or llama.cpp.
+//! `LoRA` fine-tuning with Unsloth, Axolotl, or llama.cpp.
 //!
 //! Also generates:
 //! - An Ollama `Modelfile` for packaging a custom-adapted model.
@@ -26,7 +26,7 @@ pub struct FinetuneEntry {
     pub output: String,
 }
 
-/// A collected dataset ready for LoRA training.
+/// A collected dataset ready for `LoRA` training.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FinetuneDataset {
     pub entries: Vec<FinetuneEntry>,
@@ -38,7 +38,7 @@ impl FinetuneDataset {
     /// Extract training pairs from all `.json` session files in `sessions_dir`.
     ///
     /// Each consecutive (user, assistant) turn pair becomes one training example.
-    pub fn from_sessions(sessions_dir: &Path) -> Self {
+    #[must_use] pub fn from_sessions(sessions_dir: &Path) -> Self {
         let mut dataset = FinetuneDataset::default();
         let Ok(entries) = std::fs::read_dir(sessions_dir) else {
             return dataset;
@@ -91,7 +91,7 @@ impl FinetuneDataset {
     }
 
     /// Serialize the dataset to newline-delimited JSON (JSONL).
-    pub fn to_jsonl(&self) -> String {
+    #[must_use] pub fn to_jsonl(&self) -> String {
         self.entries
             .iter()
             .filter_map(|e| serde_json::to_string(e).ok())
@@ -113,9 +113,9 @@ impl FinetuneDataset {
 ///
 /// # Arguments
 /// * `base_model`    - e.g. `"mistral:7b"` or `"gemma:7b"`
-/// * `adapter_path`  - path to the `.gguf` LoRA adapter produced by training
+/// * `adapter_path`  - path to the `.gguf` `LoRA` adapter produced by training
 /// * `system_prompt` - custom system prompt baked into the model
-pub fn generate_modelfile(base_model: &str, adapter_path: &str, system_prompt: &str) -> String {
+#[must_use] pub fn generate_modelfile(base_model: &str, adapter_path: &str, system_prompt: &str) -> String {
     format!(
         r#"FROM {base_model}
 
@@ -138,11 +138,11 @@ PARAMETER stop "<|assistant|>"
 // Training script generation
 // ---------------------------------------------------------------------------
 
-/// Generate a shell script for running LoRA fine-tuning with Unsloth.
+/// Generate a shell script for running `LoRA` fine-tuning with Unsloth.
 ///
 /// This is informational output only — no training is performed by Tachy.
 /// The script is written to disk so the user can inspect, modify, and run it.
-pub fn generate_training_script(model_id: &str, dataset_path: &str, output_dir: &str) -> String {
+#[must_use] pub fn generate_training_script(model_id: &str, dataset_path: &str, output_dir: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
 # Tachy-generated LoRA fine-tuning script

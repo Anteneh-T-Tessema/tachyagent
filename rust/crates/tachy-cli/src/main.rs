@@ -61,7 +61,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::ResumeSession { session_path, command } => setup::resume_session(&session_path, command),
         CliAction::Prompt { prompt, model } => {
             let mut cli = repl::LiveCli::new(model, true)?;
-            cli.run_turn(&prompt)?
+            cli.run_turn(&prompt)?;
         }
         CliAction::Repl { model } => repl::run_repl(model)?,
         CliAction::Init => setup::init_workspace()?,

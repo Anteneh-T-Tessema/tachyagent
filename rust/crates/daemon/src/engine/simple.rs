@@ -14,7 +14,7 @@ use platform::AgentConfig;
 
 use super::{AgentRunResult, executor::IntelligentToolExecutor};
 
-/// Simple execution — single run_turn with output validation.
+/// Simple execution — single `run_turn` with output validation.
 pub(super) fn run_simple(
     agent_id: &str,
     config: &AgentConfig,
@@ -130,7 +130,7 @@ pub(super) fn extract_text_summary(messages: &[runtime::ConversationMessage]) ->
 pub(super) fn detect_language_from_content(code: &str) -> String {
     if code.contains("fn ") && (code.contains("let ") || code.contains("pub ")) {
         "rust".to_string()
-    } else if code.contains("def ") && code.contains(":") {
+    } else if code.contains("def ") && code.contains(':') {
         "python".to_string()
     } else if code.contains("function ") || code.contains("const ") || code.contains("=>") {
         "javascript".to_string()

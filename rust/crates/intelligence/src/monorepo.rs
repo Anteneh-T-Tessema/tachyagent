@@ -62,7 +62,7 @@ pub struct MonorepoManifest {
 impl MonorepoManifest {
     /// Detect the workspace layout for `root`, trying each toolchain in
     /// priority order and returning the first match.
-    pub fn detect(root: &Path) -> Self {
+    #[must_use] pub fn detect(root: &Path) -> Self {
         if let Some(m) = detect_cargo(root) {
             return m;
         }

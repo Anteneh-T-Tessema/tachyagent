@@ -257,7 +257,7 @@ pub async fn serve(
                          Content-Type: {content_type}\r\n\
                          Content-Length: {}\r\n\
                          Access-Control-Allow-Origin: *\r\n\
-                         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                         Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n\
                          Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
                          Connection: close\r\n\r\n",
                         body.len()
@@ -272,7 +272,7 @@ pub async fn serve(
                          Cache-Control: no-cache\r\n\
                          Connection: keep-alive\r\n\
                          Access-Control-Allow-Origin: *\r\n\
-                         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                         Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n\
                          Access-Control-Allow-Headers: Content-Type, Authorization\r\n\r\n"
                     );
                     let _ = stream.write_all(header.as_bytes()).await;
@@ -354,7 +354,7 @@ async fn handle_request(
         ("POST", "/api/teams") => handle_create_team(&body, state),
         ("POST", "/api/teams/join") => handle_join_team(&body, state),
         _ if method == "GET" && path.starts_with("/api/teams/") => {
-            let rest = path.trim_start_matches("/api/teams/");
+            let rest = path.strip_prefix("/api/teams/").unwrap_or(path);
             let (team_id, suffix) = rest.split_once('/').unwrap_or((rest, ""));
             match suffix {
                 "" => handle_get_team(team_id, state),
@@ -371,13 +371,13 @@ async fn handle_request(
         ("GET", "/api/cloud/jobs") => handle_list_cloud_jobs(state),
         ("POST", "/api/cloud/jobs") => handle_submit_cloud_job(&body, state),
         _ if method == "GET" && path.starts_with("/api/cloud/jobs/") => {
-            let job_id = path.trim_start_matches("/api/cloud/jobs/");
+            let job_id = path.strip_prefix("/api/cloud/jobs/").unwrap_or(path);
             handle_get_cloud_job(job_id, state)
         }
         ("GET", "/api/swarm/runs") => handle_list_swarm_runs(state),
         ("POST", "/api/swarm/runs") => handle_start_swarm_run(&body, state),
         _ if method == "GET" && path.starts_with("/api/swarm/runs/") => {
-            let run_id = path.trim_start_matches("/api/swarm/runs/");
+            let run_id = path.strip_prefix("/api/swarm/runs/").unwrap_or(path);
             handle_get_swarm_run(run_id, state)
         }
         ("POST", "/api/agents/run") => gate_action(state, raw, audit::Action::RunAgent, |_| handle_run_agent(&body, state)),
@@ -436,61 +436,85 @@ async fn handle_request(
         ("GET", "/api/events") => handle_event_stream(state).await,
         ("GET", "/api/run-templates") => handle_list_run_templates(state),
         ("POST", "/api/run-templates") => handle_save_run_template(&body, state),
-        _ => {
-            if method == "GET" && path.starts_with("/api/parallel/runs/") && path.ends_with("/cost") {
-                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/cost".len()];
+        _ => route_dynamic(method.as_str(), path, &body, state).await,
+    }
+}
+
+/// Dynamic route dispatch for parameterised paths (e.g. `/api/agents/{id}`).
+///
+/// Uses `strip_prefix` / `strip_suffix` instead of manual index arithmetic,
+/// eliminating off-by-one risk and making routing intent self-documenting.
+async fn route_dynamic(
+    method: &str,
+    path: &str,
+    body: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Response {
+    // ── /api/parallel/runs/{id}/* ────────────────────────────────────────────
+    if let Some(rest) = path.strip_prefix("/api/parallel/runs/") {
+        if method == "GET" {
+            if let Some(run_id) = rest.strip_suffix("/cost") {
                 return handle_get_run_cost(run_id, state);
             }
-            if method == "POST" && path.starts_with("/api/parallel/runs/") && path.ends_with("/replay") {
-                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/replay".len()];
-                return handle_replay_run(run_id, state);
-            }
-            if method == "GET" && path.starts_with("/api/run-templates/") && !path.ends_with("/run") {
-                let name = &path["/api/run-templates/".len()..];
-                return handle_get_run_template(name, state);
-            }
-            if method == "DELETE" && path.starts_with("/api/run-templates/") {
-                let name = &path["/api/run-templates/".len()..];
-                return handle_delete_run_template(name, state);
-            }
-            if method == "POST" && path.starts_with("/api/run-templates/") && path.ends_with("/run") {
-                let name = &path["/api/run-templates/".len()..path.len() - "/run".len()];
-                return handle_run_template(name, &body, state);
-            }
-            if method == "GET" && path.starts_with("/api/agents/") {
-                return handle_get_agent(&path["/api/agents/".len()..], state);
-            }
-            if method == "DELETE" && path.starts_with("/api/agents/") && path.ends_with("/cancel") {
-                let id = &path["/api/agents/".len()..path.len() - "/cancel".len()];
-                return handle_cancel_agent(id, state);
-            }
-            if method == "POST" && path.starts_with("/api/agents/") && path.ends_with("/cancel") {
-                let id = &path["/api/agents/".len()..path.len() - "/cancel".len()];
-                return handle_cancel_agent(id, state);
-            }
-            if method == "DELETE" && path.starts_with("/api/agents/") {
-                return handle_delete_agent(&path["/api/agents/".len()..], state);
-            }
-            if method == "GET" && path.starts_with("/api/conversations/") {
-                return handle_get_conversation(&path["/api/conversations/".len()..], state);
-            }
-            if method == "DELETE" && path.starts_with("/api/conversations/") {
-                return handle_delete_conversation(&path["/api/conversations/".len()..], state);
-            }
-            if method == "GET" && path.starts_with("/api/parallel/runs/") && path.ends_with("/conflicts") {
-                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/conflicts".len()];
+            if let Some(run_id) = rest.strip_suffix("/conflicts") {
                 return handle_get_run_conflicts(run_id, state);
             }
-            if method == "GET" && path.starts_with("/api/parallel/runs/") {
-                return handle_get_parallel_run(&path["/api/parallel/runs/".len()..], state);
+            // bare /api/parallel/runs/{id}
+            return handle_get_parallel_run(rest, state);
+        }
+        if method == "POST" {
+            if let Some(run_id) = rest.strip_suffix("/replay") {
+                return handle_replay_run(run_id, state);
             }
-            if method == "POST" && path.starts_with("/api/parallel/runs/") && path.ends_with("/cancel") {
-                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/cancel".len()];
-                return handle_cancel_parallel_run(run_id, &body, state);
+            if let Some(run_id) = rest.strip_suffix("/cancel") {
+                return handle_cancel_parallel_run(run_id, body, state);
             }
-            Response::json(404, &ErrorResponse { error: format!("not found: {method} {path}") })
         }
     }
+
+    // ── /api/run-templates/{name}/* ─────────────────────────────────────────
+    if let Some(rest) = path.strip_prefix("/api/run-templates/") {
+        match method {
+            "GET" if !rest.ends_with("/run") => return handle_get_run_template(rest, state),
+            "DELETE"                          => return handle_delete_run_template(rest, state),
+            "POST" => {
+                if let Some(name) = rest.strip_suffix("/run") {
+                    return handle_run_template(name, body, state);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ── /api/agents/{id}/* ──────────────────────────────────────────────────
+    if let Some(rest) = path.strip_prefix("/api/agents/") {
+        match method {
+            "GET" => return handle_get_agent(rest, state),
+            "DELETE" => {
+                if let Some(id) = rest.strip_suffix("/cancel") {
+                    return handle_cancel_agent(id, state);
+                }
+                return handle_delete_agent(rest, state);
+            }
+            "POST" => {
+                if let Some(id) = rest.strip_suffix("/cancel") {
+                    return handle_cancel_agent(id, state);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ── /api/conversations/{id} ─────────────────────────────────────────────
+    if let Some(id) = path.strip_prefix("/api/conversations/") {
+        match method {
+            "GET"    => return handle_get_conversation(id, state),
+            "DELETE" => return handle_delete_conversation(id, state),
+            _ => {}
+        }
+    }
+
+    Response::json(404, &ErrorResponse { error: format!("not found: {method} {path}") })
 }
 
 fn handle_inference_stats(state: &Arc<Mutex<DaemonState>>) -> Response {

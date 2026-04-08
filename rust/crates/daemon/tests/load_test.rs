@@ -45,6 +45,9 @@ fn ok_result() -> TaskResult {
         iterations: 1,
         tool_invocations: 0,
         audit_hash: "h".into(),
+        tokens_in: 0,
+        tokens_out: 0,
+        cost_usd: 0.0,
     }
 }
 

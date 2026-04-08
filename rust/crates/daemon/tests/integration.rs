@@ -233,7 +233,7 @@ fn orchestrator_respects_task_dependencies() {
     // Complete t1 — now t2 should be available
     orch.complete_task("t1", TaskResult {
         success: true, summary: "done".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(),
+        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
     });
     let task2 = orch.next_task().unwrap();
     assert_eq!(task2.id, "t2");
@@ -241,7 +241,7 @@ fn orchestrator_respects_task_dependencies() {
     // Complete t2 — run should be completed
     orch.complete_task("t2", TaskResult {
         success: true, summary: "done".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(),
+        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
     });
     let run = orch.get_run("run-dep").unwrap();
     assert_eq!(run.status, RunStatus::Completed);
@@ -279,11 +279,11 @@ fn orchestrator_partial_failure() {
     let t2 = orch.next_task().unwrap();
     orch.complete_task(&t1.id, TaskResult {
         success: true, summary: "ok".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(),
+        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
     });
     orch.complete_task(&t2.id, TaskResult {
         success: false, summary: "failed".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(),
+        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
     });
 
     let run = orch.get_run("run-fail").unwrap();

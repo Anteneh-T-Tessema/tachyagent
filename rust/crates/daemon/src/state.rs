@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -179,7 +179,37 @@ pub struct DaemonState {
     pub worker_registry: crate::worker_registry::WorkerRegistry,
     /// OpenTelemetry-compatible tracer (no-op when TACHY_OTLP_ENDPOINT not set).
     pub tracer: crate::telemetry::Tracer,
+    /// Live event bus — subscribers receive SSE messages in real time.
+    /// Capacity 256: oldest events dropped if no consumer keeps up.
+    pub event_bus: tokio::sync::broadcast::Sender<String>,
+    /// Named DAG templates — reusable swarm configurations saved by operators.
+    pub run_templates: HashMap<String, RunTemplate>,
 }
+
+/// A reusable swarm configuration that can be saved, loaded, and executed by name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunTemplate {
+    pub name: String,
+    pub description: String,
+    pub tasks: Vec<TemplateTask>,
+    pub max_concurrency: usize,
+    pub created_at: u64,
+}
+
+/// A task definition inside a RunTemplate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateTask {
+    pub template: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub deps: Vec<String>,
+    #[serde(default = "default_priority")]
+    pub priority: u8,
+}
+
+fn default_priority() -> u8 { 5 }
 
 impl DaemonState {
     pub fn init(workspace_root: PathBuf) -> Result<Self, String> {
@@ -266,6 +296,11 @@ impl DaemonState {
                 let collector = std::sync::Arc::new(Mutex::new(crate::telemetry::SpanCollector::new()));
                 crate::telemetry::Tracer::new(collector)
             },
+            event_bus: {
+                let (tx, _) = tokio::sync::broadcast::channel(256);
+                tx
+            },
+            run_templates: HashMap::new(),
         };
 
         // Auto-select Gemma 4 if no model is configured
@@ -398,6 +433,19 @@ impl DaemonState {
         );
         self.save();
         Ok(pending.patch.file_path)
+    }
+
+    /// Publish a structured event to the live SSE bus.
+    ///
+    /// Subscribers on `GET /api/events` receive it immediately.
+    /// If no subscribers are connected the send silently no-ops.
+    pub fn publish_event(&self, kind: &str, payload: serde_json::Value) {
+        let msg = format!(
+            "event: {kind}\ndata: {}\n\n",
+            serde_json::json!({ "kind": kind, "payload": payload, "ts": timestamp() })
+        );
+        // Ignore send errors — no subscribers is fine
+        let _ = self.event_bus.send(msg);
     }
 
     /// Fire webhooks for an event.

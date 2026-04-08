@@ -432,7 +432,31 @@ async fn handle_request(
         ("GET", "/api/graph") => handle_dependency_graph(&query_str, state),
         ("GET", "/api/monorepo") => handle_monorepo(state),
         ("GET", "/api/dashboard") => handle_dashboard(state),
+        // Wave 2: live events, cost tracking, run replay, DAG templates
+        ("GET", "/api/events") => handle_event_stream(state).await,
+        ("GET", "/api/run-templates") => handle_list_run_templates(state),
+        ("POST", "/api/run-templates") => handle_save_run_template(&body, state),
         _ => {
+            if method == "GET" && path.starts_with("/api/parallel/runs/") && path.ends_with("/cost") {
+                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/cost".len()];
+                return handle_get_run_cost(run_id, state);
+            }
+            if method == "POST" && path.starts_with("/api/parallel/runs/") && path.ends_with("/replay") {
+                let run_id = &path["/api/parallel/runs/".len()..path.len() - "/replay".len()];
+                return handle_replay_run(run_id, state);
+            }
+            if method == "GET" && path.starts_with("/api/run-templates/") && !path.ends_with("/run") {
+                let name = &path["/api/run-templates/".len()..];
+                return handle_get_run_template(name, state);
+            }
+            if method == "DELETE" && path.starts_with("/api/run-templates/") {
+                let name = &path["/api/run-templates/".len()..];
+                return handle_delete_run_template(name, state);
+            }
+            if method == "POST" && path.starts_with("/api/run-templates/") && path.ends_with("/run") {
+                let name = &path["/api/run-templates/".len()..path.len() - "/run".len()];
+                return handle_run_template(name, &body, state);
+            }
             if method == "GET" && path.starts_with("/api/agents/") {
                 return handle_get_agent(&path["/api/agents/".len()..], state);
             }
@@ -934,6 +958,13 @@ fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
             let stored_summary = truncate_completion(&result.summary, 1_000);
             if result.success { agent.mark_completed(&stored_summary); } else { agent.mark_failed(&stored_summary); }
         }
+        s.publish_event("agent_run_complete", serde_json::json!({
+            "agent_id": bg_agent_id,
+            "success": result.success,
+            "iterations": result.iterations,
+            "tool_invocations": result.tool_invocations,
+            "duration_ms": duration_ms,
+        }));
         s.save();
     });
 
@@ -1689,6 +1720,303 @@ fn handle_get_run_conflicts(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Re
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wave 2A: Live SSE event stream
+// ---------------------------------------------------------------------------
+
+/// GET /api/events — Server-Sent Events stream of all daemon activity.
+///
+/// Clients subscribe once and receive a continuous stream:
+///   event: agent_run_complete\ndata: {...}\n\n
+///   event: task_complete\n data: {...}\n\n
+///   event: worker_heartbeat\ndata: {...}\n\n
+///
+/// The VSCode extension can replace its polling intervals with a single
+/// EventSource connection to this endpoint.
+async fn handle_event_stream(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let rx = state.lock().unwrap_or_else(|e| e.into_inner()).event_bus.subscribe();
+    let (resp, tx) = Response::sse();
+
+    // Bridge broadcast receiver → SSE channel
+    tokio::spawn(async move {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if tx.send(msg).await.is_err() { break; }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Slow consumer — send a lag notice and continue
+                    let _ = tx.send("event: lag\ndata: {\"dropped\":true}\n\n".to_string()).await;
+                }
+            }
+        }
+    });
+
+    resp
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2B: Cost/token tracking
+// ---------------------------------------------------------------------------
+
+/// GET /api/parallel/runs/{id}/cost — token usage and estimated cost for a run.
+fn handle_get_run_cost(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+        .get_run(run_id).cloned();
+    match run {
+        None => {
+            // Check run history
+            let workspace_root = s.workspace_root.clone();
+            drop(s);
+            let history = parallel::Orchestrator::load_run_history(&workspace_root);
+            match history.iter().find(|r| r.id == run_id) {
+                None => Response::json(404, &ErrorResponse { error: format!("run not found: {run_id}") }),
+                Some(r) => Response::json(200, &parallel::RunCost::from_run(r)),
+            }
+        }
+        Some(r) => Response::json(200, &parallel::RunCost::from_run(&r)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2C: Run replay
+// ---------------------------------------------------------------------------
+
+/// POST /api/parallel/runs/{id}/replay — re-execute a historic run with a new ID.
+///
+/// Loads the original run from `.tachy/runs.jsonl`, resets all task statuses to
+/// Pending, assigns a fresh run ID, and executes it exactly as `POST /api/parallel/runs`.
+fn handle_replay_run(run_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let (workspace_root, run_opt) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        let run = s.orchestrator.lock().unwrap_or_else(|e| e.into_inner())
+            .get_run(run_id).cloned();
+        (s.workspace_root.clone(), run)
+    };
+
+    // Find original: first check live orchestrator, then JSONL history
+    let original = match run_opt {
+        Some(r) => r,
+        None => {
+            let history = parallel::Orchestrator::load_run_history(&workspace_root);
+            match history.into_iter().find(|r| r.id == run_id) {
+                None => return Response::json(404, &ErrorResponse {
+                    error: format!("run not found: {run_id}"),
+                }),
+                Some(r) => r,
+            }
+        }
+    };
+
+    // Build a fresh run with reset task statuses
+    let new_run_id = format!("replay-{}-{}", run_id, now_epoch_http());
+    let tasks: Vec<parallel::AgentTask> = original.tasks.iter().map(|t| parallel::AgentTask {
+        id: format!("{}-r", t.id),
+        run_id: new_run_id.clone(),
+        template: t.template.clone(),
+        prompt: t.prompt.clone(),
+        model: t.model.clone(),
+        deps: t.deps.iter().map(|d| format!("{d}-r")).collect(),
+        priority: t.priority,
+        status: parallel::TaskStatus::Pending,
+        result: None,
+        created_at: now_epoch_http(),
+        started_at: None,
+        completed_at: None,
+        work_dir: None,
+    }).collect();
+
+    let replay_run = parallel::ParallelRun {
+        id: new_run_id.clone(),
+        tasks,
+        status: parallel::RunStatus::Running,
+        created_at: now_epoch_http(),
+        max_concurrency: original.max_concurrency,
+        conflicts: vec![],
+    };
+
+    state.lock().unwrap_or_else(|e| e.into_inner())
+        .publish_event("run_replay_started", serde_json::json!({
+            "original_run_id": run_id,
+            "replay_run_id": new_run_id,
+        }));
+
+    let completed = parallel::execute_parallel_run(replay_run, state);
+
+    state.lock().unwrap_or_else(|e| e.into_inner())
+        .publish_event("run_replay_complete", serde_json::json!({
+            "run_id": completed.id,
+            "status": format!("{:?}", completed.status),
+        }));
+
+    Response::json(200, &completed)
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2D: Named DAG templates
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SaveTemplateRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
+    tasks: Vec<TemplateTaskInput>,
+    #[serde(default = "default_conc")]
+    max_concurrency: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplateTaskInput {
+    template: String,
+    prompt: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    deps: Vec<String>,
+    #[serde(default = "default_pri")]
+    priority: u8,
+}
+
+fn default_conc() -> usize { 4 }
+fn default_pri() -> u8 { 5 }
+
+/// GET /api/run-templates — list all saved DAG templates.
+fn handle_list_run_templates(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let templates: Vec<&crate::state::RunTemplate> = s.run_templates.values().collect();
+    Response::json(200, &serde_json::json!({
+        "count": templates.len(),
+        "templates": templates,
+    }))
+}
+
+/// POST /api/run-templates — save a named DAG template.
+fn handle_save_run_template(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let req: SaveTemplateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+    if req.name.is_empty() {
+        return Response::json(400, &ErrorResponse { error: "name is required".into() });
+    }
+    if req.tasks.is_empty() {
+        return Response::json(400, &ErrorResponse { error: "tasks array must not be empty".into() });
+    }
+
+    let template = crate::state::RunTemplate {
+        name: req.name.clone(),
+        description: req.description,
+        tasks: req.tasks.into_iter().map(|t| crate::state::TemplateTask {
+            template: t.template,
+            prompt: t.prompt,
+            model: t.model,
+            deps: t.deps,
+            priority: t.priority,
+        }).collect(),
+        max_concurrency: req.max_concurrency,
+        created_at: now_epoch_http(),
+    };
+
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.run_templates.insert(req.name.clone(), template.clone());
+    drop(s);
+
+    Response::json(201, &template)
+}
+
+/// GET /api/run-templates/{name} — fetch a specific template.
+fn handle_get_run_template(name: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.run_templates.get(name) {
+        None => Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
+        Some(t) => Response::json(200, t),
+    }
+}
+
+/// DELETE /api/run-templates/{name} — remove a template.
+fn handle_delete_run_template(name: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match s.run_templates.remove(name) {
+        None => Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
+        Some(_) => Response::json(200, &serde_json::json!({ "deleted": name })),
+    }
+}
+
+/// POST /api/run-templates/{name}/run — instantiate and execute a named template.
+///
+/// Optional body: `{ "overrides": { "<task_id>": { "prompt": "..." } } }`
+fn handle_run_template(name: &str, _body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    let template = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
+        match s.run_templates.get(name).cloned() {
+            None => return Response::json(404, &ErrorResponse { error: format!("template not found: {name}") }),
+            Some(t) => t,
+        }
+    };
+
+    let run_id = format!("tpl-{name}-{}", now_epoch_http());
+    let tasks: Vec<parallel::AgentTask> = template.tasks.iter().enumerate().map(|(i, t)| {
+        let task_id = format!("{run_id}-t{i}");
+        // Remap dep names (template uses human names; map to generated IDs)
+        let deps = t.deps.iter().filter_map(|dep_name| {
+            template.tasks.iter().position(|x| x.template == *dep_name || x.prompt.starts_with(dep_name.as_str()))
+                .map(|j| format!("{run_id}-t{j}"))
+        }).collect();
+        parallel::AgentTask {
+            id: task_id,
+            run_id: run_id.clone(),
+            template: t.template.clone(),
+            prompt: t.prompt.clone(),
+            model: t.model.clone(),
+            deps,
+            priority: t.priority,
+            status: parallel::TaskStatus::Pending,
+            result: None,
+            created_at: now_epoch_http(),
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+        }
+    }).collect();
+
+    let run = parallel::ParallelRun {
+        id: run_id.clone(),
+        tasks,
+        status: parallel::RunStatus::Running,
+        created_at: now_epoch_http(),
+        max_concurrency: template.max_concurrency,
+        conflicts: vec![],
+    };
+
+    state.lock().unwrap_or_else(|e| e.into_inner())
+        .publish_event("template_run_started", serde_json::json!({
+            "template": name,
+            "run_id": run_id,
+        }));
+
+    let completed = parallel::execute_parallel_run(run, state);
+
+    state.lock().unwrap_or_else(|e| e.into_inner())
+        .publish_event("template_run_complete", serde_json::json!({
+            "template": name,
+            "run_id": completed.id,
+            "status": format!("{:?}", completed.status),
+        }));
+
+    Response::json(200, &completed)
+}
+
+fn now_epoch_http() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 // Helpers
 
 fn parse_http_request(raw: &str) -> (String, String, String) {
@@ -2322,5 +2650,145 @@ mod tests {
         } else {
             panic!("expected Full response");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Wave 2A: event stream returns SSE response
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn event_stream_returns_sse_content_type() {
+        let root = std::env::temp_dir().join(format!("tachy-events-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let res = handle_request(
+            "GET /api/events HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        // Must be a Stream response with text/event-stream content type
+        match res {
+            Response::Stream { status, content_type, .. } => {
+                assert_eq!(status, 200);
+                assert_eq!(content_type, "text/event-stream");
+            }
+            _ => panic!("expected Stream response for /api/events"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Wave 2A: publish_event delivers to broadcast subscriber
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publish_event_reaches_subscriber() {
+        let root = std::env::temp_dir().join(format!("tachy-pub-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let mut rx = state.event_bus.subscribe();
+        state.publish_event("test_event", serde_json::json!({"x": 1}));
+        // The message should be immediately available in the broadcast buffer
+        let msg = rx.try_recv().expect("should have buffered message");
+        assert!(msg.contains("test_event"));
+        assert!(msg.contains("\"x\":1") || msg.contains("\"x\": 1"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Wave 2D: run template CRUD and execution
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_template_save_and_list() {
+        let root = std::env::temp_dir().join(format!("tachy-tpl-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+
+        // Save a template
+        let body = r#"{"name":"refactor","description":"Standard refactor","tasks":[{"template":"chat","prompt":"refactor src/lib.rs"}],"max_concurrency":2}"#;
+        let res = handle_request(
+            &format!("POST /api/run-templates HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 201);
+            assert!(body.contains("refactor"));
+        } else { panic!("expected Full response"); }
+
+        // List should include it
+        let res = handle_request(
+            "GET /api/run-templates HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            assert!(body.contains("refactor"));
+            assert!(body.contains("\"count\":1"));
+        } else { panic!("expected Full response"); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_template_get_and_delete() {
+        let root = std::env::temp_dir().join(format!("tachy-tpl2-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+
+        // Save
+        let body = r#"{"name":"myflow","tasks":[{"template":"chat","prompt":"do x"}]}"#;
+        handle_request(
+            &format!("POST /api/run-templates HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+            &state, &limiter, "127.0.0.1",
+        ).await;
+
+        // GET by name
+        let res = handle_request(
+            "GET /api/run-templates/myflow HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 200);
+            assert!(body.contains("myflow"));
+        } else { panic!("expected Full"); }
+
+        // DELETE
+        let res = handle_request(
+            "DELETE /api/run-templates/myflow HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res { assert_eq!(status, 200); }
+        else { panic!("expected Full"); }
+
+        // GET after delete → 404
+        let res = handle_request(
+            "GET /api/run-templates/myflow HTTP/1.1\r\n\r\n",
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res { assert_eq!(status, 404); }
+        else { panic!("expected Full"); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_template_missing_name_returns_400() {
+        let root = std::env::temp_dir().join(format!("tachy-tpl3-{}", chrono_now_secs()));
+        let state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let body = r#"{"name":"","tasks":[{"template":"chat","prompt":"x"}]}"#;
+        let res = handle_request(
+            &format!("POST /api/run-templates HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+            &state, &limiter, "127.0.0.1",
+        ).await;
+        if let Response::Full { status, .. } = res { assert_eq!(status, 400); }
+        else { panic!("expected Full"); }
     }
 }

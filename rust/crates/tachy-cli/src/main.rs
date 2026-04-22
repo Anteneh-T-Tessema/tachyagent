@@ -69,6 +69,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::ListModels => info::list_models(),
         CliAction::ListModelsLocal => info::list_models_local(),
         CliAction::ListAgents => info::list_agents(),
+        CliAction::YayaPreferences { workspace, subject, set_sources, set_terms, clear } => {
+            info::handle_yaya_preferences(&workspace, &subject, set_sources.as_deref(), set_terms.as_deref(), clear)?
+        }
         CliAction::Serve { addr, workspace } => agent::run_serve(&addr, workspace.as_deref())?,
         CliAction::RunAgent { template, prompt, model } => agent::run_agent_cmd(&template, &prompt, &model)?,
         CliAction::Doctor { json } => doctor::run_doctor(json),

@@ -54,6 +54,8 @@ impl Default for PlatformConfig {
             governance: GovernancePolicy::enterprise_default(),
             agent_templates: vec![
                 AgentTemplate::chat_assistant(),
+                AgentTemplate::yaya_memo_writer(),
+                AgentTemplate::yaya_finance_brief_writer(),
                 AgentTemplate::code_reviewer(),
                 AgentTemplate::security_scanner(),
                 AgentTemplate::doc_generator(),
@@ -73,14 +75,40 @@ impl Default for PlatformConfig {
 }
 
 impl PlatformConfig {
+    fn with_required_templates(mut self) -> Self {
+        let defaults = Self::default();
+        let pinned = std::collections::BTreeSet::from([
+            "yaya-memo-writer".to_string(),
+            "yaya-finance-brief-writer".to_string(),
+        ]);
+        let existing = self
+            .agent_templates
+            .iter()
+            .enumerate()
+            .map(|(idx, t)| (t.name.clone(), idx))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for template in defaults.agent_templates {
+            if let Some(index) = existing.get(&template.name).copied() {
+                if pinned.contains(&template.name) {
+                    self.agent_templates[index] = template;
+                }
+            } else {
+                self.agent_templates.push(template);
+            }
+        }
+        self
+    }
+
     /// Load config from a JSON file, falling back to defaults.
     pub fn load(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
         match std::fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-                eprintln!("warning: failed to parse {}: {e}, using defaults", path.display());
-                Self::default()
-            }),
+            Ok(content) => serde_json::from_str::<Self>(&content)
+                .map(Self::with_required_templates)
+                .unwrap_or_else(|e| {
+                    eprintln!("warning: failed to parse {}: {e}, using defaults", path.display());
+                    Self::default()
+                }),
             Err(_) => Self::default(),
         }
     }

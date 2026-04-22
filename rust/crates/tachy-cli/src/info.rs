@@ -130,3 +130,163 @@ pub(crate) fn list_agents() {
         println!();
     }
 }
+
+fn daemon_url() -> String {
+    env::var("TACHY_DAEMON_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".to_string())
+}
+
+fn daemon_api_key() -> Option<String> {
+    env::var("TACHY_API_KEY").ok().filter(|value| !value.trim().is_empty())
+}
+
+fn load_yaya_preferences_json(workspace: &str, subject: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut command = std::process::Command::new("curl");
+    command.arg("-sf");
+    if let Some(api_key) = daemon_api_key() {
+        command.args(["-H", &format!("Authorization: Bearer {api_key}")]);
+    }
+    command.arg(format!(
+        "{}/api/yaya/retrieval-preferences?workspace={}&subject={}",
+        daemon_url(),
+        crate::analysis::urlencoding_simple(workspace),
+        crate::analysis::urlencoding_simple(subject),
+    ));
+
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("failed to load yaya retrieval preferences: {}{}", stdout, stderr).into());
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn save_yaya_preferences_json(
+    workspace: &str,
+    subject: &str,
+    preferred_sources: &[String],
+    preferred_terms: &[String],
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let payload = serde_json::json!({
+        "workspace": workspace,
+        "subject": subject,
+        "preferred_sources": preferred_sources,
+        "preferred_source_terms": preferred_terms,
+    });
+
+    let mut command = std::process::Command::new("curl");
+    command.args(["-sf", "-X", "POST", "-H", "Content-Type: application/json"]);
+    if let Some(api_key) = daemon_api_key() {
+        command.args(["-H", &format!("Authorization: Bearer {api_key}")]);
+    }
+    command.args([
+        "-d",
+        &payload.to_string(),
+        &format!("{}/api/yaya/retrieval-preferences", daemon_url()),
+    ]);
+
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("failed to save yaya retrieval preferences: {}{}", stdout, stderr).into());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+pub(crate) fn handle_yaya_preferences(
+    workspace: &str,
+    subject: &str,
+    set_sources: Option<&str>,
+    set_terms: Option<&str>,
+    clear: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if clear || set_sources.is_some() || set_terms.is_some() {
+        let current = load_yaya_preferences_json(workspace, subject)?;
+        let mut sources = current
+            .get("explicit_preferred_sources")
+            .and_then(|v| v.as_array())
+            .map(|items| items.iter().filter_map(|v| v.as_str()).map(ToString::to_string).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut terms = current
+            .get("explicit_preferred_source_terms")
+            .and_then(|v| v.as_array())
+            .map(|items| items.iter().filter_map(|v| v.as_str()).map(ToString::to_string).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        if clear {
+            sources.clear();
+            terms.clear();
+        }
+        if let Some(value) = set_sources {
+            sources = parse_csv_list(value);
+        }
+        if let Some(value) = set_terms {
+            terms = parse_csv_list(value);
+        }
+        let saved = save_yaya_preferences_json(workspace, subject, &sources, &terms)?;
+        if json_output_enabled() {
+            println!("{}", serde_json::to_string_pretty(&saved)?);
+        } else {
+            println!("Updated Yaya retrieval preferences for {workspace}/{subject}.\n");
+        }
+    }
+    show_yaya_preferences(workspace, subject)
+}
+
+pub(crate) fn show_yaya_preferences(workspace: &str, subject: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let json = load_yaya_preferences_json(workspace, subject)?;
+    if json_output_enabled() {
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
+    println!("Yaya retrieval preferences\n");
+    println!("  Workspace: {}", json.get("workspace").and_then(|v| v.as_str()).unwrap_or(workspace));
+    println!("  Subject:   {}", json.get("subject").and_then(|v| v.as_str()).unwrap_or(subject));
+    println!("  Strategy:  {}", json.get("strategy").and_then(|v| v.as_str()).unwrap_or("workspace_wide"));
+    println!(
+        "  Updated:   {}",
+        json.get("updated_at").and_then(|v| v.as_str()).unwrap_or("inferred only")
+    );
+    println!(
+        "  Approved examples: {}",
+        json.get("approved_example_count").and_then(|v| v.as_u64()).unwrap_or(0)
+    );
+
+    let print_list = |label: &str, key: &str| {
+        println!("\n  {label}:");
+        if let Some(items) = json.get(key).and_then(|v| v.as_array()) {
+            if items.is_empty() {
+                println!("    - none");
+            } else {
+                for item in items.iter().filter_map(|v| v.as_str()) {
+                    println!("    - {item}");
+                }
+            }
+        } else {
+            println!("    - none");
+        }
+    };
+
+    print_list("Effective sources", "preferred_sources");
+    print_list("Effective terms", "preferred_source_terms");
+    print_list("Explicit sources", "explicit_preferred_sources");
+    print_list("Explicit terms", "explicit_preferred_source_terms");
+    print_list("Inferred sources", "inferred_preferred_sources");
+    print_list("Inferred terms", "inferred_preferred_source_terms");
+
+    Ok(())
+}

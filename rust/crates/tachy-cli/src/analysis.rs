@@ -471,6 +471,9 @@ pub(crate) fn print_help() {
     println!("  tachy models                              List registered models");
     println!("  tachy models --local                      List locally installed models");
     println!("  tachy agents                              List agent templates");
+    println!("  tachy yaya-preferences --subject NAME     Show Yaya retrieval policy context for a subject");
+    println!("  tachy yaya-preferences --subject NAME --set-sources a,b [--set-terms x,y]");
+    println!("                                           Update Yaya retrieval preferences from Tachy");
     println!("  tachy search <query>                      Search the indexed codebase");
     println!("  tachy pipeline run <pipeline.yaml>        Run an agent pipeline from YAML");
     println!("  tachy pipeline validate <pipeline.yaml>   Validate pipeline without running");
@@ -497,6 +500,8 @@ pub(crate) fn print_help() {
     println!("  GET  /api/templates       List agent templates");
     println!("  GET  /api/agents          List all agents");
     println!("  GET  /api/agents/:id      Get agent status (poll for async results)");
+    println!("  GET  /api/yaya/retrieval-preferences?workspace=<w>&subject=<s>  Inspect Yaya retrieval policy context");
+    println!("  POST /api/yaya/retrieval-preferences      Update Yaya retrieval policy context");
     println!("  GET  /api/search?q=<q>    Search indexed codebase");
     println!("  GET  /api/graph           Full dependency graph (add ?file=<path> for per-file view)");
     println!("  GET  /api/monorepo        Monorepo workspace structure");

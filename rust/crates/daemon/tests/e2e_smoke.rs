@@ -62,7 +62,7 @@ fn agent_run_with_real_model() {
         "Read test.py and tell me what the add function does. Be brief.",
         &state.registry,
         &state.config.governance,
-        &state.audit_logger,
+        state.audit_logger.clone(),
         &state.config.intelligence,
         &root,
         None,
@@ -148,7 +148,7 @@ fn chat_template_reads_file_and_references_content() {
         "Read greet.rs and briefly describe what the greet function does.",
         &state.registry,
         &state.config.governance,
-        &state.audit_logger,
+        state.audit_logger.clone(),
         &state.config.intelligence,
         &root,
         None,
@@ -202,7 +202,7 @@ fn code_reviewer_template_produces_review_summary() {
         "Review calc.rs for potential bugs. Be concise.",
         &state.registry,
         &state.config.governance,
-        &state.audit_logger,
+        state.audit_logger.clone(),
         &state.config.intelligence,
         &root,
         None,
@@ -250,7 +250,7 @@ fn agent_creates_reads_and_modifies_file() {
         "Create a file named output.txt with the text 'hello world', then read it back and confirm its contents.",
         &state.registry,
         &state.config.governance,
-        &state.audit_logger,
+        state.audit_logger.clone(),
         &state.config.intelligence,
         &root,
         None,
@@ -366,6 +366,7 @@ fn agent_run_produces_audit_events_with_hash_chain() {
     let captured = mem_sink.clone();
     let mut logger = audit::AuditLogger::new();
     logger.add_sink(mem_sink);
+    let logger = std::sync::Arc::new(logger);
 
     let ws = platform::PlatformWorkspace::init(&root).expect("workspace init");
     let registry = backend::BackendRegistry::with_defaults();
@@ -387,7 +388,7 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         "Say 'audit ok' and stop.",
         &registry,
         &ws.config.governance,
-        &logger,
+        logger,
         &ws.config.intelligence,
         &root,
         None,

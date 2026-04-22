@@ -18,6 +18,7 @@ pub struct ConversationRuntime<C, T> {
     permission_policy: PermissionPolicy,
     system_prompt: Vec<String>,
     max_iterations: usize,
+    required_write_file_path: Option<String>,
     usage_tracker: UsageTracker,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<RuntimeEvent>>,
 }
@@ -43,6 +44,7 @@ where
             permission_policy,
             system_prompt,
             max_iterations: 16,
+            required_write_file_path: None,
             usage_tracker,
             event_tx: None,
         }
@@ -68,6 +70,12 @@ where
     #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    #[must_use]
+    pub fn with_required_write_file_path(mut self, path: Option<String>) -> Self {
+        self.required_write_file_path = path;
         self
     }
 
@@ -182,6 +190,24 @@ where
             assistant_messages.push(assistant_message);
 
             if pending_tool_uses.is_empty() {
+                if tool_results.is_empty() {
+                    if let Some(path) = self.required_write_file_path.clone() {
+                        let synthesized = self.synthesize_required_write_file(&assistant_messages, &path)?;
+                        if let Some(result_message) = synthesized {
+                            self.session.messages.push(result_message.clone());
+                            if let Some(tx) = &self.event_tx {
+                                if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = &result_message.blocks[0] {
+                                    let _ = tx.send(RuntimeEvent::ToolResult {
+                                        tool_name: tool_name.clone(),
+                                        output: output.clone(),
+                                        is_error: *is_error,
+                                    });
+                                }
+                            }
+                            tool_results.push(result_message);
+                        }
+                    }
+                }
                 break;
             }
 
@@ -312,6 +338,37 @@ where
     pub fn into_session(self) -> Session {
         self.session
     }
+
+    fn synthesize_required_write_file(
+        &mut self,
+        assistant_messages: &[ConversationMessage],
+        output_path: &str,
+    ) -> Result<Option<ConversationMessage>, RuntimeError> {
+        let content = extract_assistant_text(assistant_messages);
+        let content = normalize_required_write_content(&content);
+        if content.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let input = serde_json::json!({
+            "path": output_path,
+            "content": content,
+        })
+        .to_string();
+
+        match self.permission_policy.authorize("write_file", &input, None) {
+            PermissionOutcome::Allow => match self.tool_executor.execute("write_file", &input) {
+                Ok(output) => Ok(Some(ConversationMessage::tool_result(
+                    "required-artifact",
+                    "write_file",
+                    truncate_output(&output, 16_000),
+                    false,
+                ))),
+                Err(error) => Err(RuntimeError::new(format!("required write_file failed: {error}"))),
+            },
+            PermissionOutcome::Deny { reason } => Err(RuntimeError::new(format!("required write_file denied: {reason}"))),
+        }
+    }
 }
 
 /// Build an assistant `ConversationMessage` from a stream of `AssistantEvent`s.
@@ -360,6 +417,24 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
             text: std::mem::take(text),
         });
     }
+}
+
+fn extract_assistant_text(messages: &[ConversationMessage]) -> String {
+    messages
+        .iter()
+        .flat_map(|msg| msg.blocks.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_required_write_content(text: &str) -> String {
+    let marker = "\nCall write_file tool with the final markdown memo:";
+    let text = text.split(marker).next().unwrap_or(text);
+    text.trim().to_string()
 }
 
 /// Truncate tool output to prevent context window overflow.

@@ -28,6 +28,13 @@ pub(crate) enum CliAction {
     ListModels,
     ListModelsLocal,
     ListAgents,
+    YayaPreferences {
+        workspace: String,
+        subject: String,
+        set_sources: Option<String>,
+        set_terms: Option<String>,
+        clear: bool,
+    },
     Serve { addr: String, workspace: Option<PathBuf> },
     RunAgent { template: String, prompt: String, model: String },
     Doctor { json: bool },
@@ -126,6 +133,47 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
         }
         "agents" => Ok(CliAction::ListAgents),
+        "yaya-preferences" => {
+            let mut workspace = "default".to_string();
+            let mut subject = None;
+            let mut set_sources = None;
+            let mut set_terms = None;
+            let mut clear = false;
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--workspace" | "-w" => {
+                        workspace = rest.get(i + 1).cloned().unwrap_or_else(|| "default".to_string());
+                        i += 2;
+                    }
+                    "--subject" | "-s" => {
+                        subject = rest.get(i + 1).cloned();
+                        i += 2;
+                    }
+                    "--set-sources" => {
+                        set_sources = rest.get(i + 1).cloned();
+                        i += 2;
+                    }
+                    "--set-terms" => {
+                        set_terms = rest.get(i + 1).cloned();
+                        i += 2;
+                    }
+                    "--clear" => {
+                        clear = true;
+                        i += 1;
+                    }
+                    other if !other.starts_with("--") && subject.is_none() => {
+                        subject = Some(other.to_string());
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+            let subject = subject.ok_or("usage: yaya-preferences --subject <subject> [--workspace <workspace>]")?;
+            Ok(CliAction::YayaPreferences { workspace, subject, set_sources, set_terms, clear })
+        }
         "doctor" => {
             let json = rest.iter().any(|a| a == "--json");
             Ok(CliAction::Doctor { json })

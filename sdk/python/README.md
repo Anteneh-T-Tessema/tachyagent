@@ -1,6 +1,6 @@
 # Tachy Agent SDK (Python)
 
-Python client for the [Tachy AI Agent](https://github.com/Anteneh-T-Tessema/tachyagent) platform.
+Python client for the Tachy runtime and Yaya expert platform workflows.
 
 ## Install
 
@@ -11,9 +11,10 @@ pip install tachy-agent
 ## Quick Start
 
 ```python
-from tachy import TachyClient, ParallelTask
+from tachy import TachyClient, ParallelTask, YayaClient
 
 client = TachyClient("http://localhost:7777", api_key="your-key")
+yaya = YayaClient("http://localhost:8000", api_key="yaya-key")
 
 # Run a single agent
 run = client.run_agent("code-reviewer", "review src/main.rs")
@@ -31,6 +32,16 @@ parallel = client.run_parallel(tasks, max_concurrency=2)
 for approval in client.pending_approvals():
     print(f"{approval.type}: {approval.reason}")
     client.approve(patch_id=approval.id)
+
+# Ask a grounded Yaya expert for domain guidance
+expert = yaya.expert_chat(
+    workspace="finance",
+    subject="finance",
+    message="What controls should we mention in the quarterly close memo?",
+)
+print(expert.response)
+for citation in expert.citations:
+    print(citation.label, citation.source)
 ```
 
 ## API Coverage
@@ -53,3 +64,14 @@ for approval in client.pending_approvals():
 | `audit_log()` | `GET /api/audit` |
 | `metrics()` | `GET /api/metrics` |
 | `add_webhook()` | `POST /api/webhooks` |
+
+## Yaya Integration Coverage
+
+| Method | Endpoint |
+|--------|----------|
+| `auth_session()` | `GET /auth/session` |
+| `list_workspaces()` | `GET /workspaces` |
+| `list_experts()` | `GET /experts` |
+| `expert_chat()` | `POST /expert/chat` |
+| `submit_training_example()` | `POST /training/examples` |
+| `sync_knowledge()` | `POST /knowledge/sync` |

@@ -17,6 +17,10 @@ from tachy.models import (
     ParallelTask,
     PendingApproval,
     Template,
+    YayaCitation,
+    YayaExpert,
+    YayaExpertResponse,
+    YayaRetrievalPreferences,
 )
 
 
@@ -121,6 +125,105 @@ class TachyClient:
                 return agent
             time.sleep(poll_interval)
         raise TimeoutError(f"agent {agent_id} did not complete within {timeout}s")
+
+    # -- yaya bridge --
+
+    def list_yaya_experts(self, workspace: str = "default") -> list[YayaExpert]:
+        """List Yaya experts through the audited Tachy bridge."""
+        data = self._get(f"/api/yaya/experts?workspace={workspace}")
+        return [
+            YayaExpert(
+                workspace=item["workspace"],
+                subject=item["subject"],
+                active_version=item.get("active_version"),
+                model_path=item.get("model_path"),
+                latest_evaluation_passed=item.get("latest_evaluation_passed"),
+                latest_evaluation_version=item.get("latest_evaluation_version"),
+                latest_trained_at=item.get("latest_trained_at"),
+            )
+            for item in data
+        ]
+
+    def yaya_chat(
+        self,
+        *,
+        workspace: str,
+        subject: str,
+        message: str,
+        execution_context: Optional[dict] = None,
+        actor: Optional[dict] = None,
+    ) -> YayaExpertResponse:
+        """Consult Yaya through Tachy's audited bridge."""
+        data = self._post("/api/yaya/chat", {
+            "workspace": workspace,
+            "subject": subject,
+            "message": message,
+            "execution_context": execution_context or {},
+            "actor": actor or {},
+        })
+        return YayaExpertResponse(
+            workspace=data["workspace"],
+            subject=data["subject"],
+            response=data["response"],
+            citations=[
+                YayaCitation(
+                    source=item.get("source", ""),
+                    label=item.get("label", item.get("source", "")),
+                    page=item.get("page"),
+                    chunk=item.get("chunk"),
+                    score=item.get("score"),
+                    semantic_score=item.get("semantic_score"),
+                    lexical_score=item.get("lexical_score"),
+                    retrieval_mode=item.get("retrieval_mode"),
+                )
+                for item in data.get("citations", [])
+            ],
+            model_type=data.get("model_type", "expert"),
+            used_fallback=data.get("used_fallback", False),
+            retrieval_mode=data.get("retrieval_mode", "none"),
+            grounded=data.get("grounded", False),
+            retrieval_preferences=(
+                YayaRetrievalPreferences(
+                    strategy=data.get("retrieval_preferences", {}).get("strategy", "workspace_wide"),
+                    preferred_sources=list(data.get("retrieval_preferences", {}).get("preferred_sources", [])),
+                    preferred_source_terms=list(data.get("retrieval_preferences", {}).get("preferred_source_terms", [])),
+                    explicit_preferred_sources=list(data.get("retrieval_preferences", {}).get("explicit_preferred_sources", [])),
+                    explicit_preferred_source_terms=list(data.get("retrieval_preferences", {}).get("explicit_preferred_source_terms", [])),
+                    inferred_preferred_sources=list(data.get("retrieval_preferences", {}).get("inferred_preferred_sources", [])),
+                    inferred_preferred_source_terms=list(data.get("retrieval_preferences", {}).get("inferred_preferred_source_terms", [])),
+                    approved_example_count=int(data.get("retrieval_preferences", {}).get("approved_example_count", 0)),
+                    updated_at=data.get("retrieval_preferences", {}).get("updated_at"),
+                )
+                if data.get("retrieval_preferences")
+                else None
+            ),
+        )
+
+    def submit_yaya_training_example(
+        self,
+        *,
+        workspace: str,
+        subject: str,
+        prompt: str,
+        answer: str,
+        citations: Optional[list[dict]] = None,
+        approved: bool = True,
+        source: str = "tachy",
+        audit_reference: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        """Submit an approved Yaya training example through Tachy's audited bridge."""
+        return self._post("/api/yaya/training/examples", {
+            "workspace": workspace,
+            "subject": subject,
+            "prompt": prompt,
+            "answer": answer,
+            "citations": citations or [],
+            "approved": approved,
+            "source": source,
+            "audit_reference": audit_reference,
+            "metadata": metadata or {},
+        })
 
     # -- parallel runs --
 

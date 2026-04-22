@@ -78,7 +78,7 @@ impl ToolExecutor for IntelligentToolExecutor {
                 };
 
                 let result = AgentEngine::run_agent(
-                    &sub_agent_id, &agent_config, prompt, reg, gov, audit, intel,
+                    &sub_agent_id, &agent_config, prompt, reg, gov, Arc::clone(audit), intel,
                     &self.workspace_root, self.file_locks.clone(), self.daemon_state.clone(),
                 );
 

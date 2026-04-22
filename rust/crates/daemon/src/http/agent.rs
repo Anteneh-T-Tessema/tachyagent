@@ -91,10 +91,17 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
             let s = bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let model = config.template.model.clone();
             let tracer = s.tracer.clone();
+            let registry = s.registry.clone();
+            let audit_logger = Arc::clone(&s.audit_logger);
+            let intelligence = s.config.intelligence.clone();
+            let workspace_root = s.workspace_root.clone();
+            let file_locks = s.file_locks.clone();
+            drop(s);
+
             let r = AgentEngine::run_agent(
-                &bg_agent_id, &config, &prompt, &s.registry, &governance,
-                &s.audit_logger, &s.config.intelligence, &s.workspace_root,
-                Some(s.file_locks.clone()), Some(Arc::clone(&bg_state)),
+                &bg_agent_id, &config, &prompt, &registry, &governance,
+                audit_logger, &intelligence, &workspace_root,
+                Some(file_locks), Some(Arc::clone(&bg_state)),
             );
             (r, tracer, model)
         };
@@ -105,6 +112,8 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
         );
         let mut s = bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(agent) = s.agents.get_mut(&bg_agent_id) {
+            agent.iterations_completed = result.iterations;
+            agent.tool_invocations = result.tool_invocations;
             let stored_summary = truncate_completion(&result.summary, 1_000);
             if result.success { agent.mark_completed(&stored_summary); } else { agent.mark_failed(&stored_summary); }
         }
@@ -299,7 +308,7 @@ pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>)
             .unwrap_or_else(platform::AgentTemplate::chat_assistant);
         (s.registry.clone(), s.config.governance.clone(), s.config.intelligence.clone(), s.workspace_root.clone(), tmpl)
     };
-    let audit_logger = audit::AuditLogger::new();
+    let audit_logger = Arc::new(audit::AuditLogger::new());
     if let Some(m) = &req.model { template.model = m.clone(); }
     let session_id = req.session_id.unwrap_or_else(|| {
         format!("cmp-{}", template.model.replace(|c: char| !c.is_alphanumeric(), "_"))
@@ -312,7 +321,7 @@ pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>)
     };
     let result = AgentEngine::run_agent(
         &session_id, &config, &prompt, &registry, &governance,
-        &audit_logger, &intel_cfg, &workspace_root, None, None,
+        audit_logger, &intel_cfg, &workspace_root, None, None,
     );
     Response::json(200, serde_json::json!({
         "model": config.template.model,

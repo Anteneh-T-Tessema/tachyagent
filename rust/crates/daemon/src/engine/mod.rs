@@ -26,6 +26,19 @@ use self::executor::{IntelligentToolExecutor, build_permission_policy};
 use self::simple::{run_simple, load_or_build_index};
 use self::planning::run_with_planning;
 
+fn required_write_file_path(prompt: &str, allowed_tools: &[String]) -> Option<String> {
+    if allowed_tools.len() != 1 || allowed_tools.first().map(String::as_str) != Some("write_file") {
+        return None;
+    }
+
+    prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("REQUIRED_OUTPUT_PATH:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Result of running an agent to completion.
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
@@ -46,7 +59,7 @@ impl AgentEngine {
         prompt: &str,
         registry: &BackendRegistry,
         governance: &GovernancePolicy,
-        audit_logger: &AuditLogger,
+        audit_logger: Arc<AuditLogger>,
         intelligence_config: &IntelligenceConfig,
         workspace_root: &Path,
         file_locks: Option<runtime::FileLockManager>,
@@ -98,7 +111,9 @@ impl AgentEngine {
         let backend = backend::DynBackend::new(client);
 
         // --- Intelligence: Codebase Indexing ---
-        let index: Option<CodebaseIndex> = if intelligence_config.indexing_enabled {
+        let use_workspace_context = config.template.use_workspace_context;
+
+        let index: Option<CodebaseIndex> = if intelligence_config.indexing_enabled && use_workspace_context {
             match load_or_build_index(workspace_root, &intelligence_config.indexer) {
                 Ok(idx) => {
                     audit_logger.log(
@@ -128,7 +143,7 @@ impl AgentEngine {
         };
 
         // --- Intelligence: Smart Context Selection ---
-        let context_text = if intelligence_config.context_enabled {
+        let context_text = if intelligence_config.context_enabled && use_workspace_context {
             if let Some(idx) = &index {
                 let ctx_window = registry
                     .find_model(model)
@@ -183,7 +198,7 @@ impl AgentEngine {
         }
 
         // --- Intelligence: Inject dependency graph context ---
-        {
+        if use_workspace_context {
             let dep_graph = intelligence::DependencyGraph::build(workspace_root);
             if !dep_graph.nodes.is_empty() {
                 let mentioned: Vec<String> = dep_graph.nodes.keys()
@@ -266,7 +281,7 @@ impl AgentEngine {
             workspace_root: workspace_root.to_path_buf(),
             registry: Some(Arc::new(registry.clone())),
             governance: Some(governance.clone()),
-            audit_logger: Some(Arc::new(AuditLogger::new())),
+            audit_logger: Some(Arc::clone(&audit_logger)),
             intelligence_config: Some(intelligence_config.clone()),
             file_locks: file_locks.clone(),
             agent_id: agent_id.to_string(),
@@ -280,6 +295,7 @@ impl AgentEngine {
             permission_policy,
             system_prompt,
         )
+        .with_required_write_file_path(required_write_file_path(prompt, &config.template.allowed_tools))
         .with_max_iterations(config.template.max_iterations);
 
         audit_logger.log(
@@ -297,11 +313,11 @@ impl AgentEngine {
         let result = if use_planning {
             run_with_planning(
                 agent_id, config, prompt, &mut runtime, intelligence_config,
-                workspace_root, &index, governance, audit_logger, registry,
+                workspace_root, &index, governance, audit_logger.as_ref(), registry,
                 file_locks, daemon_state.clone(),
             )
         } else {
-            run_simple(agent_id, config, prompt, &mut runtime, governance, audit_logger)
+            run_simple(agent_id, config, prompt, &mut runtime, governance, audit_logger.as_ref())
         };
 
         // ── Fire webhooks on agent completion ────────────────────────────────

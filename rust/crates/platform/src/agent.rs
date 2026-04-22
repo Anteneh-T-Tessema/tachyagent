@@ -25,6 +25,9 @@ pub struct AgentTemplate {
     /// Whether to use the plan-and-execute loop (false = simple single-turn).
     #[serde(default = "default_true")]
     pub use_planning: bool,
+    /// Whether to inject local workspace intelligence such as codebase context.
+    #[serde(default = "default_true")]
+    pub use_workspace_context: bool,
 }
 
 fn default_true() -> bool { true }
@@ -55,6 +58,7 @@ impl AgentTemplate {
             max_iterations: 10,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -83,6 +87,7 @@ impl AgentTemplate {
             max_iterations: 20,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -111,6 +116,74 @@ impl AgentTemplate {
             max_iterations: 15,
             requires_approval: true,
             use_planning: true,
+            use_workspace_context: true,
+        }
+    }
+
+    #[must_use]
+    pub fn yaya_memo_writer() -> Self {
+        Self {
+            name: "yaya-memo-writer".to_string(),
+            description: "Writes a grounded markdown memo from Yaya expert guidance with minimal iteration.".to_string(),
+            system_prompt: concat!(
+                "You are a regulated-team memo writer.\n",
+                "Your job is to turn grounded expert guidance into one concise markdown memo.\n\n",
+                "RULES:\n",
+                "1. Preserve the provided grounded guidance and supporting citations.\n",
+                "2. You must call the write_file tool exactly once with the final markdown memo.\n",
+                "3. Do not browse, search, or invent new facts.\n",
+                "4. Do not answer conversationally and do not emit code samples.\n",
+                "5. Do not rewrite the file repeatedly unless the first write fails.\n",
+                "6. Use ATX headings only (`#`, `##`) and keep the tone neutral, operational, and compliance-friendly.\n",
+                "7. Use this exact section order:\n",
+                "   # <Subject> Expert Memo\n",
+                "   ## Executive Summary\n",
+                "   ## Key Source Signals\n",
+                "   ## Operational Limits\n",
+                "8. Do not add a references section; the workflow will append supporting citations.\n",
+                "9. After the memo is written, stop."
+            ).to_string(),
+            allowed_tools: vec![
+                "write_file".to_string(),
+            ],
+            model: "llama3.2:3b".to_string(),
+            max_iterations: 4,
+            requires_approval: false,
+            use_planning: false,
+            use_workspace_context: false,
+        }
+    }
+
+    #[must_use]
+    pub fn yaya_finance_brief_writer() -> Self {
+        Self {
+            name: "yaya-finance-brief-writer".to_string(),
+            description: "Writes a grounded finance brief from Yaya guidance with a board-ready control focus.".to_string(),
+            system_prompt: concat!(
+                "You are a finance operations brief writer.\n",
+                "Your job is to turn grounded Yaya finance guidance into one concise markdown brief.\n\n",
+                "RULES:\n",
+                "1. Preserve the provided grounded guidance and supporting citations.\n",
+                "2. You must call the write_file tool exactly once with the final markdown brief.\n",
+                "3. Do not browse, search, or invent new facts.\n",
+                "4. Use a neutral, board-ready tone focused on controls, timing, thresholds, and escalation triggers.\n",
+                "5. Use ATX headings only (`#`, `##`).\n",
+                "6. Use this exact section order:\n",
+                "   # Finance Expert Brief\n",
+                "   ## Executive Summary\n",
+                "   ## Control Signals\n",
+                "   ## Escalations And Limits\n",
+                "7. Do not add a references section; the workflow will append supporting citations.\n",
+                "8. After the brief is written, stop."
+            ).to_string(),
+            allowed_tools: vec![
+                "write_file".to_string(),
+            ],
+            model: "llama3.2:3b".to_string(),
+            max_iterations: 4,
+            requires_approval: false,
+            use_planning: false,
+            use_workspace_context: false,
         }
     }
 
@@ -154,6 +227,7 @@ impl AgentTemplate {
             max_iterations: 16,
             requires_approval: false,
             use_planning: false, // Chat uses simple execution, not planning
+            use_workspace_context: true,
         }
     }
 
@@ -180,6 +254,7 @@ impl AgentTemplate {
             max_iterations: 10,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -215,6 +290,7 @@ impl AgentTemplate {
             max_iterations: 30,
             requires_approval: true,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -250,6 +326,7 @@ impl AgentTemplate {
             max_iterations: 25,
             requires_approval: true,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -286,6 +363,7 @@ impl AgentTemplate {
             max_iterations: 20,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -321,6 +399,7 @@ impl AgentTemplate {
             max_iterations: 15,
             requires_approval: true,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -360,6 +439,7 @@ impl AgentTemplate {
             max_iterations: 30,
             requires_approval: true,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 
@@ -399,6 +479,7 @@ impl AgentTemplate {
             max_iterations: 15,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 }

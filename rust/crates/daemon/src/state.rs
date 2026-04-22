@@ -133,7 +133,7 @@ pub struct DaemonState {
     pub scheduler: TaskScheduler,
     pub agents: BTreeMap<String, AgentInstance>,
     pub conversations: BTreeMap<String, Conversation>,
-    pub audit_logger: AuditLogger,
+    pub audit_logger: Arc<AuditLogger>,
     pub agent_counter: u64,
     pub task_counter: u64,
     pub conv_counter: u64,
@@ -225,6 +225,7 @@ impl DaemonState {
             AuditEventKind::SessionStart,
             "daemon started",
         ));
+        let audit_logger = Arc::new(audit_logger);
 
         let registry = BackendRegistry::with_defaults();
 
@@ -315,6 +316,28 @@ impl DaemonState {
                     }
                 }
             }
+        }
+
+        if let Some(api_key) = &state.api_key {
+            state.user_store = audit::UserStore::with_default_admin(&audit::hash_api_key(api_key));
+        }
+
+        let mut stale_agents = Vec::new();
+        for agent in state.agents.values_mut() {
+            if agent.status == platform::AgentStatus::Running {
+                agent.mark_failed("Recovered after daemon restart; previous run was interrupted.");
+                stale_agents.push(agent.id.clone());
+            }
+        }
+        if !stale_agents.is_empty() {
+            state.audit_logger.log(
+                &AuditEvent::new(
+                    "daemon",
+                    AuditEventKind::SessionStart,
+                    format!("recovered {} stale running agents", stale_agents.len()),
+                ),
+            );
+            state.save();
         }
 
         Ok(state)

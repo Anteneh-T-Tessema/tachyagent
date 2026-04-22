@@ -67,3 +67,52 @@ class PendingApproval:
 class FileLock:
     file: str
     agent_id: str
+
+
+@dataclass
+class YayaCitation:
+    source: str
+    label: str
+    page: Optional[int] = None
+    chunk: Optional[int] = None
+    score: Optional[float] = None
+    semantic_score: Optional[float] = None
+    lexical_score: Optional[float] = None
+    retrieval_mode: Optional[str] = None
+
+
+@dataclass
+class YayaExpert:
+    workspace: str
+    subject: str
+    active_version: Optional[str] = None
+    model_path: Optional[str] = None
+    latest_evaluation_passed: Optional[bool] = None
+    latest_evaluation_version: Optional[str] = None
+    latest_trained_at: Optional[str] = None
+
+
+@dataclass
+class YayaRetrievalPreferences:
+    strategy: str = "workspace_wide"
+    preferred_sources: list[str] = field(default_factory=list)
+    preferred_source_terms: list[str] = field(default_factory=list)
+    explicit_preferred_sources: list[str] = field(default_factory=list)
+    explicit_preferred_source_terms: list[str] = field(default_factory=list)
+    inferred_preferred_sources: list[str] = field(default_factory=list)
+    inferred_preferred_source_terms: list[str] = field(default_factory=list)
+    approved_example_count: int = 0
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class YayaExpertResponse:
+    workspace: str
+    subject: str
+    response: str
+    citations: list[YayaCitation] = field(default_factory=list)
+    model_type: str = "expert"
+    used_fallback: bool = False
+    retrieval_mode: str = "none"
+    grounded: bool = False
+    retrieval_preferences: Optional[YayaRetrievalPreferences] = None

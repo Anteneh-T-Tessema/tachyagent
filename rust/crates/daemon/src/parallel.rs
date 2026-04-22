@@ -524,9 +524,9 @@ fn execute_single_task(
         )
     }; // lock released here — safe to re-acquire inside run_agent
 
-    // Build a fresh audit logger for this task so we don't need to clone the
-    // shared one (AuditLogger holds Box<dyn AuditSink> which is not Clone).
-    let task_audit = audit::AuditLogger::new();
+    // Build a task-local audit logger so swarm tasks do not mutate the daemon's
+    // session chain while still allowing shared daemon-state events to flow.
+    let task_audit = std::sync::Arc::new(audit::AuditLogger::new());
 
     let result = super::AgentEngine::run_agent(
         &task.id,
@@ -534,7 +534,7 @@ fn execute_single_task(
         &task.prompt,
         &registry,
         &governance,
-        &task_audit,
+        task_audit,
         &intel_cfg,
         &workspace_root,
         Some(file_locks.clone()),

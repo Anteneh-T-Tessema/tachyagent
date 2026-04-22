@@ -13,7 +13,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Rust port is now in progress** on the [`dev/rust`](https://github.com/instructkr/claw-code/tree/dev/rust) branch and is expected to be merged into main today. The Rust implementation aims to deliver a faster, memory-safe harness runtime. Stay tuned — this will be the definitive version of the project.
+> **The Rust workspace is now the canonical runtime** for Claw-Code. The Python `src/` tree remains in the repository as compatibility and porting support, but the real execution, governance, orchestration, and API surface live under `rust/`. See [`REPO_MAP.md`](REPO_MAP.md) for the current canonical layout.
 
 > If you find this work useful, consider [sponsoring @instructkr on GitHub](https://github.com/sponsors/instructkr) to support continued open-source harness engineering research.
 
@@ -49,15 +49,18 @@ I've been deeply interested in **harness engineering** — studying how agent sy
 
 ---
 
-## Porting Status
+## Current Repository Status
 
-The main source tree is now Python-first.
+The repository is no longer best understood as Python-first.
 
-- `src/` contains the active Python porting workspace
-- `tests/` verifies the current Python workspace
-- the exposed snapshot is no longer part of the tracked repository state
+- `rust/` contains the canonical local-first agent runtime
+- `rust/crates/daemon` is the main control plane and API surface
+- `rust/crates/runtime` is the execution substrate
+- `rust/crates/audit` is the governance and trust layer
+- `sdk/python/` and `vscode-extension/` are integration surfaces around the runtime
+- `src/` remains useful, but should be treated as compatibility and porting support rather than the primary runtime
 
-The current Python workspace is not yet a complete one-to-one replacement for the original system, but the primary implementation surface is now Python.
+See [`REPO_MAP.md`](REPO_MAP.md) for the authoritative repo layout.
 
 ## Why this rewrite exists
 
@@ -69,7 +72,15 @@ This repository now focuses on Python porting work instead.
 
 ```text
 .
-├── src/                                # Python porting workspace
+├── rust/                               # Canonical runtime workspace
+│   ├── crates/daemon                   # Control plane and HTTP API
+│   ├── crates/runtime                  # Conversation/tool execution substrate
+│   ├── crates/audit                    # Governance, RBAC, policy, audit
+│   ├── crates/backend                  # Model and provider abstraction
+│   ├── crates/platform                 # Templates, workspaces, scheduling
+│   ├── crates/intelligence             # Indexing, RAG, planning, verification
+│   └── crates/tools                    # Tool surfaces
+├── src/                                # Python compatibility and porting layer
 │   ├── __init__.py
 │   ├── commands.py
 │   ├── main.py
@@ -78,9 +89,13 @@ This repository now focuses on Python porting work instead.
 │   ├── query_engine.py
 │   ├── task.py
 │   └── tools.py
-├── tests/                              # Python verification
+├── tests/                              # Python compatibility verification
+├── sdk/python/                         # Python SDK for Tachy + Yaya workflows
+├── vscode-extension/                   # VS Code integration
+├── docs/                               # Architecture, integration, hardening docs
 ├── assets/omx/                         # OmX workflow screenshots
 ├── 2026-03-09-is-legal-the-same-as-legitimate-ai-reimplementation-and-the-erosion-of-copyleft.md
+├── REPO_MAP.md
 └── README.md
 ```
 
@@ -94,6 +109,8 @@ The new Python `src/` tree currently provides:
 - **`tools.py`** — Python-side tool port metadata
 - **`query_engine.py`** — renders a Python porting summary from the active workspace
 - **`main.py`** — a CLI entrypoint for manifest and summary output
+
+This Python tree should not be mistaken for the full product runtime. The primary runtime is in `rust/`.
 
 ## Quickstart
 

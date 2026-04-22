@@ -52,7 +52,7 @@ pub(crate) fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result
         prompt,
         &state.registry,
         &state.config.governance,
-        &state.audit_logger,
+        state.audit_logger.clone(),
         &state.config.intelligence,
         &state.workspace_root,
         None,

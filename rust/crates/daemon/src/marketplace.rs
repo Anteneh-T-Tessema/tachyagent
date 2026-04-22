@@ -337,6 +337,7 @@ mod tests {
             max_iterations: 5,
             requires_approval: false,
             use_planning: true,
+            use_workspace_context: true,
         }
     }
 

@@ -46,6 +46,8 @@ pub struct AgentDefinition {
     pub approval_required: bool,
     #[serde(default = "default_true")]
     pub use_planning: bool,
+    #[serde(default = "default_true")]
+    pub use_workspace_context: bool,
     #[serde(default)]
     pub triggers: Vec<TriggerDef>,
 }
@@ -81,6 +83,7 @@ impl AgentDefinition {
             max_iterations: self.max_iterations,
             requires_approval: self.approval_required,
             use_planning: self.use_planning,
+            use_workspace_context: self.use_workspace_context,
         }
     }
 }

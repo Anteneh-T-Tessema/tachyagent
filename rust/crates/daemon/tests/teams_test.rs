@@ -1,12 +1,12 @@
 //! Team and RBAC property tests.
 //!
 //! Feature: product-hardening-v3
-//! Properties 5–11: TeamManager and team-scoped RBAC correctness.
+//! Properties 5–11: `TeamManager` and team-scoped RBAC correctness.
 //! Validates: Requirements 3.1–3.6, 4.1–4.5, 5.1
 
+use audit::{check_team_permission, AccessResult, Action, Role};
+use daemon::{TeamError, TeamManager};
 use proptest::prelude::*;
-use audit::{Action, AccessResult, Role, check_team_permission};
-use daemon::{TeamManager, TeamError};
 
 // ---------------------------------------------------------------------------
 // Property 5: Team creation and persistence round-trip
@@ -23,7 +23,11 @@ fn team_creation_round_trip_basic() {
 
     let team = &teams[&team_id];
     assert_eq!(team.name, "Engineering");
-    assert_eq!(team.members.len(), 1, "creator should be the initial member");
+    assert_eq!(
+        team.members.len(),
+        1,
+        "creator should be the initial member"
+    );
 
     let member = team.members.get("admin-1").unwrap();
     assert_eq!(member.role, Role::Admin, "creator must be Admin");
@@ -76,15 +80,19 @@ fn invitation_join_round_trip_basic() {
     let mut mgr = TeamManager::new();
     let team_id = mgr.create_team("Ops", "admin-1").unwrap();
 
-    let token = mgr.invite(&team_id, "new-dev@example.com", Role::Developer, "admin-1").unwrap();
+    let token = mgr
+        .invite(&team_id, "new-dev@example.com", Role::Developer, "admin-1")
+        .unwrap();
     let member = mgr.join_at(&token, "user-dev", 1).unwrap();
 
     assert_eq!(member.role, Role::Developer);
     assert_eq!(member.user_id, "user-dev");
 
     let teams = mgr.teams();
-    assert!(teams[&team_id].members.contains_key("user-dev"),
-        "new member should appear in team roster");
+    assert!(
+        teams[&team_id].members.contains_key("user-dev"),
+        "new member should appear in team roster"
+    );
 }
 
 proptest! {
@@ -99,12 +107,12 @@ proptest! {
         invitee_id in "[a-z][a-z0-9]{3,10}",
     ) {
         let roles = [Role::Viewer, Role::Developer, Role::Admin];
-        let invited_role = roles[role_idx].clone();
+        let invited_role = roles[role_idx];
 
         let mut mgr = TeamManager::new();
         let team_id = mgr.create_team("PropTeam", "admin-prop").unwrap();
 
-        let token = mgr.invite(&team_id, &format!("{invitee_id}@example.com"), invited_role.clone(), "admin-prop").unwrap();
+        let token = mgr.invite(&team_id, &format!("{invitee_id}@example.com"), invited_role, "admin-prop").unwrap();
         let member = mgr.join_at(&token, &invitee_id, 1).unwrap();
 
         prop_assert_eq!(member.role, invited_role);
@@ -122,7 +130,9 @@ fn expired_invitation_rejected() {
     let mut mgr = TeamManager::new();
     let team_id = mgr.create_team("Secure", "admin-1").unwrap();
 
-    let token = mgr.invite(&team_id, "dev@example.com", Role::Developer, "admin-1").unwrap();
+    let token = mgr
+        .invite(&team_id, "dev@example.com", Role::Developer, "admin-1")
+        .unwrap();
 
     // invite uses current unix time as created_at; expires_at = created_at + 259200.
     // Use far-future timestamp to guarantee we are always past the expiry.
@@ -139,12 +149,17 @@ fn used_invitation_rejected_on_reuse() {
     let mut mgr = TeamManager::new();
     let team_id = mgr.create_team("Secure", "admin-1").unwrap();
 
-    let token = mgr.invite(&team_id, "dev@example.com", Role::Developer, "admin-1").unwrap();
+    let token = mgr
+        .invite(&team_id, "dev@example.com", Role::Developer, "admin-1")
+        .unwrap();
     mgr.join_at(&token, "user-1", 1).unwrap();
 
     let result = mgr.join_at(&token, "user-2", 2);
     assert!(
-        matches!(result, Err(TeamError::InvitationUsed | TeamError::AlreadyMember)),
+        matches!(
+            result,
+            Err(TeamError::InvitationUsed | TeamError::AlreadyMember)
+        ),
         "used invitation must be rejected"
     );
 }
@@ -156,7 +171,7 @@ proptest! {
     ///
     /// Feature: product-hardening-v3, Property 7: Expired or used invitations are rejected
     #[test]
-    fn prop_expired_invitations_always_rejected(extra_secs in 1u64..86_400u64) {
+    fn prop_expired_invitations_always_rejected(_extra_secs in 1u64..86_400u64) {
         let mut mgr = TeamManager::new();
         let team_id = mgr.create_team("T", "a").unwrap();
         let token = mgr.invite(&team_id, "x@y.com", Role::Developer, "a").unwrap();
@@ -204,12 +219,16 @@ fn second_admin_allows_demotion() {
     let mut mgr = TeamManager::new();
     let team_id = mgr.create_team("Dual", "admin-1").unwrap();
 
-    let token = mgr.invite(&team_id, "dev@ex.com", Role::Developer, "admin-1").unwrap();
+    let token = mgr
+        .invite(&team_id, "dev@ex.com", Role::Developer, "admin-1")
+        .unwrap();
     mgr.join_at(&token, "admin-2", 1).unwrap();
-    mgr.update_member_role(&team_id, "admin-2", Role::Admin, "admin-1").unwrap();
+    mgr.update_member_role(&team_id, "admin-2", Role::Admin, "admin-1")
+        .unwrap();
 
     // Now admin-1 can be demoted since admin-2 is also Admin
-    mgr.update_member_role(&team_id, "admin-1", Role::Viewer, "admin-1").unwrap();
+    mgr.update_member_role(&team_id, "admin-1", Role::Viewer, "admin-1")
+        .unwrap();
 
     let role = mgr.get_member_role(&team_id, "admin-1");
     assert_eq!(role, Some(Role::Viewer));
@@ -230,7 +249,7 @@ proptest! {
         action_idx in 0usize..3usize,
     ) {
         let actions = [Action::RunAgent, Action::ListAgents, Action::ManageUsers];
-        let action = actions[action_idx].clone();
+        let action = actions[action_idx];
 
         let result = check_team_permission("user-1", "team-b", action, None);
         let is_denied = matches!(result, AccessResult::Denied { .. });
@@ -254,8 +273,8 @@ proptest! {
             Action::RunAgent, Action::ListAgents, Action::ScheduleTask,
             Action::ManageUsers, Action::ManageConfig,
         ];
-        let action = actions[action_idx].clone();
-        let result = check_team_permission("admin-user", "team-x", action.clone(), Some(Role::Admin));
+        let action = actions[action_idx];
+        let result = check_team_permission("admin-user", "team-x", action, Some(Role::Admin));
         prop_assert!(
             matches!(result, AccessResult::Allowed),
             "Admin must be allowed for {:?}", action
@@ -273,14 +292,23 @@ fn role_change_takes_effect() {
     let mut mgr = TeamManager::new();
     let team_id = mgr.create_team("T", "admin-1").unwrap();
 
-    let token = mgr.invite(&team_id, "dev@x.com", Role::Developer, "admin-1").unwrap();
+    let token = mgr
+        .invite(&team_id, "dev@x.com", Role::Developer, "admin-1")
+        .unwrap();
     mgr.join_at(&token, "user-dev", 1).unwrap();
 
-    assert_eq!(mgr.get_member_role(&team_id, "user-dev"), Some(Role::Developer));
+    assert_eq!(
+        mgr.get_member_role(&team_id, "user-dev"),
+        Some(Role::Developer)
+    );
 
-    mgr.update_member_role(&team_id, "user-dev", Role::Viewer, "admin-1").unwrap();
+    mgr.update_member_role(&team_id, "user-dev", Role::Viewer, "admin-1")
+        .unwrap();
 
-    assert_eq!(mgr.get_member_role(&team_id, "user-dev"), Some(Role::Viewer));
+    assert_eq!(
+        mgr.get_member_role(&team_id, "user-dev"),
+        Some(Role::Viewer)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -294,10 +322,18 @@ fn different_teams_have_independent_members() {
     let team_a = mgr.create_team("Team A", "admin-a").unwrap();
     let team_b = mgr.create_team("Team B", "admin-b").unwrap();
 
-    let token = mgr.invite(&team_a, "user1@x.com", Role::Developer, "admin-a").unwrap();
+    let token = mgr
+        .invite(&team_a, "user1@x.com", Role::Developer, "admin-a")
+        .unwrap();
     mgr.join_at(&token, "user-1", 1).unwrap();
 
-    assert_eq!(mgr.get_member_role(&team_a, "user-1"), Some(Role::Developer));
-    assert_eq!(mgr.get_member_role(&team_b, "user-1"), None,
-        "user-1 must not be a member of team-b");
+    assert_eq!(
+        mgr.get_member_role(&team_a, "user-1"),
+        Some(Role::Developer)
+    );
+    assert_eq!(
+        mgr.get_member_role(&team_b, "user-1"),
+        None,
+        "user-1 must not be a member of team-b"
+    );
 }

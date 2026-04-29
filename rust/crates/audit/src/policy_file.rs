@@ -44,7 +44,9 @@ pub struct ToolRule {
     pub blocked_patterns: Vec<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl PolicyFile {
     /// Load a policy from a JSON file.
@@ -61,16 +63,20 @@ impl PolicyFile {
     }
 
     /// Convert to a `GovernancePolicy`.
-    #[must_use] pub fn to_governance_policy(&self) -> GovernancePolicy {
-        let tool_rules = self.rules.tool_rules.iter().map(|r| {
-            ToolGovernanceRule {
+    #[must_use]
+    pub fn to_governance_policy(&self) -> GovernancePolicy {
+        let tool_rules = self
+            .rules
+            .tool_rules
+            .iter()
+            .map(|r| ToolGovernanceRule {
                 tool_name: r.tool.clone(),
                 max_invocations_per_session: r.max_invocations,
                 requires_approval: r.requires_approval,
                 redact_in_logs: false,
                 blocked_patterns: r.blocked_patterns.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         GovernancePolicy {
             tool_rules,
@@ -83,7 +89,8 @@ impl PolicyFile {
     }
 
     /// Create a default enterprise policy file.
-    #[must_use] pub fn enterprise_default() -> Self {
+    #[must_use]
+    pub fn enterprise_default() -> Self {
         Self {
             version: 1,
             name: "Enterprise Default".to_string(),
@@ -141,8 +148,7 @@ impl PolicyFile {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("failed to create policy dir: {e}"))?;
         }
-        std::fs::write(path, content)
-            .map_err(|e| format!("failed to write policy file: {e}"))
+        std::fs::write(path, content).map_err(|e| format!("failed to write policy file: {e}"))
     }
 }
 
@@ -170,10 +176,7 @@ mod tests {
 
     #[test]
     fn save_and_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!(
-            "tachy-policy-test-{}",
-            std::process::id(),
-        ));
+        let dir = std::env::temp_dir().join(format!("tachy-policy-test-{}", std::process::id(),));
         let path = dir.join("policy.json");
 
         let original = PolicyFile::enterprise_default();
@@ -182,7 +185,10 @@ mod tests {
         let loaded = PolicyFile::load(&path).expect("should load");
         assert_eq!(loaded.version, original.version);
         assert_eq!(loaded.name, original.name);
-        assert_eq!(loaded.rules.block_destructive_shell, original.rules.block_destructive_shell);
+        assert_eq!(
+            loaded.rules.block_destructive_shell,
+            original.rules.block_destructive_shell
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }

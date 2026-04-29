@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 /// Supported language servers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LanguageServer {
-    TypeScript,  // tsserver / typescript-language-server
-    Python,      // pylsp or pyright
-    Rust,        // rust-analyzer
-    Go,          // gopls
+    TypeScript, // tsserver / typescript-language-server
+    Python,     // pylsp or pyright
+    Rust,       // rust-analyzer
+    Go,         // gopls
 }
 
 /// A diagnostic (error/warning) from the language server.
@@ -68,12 +68,16 @@ pub struct LspManager {
 }
 
 impl LspManager {
-    #[must_use] pub fn new(workspace_root: &Path) -> Self {
-        Self { workspace_root: workspace_root.to_path_buf() }
+    #[must_use]
+    pub fn new(workspace_root: &Path) -> Self {
+        Self {
+            workspace_root: workspace_root.to_path_buf(),
+        }
     }
 
     /// Get diagnostics for a file using the appropriate language tool.
-    #[must_use] pub fn get_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
+    #[must_use]
+    pub fn get_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
         let path = self.resolve_path(file);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
@@ -87,7 +91,8 @@ impl LspManager {
     }
 
     /// Get type/hover info for a symbol.
-    #[must_use] pub fn hover(&self, file: &str, line: usize, col: usize) -> Option<HoverInfo> {
+    #[must_use]
+    pub fn hover(&self, file: &str, line: usize, col: usize) -> Option<HoverInfo> {
         // For now, use grep-based symbol lookup
         // Full LSP hover requires a running language server
         let path = self.resolve_path(file);
@@ -99,15 +104,25 @@ impl LspManager {
         let chars: Vec<char> = target_line.chars().collect();
         let mut start = col.saturating_sub(1);
         let mut end = col.saturating_sub(1);
-        while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+        while start > 0
+            && chars
+                .get(start - 1)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
             start -= 1;
         }
-        while end < chars.len() && chars.get(end).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+        while end < chars.len()
+            && chars
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
             end += 1;
         }
         let symbol: String = chars[start..end].iter().collect();
 
-        if symbol.is_empty() { return None; }
+        if symbol.is_empty() {
+            return None;
+        }
 
         Some(HoverInfo {
             content: format!("Symbol: {symbol} (line {line}, col {col})"),
@@ -116,7 +131,8 @@ impl LspManager {
     }
 
     /// Find all references to a symbol in the workspace.
-    #[must_use] pub fn find_references(&self, file: &str, line: usize, col: usize) -> Vec<Location> {
+    #[must_use]
+    pub fn find_references(&self, file: &str, line: usize, col: usize) -> Vec<Location> {
         let path = self.resolve_path(file);
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
@@ -133,14 +149,24 @@ impl LspManager {
         let chars: Vec<char> = target_line.chars().collect();
         let mut start = col.saturating_sub(1).min(chars.len().saturating_sub(1));
         let mut end = start;
-        while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+        while start > 0
+            && chars
+                .get(start - 1)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
             start -= 1;
         }
-        while end < chars.len() && chars.get(end).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+        while end < chars.len()
+            && chars
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
             end += 1;
         }
         let symbol: String = chars[start..end].iter().collect();
-        if symbol.is_empty() { return Vec::new(); }
+        if symbol.is_empty() {
+            return Vec::new();
+        }
 
         // Use grep to find references across the workspace
         self.grep_symbol(&symbol)
@@ -208,116 +234,161 @@ impl LspManager {
 
     fn grep_symbol(&self, symbol: &str) -> Vec<Location> {
         let output = Command::new("grep")
-            .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py",
-                   "--include=*.go", "--include=*.js", symbol])
+            .args([
+                "-rn",
+                "--include=*.rs",
+                "--include=*.ts",
+                "--include=*.py",
+                "--include=*.go",
+                "--include=*.js",
+                symbol,
+            ])
             .current_dir(&self.workspace_root)
             .output();
 
         match output {
-            Ok(out) => {
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .take(50)
-                    .filter_map(|line| {
-                        let parts: Vec<&str> = line.splitn(3, ':').collect();
-                        if parts.len() >= 2 {
-                            Some(Location {
-                                file: parts[0].to_string(),
-                                line: parts[1].parse().unwrap_or(0),
-                                column: 0,
-                            })
-                        } else { None }
-                    })
-                    .collect()
-            }
+            Ok(out) => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .take(50)
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.splitn(3, ':').collect();
+                    if parts.len() >= 2 {
+                        Some(Location {
+                            file: parts[0].to_string(),
+                            line: parts[1].parse().unwrap_or(0),
+                            column: 0,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
 
     fn resolve_path(&self, file: &str) -> PathBuf {
         let p = Path::new(file);
-        if p.is_absolute() { p.to_path_buf() }
-        else { self.workspace_root.join(file) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.workspace_root.join(file)
+        }
     }
 }
 
 // --- Output parsers ---
 
 fn parse_tsc_output(output: &str, _target: &Path) -> Vec<Diagnostic> {
-    output.lines().filter_map(|line| {
-        // Format: file(line,col): error TS1234: message
-        let paren = line.find('(')?;
-        let close = line.find(')')?;
-        let file = &line[..paren];
-        let coords = &line[paren + 1..close];
-        let rest = line.get(close + 2..)?.trim();
+    output
+        .lines()
+        .filter_map(|line| {
+            // Format: file(line,col): error TS1234: message
+            let paren = line.find('(')?;
+            let close = line.find(')')?;
+            let file = &line[..paren];
+            let coords = &line[paren + 1..close];
+            let rest = line.get(close + 2..)?.trim();
 
-        let parts: Vec<&str> = coords.split(',').collect();
-        let line_num: usize = parts.first()?.parse().ok()?;
-        let col: usize = parts.get(1)?.parse().ok()?;
+            let parts: Vec<&str> = coords.split(',').collect();
+            let line_num: usize = parts.first()?.parse().ok()?;
+            let col: usize = parts.get(1)?.parse().ok()?;
 
-        let severity = if rest.starts_with("error") { DiagnosticSeverity::Error }
-            else { DiagnosticSeverity::Warning };
-        let message = rest.split_once(": ").map_or(rest, |x| x.1);
+            let severity = if rest.starts_with("error") {
+                DiagnosticSeverity::Error
+            } else {
+                DiagnosticSeverity::Warning
+            };
+            let message = rest.split_once(": ").map_or(rest, |x| x.1);
 
-        Some(Diagnostic { file: file.to_string(), line: line_num, column: col,
-            severity, message: message.to_string(), source: "tsc".to_string() })
-    }).collect()
+            Some(Diagnostic {
+                file: file.to_string(),
+                line: line_num,
+                column: col,
+                severity,
+                message: message.to_string(),
+                source: "tsc".to_string(),
+            })
+        })
+        .collect()
 }
 
 fn parse_python_errors(stderr: &str, target: &Path) -> Vec<Diagnostic> {
-    stderr.lines().filter_map(|line| {
-        if line.contains("SyntaxError") || line.contains("Error") {
-            Some(Diagnostic {
-                file: target.to_string_lossy().to_string(),
-                line: 0, column: 0,
-                severity: DiagnosticSeverity::Error,
-                message: line.trim().to_string(),
-                source: "python".to_string(),
-            })
-        } else { None }
-    }).collect()
+    stderr
+        .lines()
+        .filter_map(|line| {
+            if line.contains("SyntaxError") || line.contains("Error") {
+                Some(Diagnostic {
+                    file: target.to_string_lossy().to_string(),
+                    line: 0,
+                    column: 0,
+                    severity: DiagnosticSeverity::Error,
+                    message: line.trim().to_string(),
+                    source: "python".to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn parse_cargo_diagnostics(output: &str, _target: &Path) -> Vec<Diagnostic> {
-    output.lines().filter_map(|line| {
-        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
-        let msg = parsed.get("message")?;
-        let level = msg.get("level")?.as_str()?;
-        let message = msg.get("message")?.as_str()?;
-        let spans = msg.get("spans")?.as_array()?;
-        let span = spans.first()?;
+    output
+        .lines()
+        .filter_map(|line| {
+            let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+            let msg = parsed.get("message")?;
+            let level = msg.get("level")?.as_str()?;
+            let message = msg.get("message")?.as_str()?;
+            let spans = msg.get("spans")?.as_array()?;
+            let span = spans.first()?;
 
-        Some(Diagnostic {
-            file: span.get("file_name")?.as_str()?.to_string(),
-            line: span.get("line_start")?.as_u64()? as usize,
-            column: span.get("column_start")?.as_u64().unwrap_or(0) as usize,
-            severity: if level == "error" { DiagnosticSeverity::Error } else { DiagnosticSeverity::Warning },
-            message: message.to_string(),
-            source: "cargo".to_string(),
+            Some(Diagnostic {
+                file: span.get("file_name")?.as_str()?.to_string(),
+                line: span.get("line_start")?.as_u64()? as usize,
+                column: span.get("column_start")?.as_u64().unwrap_or(0) as usize,
+                severity: if level == "error" {
+                    DiagnosticSeverity::Error
+                } else {
+                    DiagnosticSeverity::Warning
+                },
+                message: message.to_string(),
+                source: "cargo".to_string(),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn parse_go_errors(stderr: &str, _target: &Path) -> Vec<Diagnostic> {
-    stderr.lines().filter_map(|line| {
-        let parts: Vec<&str> = line.splitn(4, ':').collect();
-        if parts.len() >= 4 {
-            Some(Diagnostic {
-                file: parts[0].to_string(),
-                line: parts[1].parse().unwrap_or(0),
-                column: parts[2].trim().parse().unwrap_or(0),
-                severity: DiagnosticSeverity::Error,
-                message: parts[3].trim().to_string(),
-                source: "go".to_string(),
-            })
-        } else { None }
-    }).collect()
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.splitn(4, ':').collect();
+            if parts.len() >= 4 {
+                Some(Diagnostic {
+                    file: parts[0].to_string(),
+                    line: parts[1].parse().unwrap_or(0),
+                    column: parts[2].trim().parse().unwrap_or(0),
+                    severity: DiagnosticSeverity::Error,
+                    message: parts[3].trim().to_string(),
+                    source: "go".to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Execute the `get_diagnostics` tool — called by the LLM.
-pub fn execute_get_diagnostics(input: &serde_json::Value, workspace_root: &Path) -> Result<String, String> {
-    let file = input.get("file").and_then(|v| v.as_str())
+pub fn execute_get_diagnostics(
+    input: &serde_json::Value,
+    workspace_root: &Path,
+) -> Result<String, String> {
+    let file = input
+        .get("file")
+        .and_then(|v| v.as_str())
         .ok_or("'file' parameter required")?;
     let lsp = LspManager::new(workspace_root);
     let diagnostics = lsp.get_diagnostics(file);
@@ -326,20 +397,40 @@ pub fn execute_get_diagnostics(input: &serde_json::Value, workspace_root: &Path)
     } else {
         let mut out = format!("{} diagnostics found:\n", diagnostics.len());
         for d in &diagnostics {
-            out.push_str(&format!("  {}:{}:{} [{}] {}\n",
-                d.file, d.line, d.column,
-                match d.severity { DiagnosticSeverity::Error => "ERROR", DiagnosticSeverity::Warning => "WARN", _ => "INFO" },
-                d.message));
+            out.push_str(&format!(
+                "  {}:{}:{} [{}] {}\n",
+                d.file,
+                d.line,
+                d.column,
+                match d.severity {
+                    DiagnosticSeverity::Error => "ERROR",
+                    DiagnosticSeverity::Warning => "WARN",
+                    _ => "INFO",
+                },
+                d.message
+            ));
         }
         Ok(out)
     }
 }
 
 /// Execute the `find_references` tool.
-pub fn execute_find_references(input: &serde_json::Value, workspace_root: &Path) -> Result<String, String> {
-    let file = input.get("file").and_then(|v| v.as_str()).ok_or("'file' required")?;
-    let line = input.get("line").and_then(serde_json::Value::as_u64).ok_or("'line' required")? as usize;
-    let col = input.get("column").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+pub fn execute_find_references(
+    input: &serde_json::Value,
+    workspace_root: &Path,
+) -> Result<String, String> {
+    let file = input
+        .get("file")
+        .and_then(|v| v.as_str())
+        .ok_or("'file' required")?;
+    let line = input
+        .get("line")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("'line' required")? as usize;
+    let col = input
+        .get("column")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize;
 
     let lsp = LspManager::new(workspace_root);
     let refs = lsp.find_references(file, line, col);

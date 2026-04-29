@@ -44,7 +44,8 @@ pub struct DependencyGraph {
 
 impl DependencyGraph {
     /// Build a full dependency graph by scanning all source files under `root`.
-    #[must_use] pub fn build(root: &Path) -> Self {
+    #[must_use]
+    pub fn build(root: &Path) -> Self {
         let built_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -82,7 +83,8 @@ impl DependencyGraph {
     /// Return all transitive dependents of `file` via BFS over reverse edges.
     ///
     /// These are files that could be affected if `file` changes.
-    #[must_use] pub fn transitive_dependents(&self, file: &str) -> Vec<String> {
+    #[must_use]
+    pub fn transitive_dependents(&self, file: &str) -> Vec<String> {
         let mut visited = BTreeSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(file.to_string());
@@ -101,7 +103,8 @@ impl DependencyGraph {
     }
 
     /// Return the direct imports of `file`.
-    #[must_use] pub fn direct_imports(&self, file: &str) -> Vec<String> {
+    #[must_use]
+    pub fn direct_imports(&self, file: &str) -> Vec<String> {
         self.nodes
             .get(file)
             .map(|n| n.imports.clone())
@@ -114,7 +117,9 @@ impl DependencyGraph {
 // ---------------------------------------------------------------------------
 
 fn collect_files(root: &Path, dir: &Path, nodes: &mut BTreeMap<String, GraphNode>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -127,7 +132,9 @@ fn collect_files(root: &Path, dir: &Path, nodes: &mut BTreeMap<String, GraphNode
             collect_files(root, &path, nodes);
         } else if path.is_file() {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let Some(language) = lang_for_ext(ext) else { continue };
+            let Some(language) = lang_for_ext(ext) else {
+                continue;
+            };
 
             let rel = match path.strip_prefix(root) {
                 Ok(r) => r.to_string_lossy().to_string(),
@@ -191,12 +198,7 @@ fn lang_for_ext(ext: &str) -> Option<&'static str> {
 // Import extraction (text-based, per language)
 // ---------------------------------------------------------------------------
 
-fn extract_imports(
-    content: &str,
-    language: &str,
-    root: &Path,
-    current_file: &Path,
-) -> Vec<String> {
+fn extract_imports(content: &str, language: &str, root: &Path, current_file: &Path) -> Vec<String> {
     let mut imports = Vec::new();
     let current_dir = current_file.parent().unwrap_or(root);
 
@@ -423,7 +425,10 @@ mod tests {
         let g = DependencyGraph::build(&dir);
         let deps = g.transitive_dependents("c.rs");
         assert!(deps.contains(&"b.rs".to_string()), "b depends on c");
-        assert!(deps.contains(&"a.rs".to_string()), "a transitively depends on c");
+        assert!(
+            deps.contains(&"a.rs".to_string()),
+            "a transitively depends on c"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

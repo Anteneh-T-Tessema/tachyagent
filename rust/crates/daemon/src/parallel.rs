@@ -12,8 +12,8 @@
 //!   Each worker pulls tasks, executes them, and emits results + new tasks.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -117,7 +117,8 @@ pub struct RunCost {
 }
 
 impl RunCost {
-    #[must_use] pub fn from_run(run: &ParallelRun) -> Self {
+    #[must_use]
+    pub fn from_run(run: &ParallelRun) -> Self {
         let mut total_in: u64 = 0;
         let mut total_out: u64 = 0;
         let mut total_cost: f64 = 0.0;
@@ -127,7 +128,9 @@ impl RunCost {
                 total_in += u64::from(res.tokens_in);
                 total_out += u64::from(res.tokens_out);
                 total_cost += f64::from(res.cost_usd);
-                if res.tokens_in > 0 || res.cost_usd > 0.0 { with_cost += 1; }
+                if res.tokens_in > 0 || res.cost_usd > 0.0 {
+                    with_cost += 1;
+                }
             }
         }
         RunCost {
@@ -202,8 +205,11 @@ impl Default for TaskQueue {
 }
 
 impl TaskQueue {
-    #[must_use] pub fn new() -> Self {
-        Self { tasks: VecDeque::new() }
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tasks: VecDeque::new(),
+        }
     }
 
     /// Add a task to the queue.
@@ -218,39 +224,56 @@ impl TaskQueue {
 
     /// Get the next task whose dependencies are all completed.
     /// Wave 2C: also enforces `if_success` / `if_failure` conditional gates.
-    pub fn poll(&mut self, completed: &[TaskId], task_results: &BTreeMap<TaskId, bool>) -> Option<AgentTask> {
+    pub fn poll(
+        &mut self,
+        completed: &[TaskId],
+        task_results: &BTreeMap<TaskId, bool>,
+    ) -> Option<AgentTask> {
         // First pass: cancel tasks whose conditions are definitively not met.
-        for task in self.tasks.iter_mut() {
-            if task.status != TaskStatus::Queued { continue; }
+        for task in &mut self.tasks {
+            if task.status != TaskStatus::Queued {
+                continue;
+            }
             if let Some(ref dep_id) = task.conditions.if_success {
                 if let Some(&dep_ok) = task_results.get(dep_id) {
-                    if !dep_ok { task.status = TaskStatus::Cancelled; }
+                    if !dep_ok {
+                        task.status = TaskStatus::Cancelled;
+                    }
                 }
             }
             if let Some(ref dep_id) = task.conditions.if_failure {
                 if let Some(&dep_ok) = task_results.get(dep_id) {
-                    if dep_ok { task.status = TaskStatus::Cancelled; }
+                    if dep_ok {
+                        task.status = TaskStatus::Cancelled;
+                    }
                 }
             }
         }
         let pos = self.tasks.iter().position(|t| {
             t.status == TaskStatus::Queued
                 && t.deps.iter().all(|dep| completed.contains(dep))
-                && t.conditions.if_success.as_ref().map_or(true, |dep_id| {
-                    task_results.get(dep_id).copied().unwrap_or(false)
-                })
-                && t.conditions.if_failure.as_ref().map_or(true, |dep_id| {
-                    task_results.get(dep_id).copied().map(|ok| !ok).unwrap_or(false)
+                && t.conditions
+                    .if_success
+                    .as_ref()
+                    .is_none_or(|dep_id| task_results.get(dep_id).copied().unwrap_or(false))
+                && t.conditions.if_failure.as_ref().is_none_or(|dep_id| {
+                    task_results
+                        .get(dep_id)
+                        .copied()
+                        .map(|ok| !ok)
+                        .unwrap_or(false)
                 })
         });
         pos.map(|i| self.tasks.remove(i).unwrap())
     }
 
-    #[must_use] pub fn len(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.tasks.len()
     }
 
-    #[must_use] pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 }
@@ -280,7 +303,7 @@ pub struct Orchestrator {
     runs: BTreeMap<RunId, ParallelRun>,
     queue: TaskQueue,
     completed_tasks: Vec<TaskId>,
-    /// Wave 2C: task_id → success outcome, for conditional branching.
+    /// Wave 2C: `task_id` → success outcome, for conditional branching.
     task_results: BTreeMap<TaskId, bool>,
     max_workers: usize,
     active_workers: usize,
@@ -289,7 +312,8 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    #[must_use] pub fn new(max_workers: usize) -> Self {
+    #[must_use]
+    pub fn new(max_workers: usize) -> Self {
         Self {
             runs: BTreeMap::new(),
             queue: TaskQueue::new(),
@@ -356,43 +380,61 @@ impl Orchestrator {
     }
 
     /// Wave 2D: list all suspended tasks awaiting approval.
+    #[must_use]
     pub fn suspended_tasks(&self) -> Vec<&AgentTask> {
-        self.runs.values()
+        self.runs
+            .values()
             .flat_map(|r| r.tasks.iter())
             .filter(|t| t.status == TaskStatus::Suspended)
             .collect()
     }
 
     /// Get the number of currently active runs.
-    #[must_use] pub fn active_runs(&self) -> usize {
-        self.runs.values().filter(|r| r.status == RunStatus::Running).count()
+    #[must_use]
+    pub fn active_runs(&self) -> usize {
+        self.runs
+            .values()
+            .filter(|r| r.status == RunStatus::Running)
+            .count()
     }
 
     /// Report a task completion.
     pub fn complete_task(&mut self, task_id: &str, result: TaskResult) {
         self.completed_tasks.push(task_id.to_string());
         // Wave 2C: record outcome so conditional downstream tasks can branch.
-        self.task_results.insert(task_id.to_string(), result.success);
+        self.task_results
+            .insert(task_id.to_string(), result.success);
         self.active_workers = self.active_workers.saturating_sub(1);
 
         // Update the run
         for run in self.runs.values_mut() {
             for task in &mut run.tasks {
                 if task.id == task_id {
-                    task.status = if result.success { TaskStatus::Completed } else { TaskStatus::Failed };
+                    task.status = if result.success {
+                        TaskStatus::Completed
+                    } else {
+                        TaskStatus::Failed
+                    };
                     task.completed_at = Some(now_epoch());
                     task.result = Some(result.clone());
                 }
             }
             // Check if run is complete (Suspended counts as still-in-progress)
             let all_done = run.tasks.iter().all(|t| {
-                matches!(t.status, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled)
+                matches!(
+                    t.status,
+                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+                )
             });
             if all_done {
                 let all_success = run.tasks.iter().all(|t| t.status == TaskStatus::Completed);
-                run.status = if all_success { RunStatus::Completed }
-                    else if run.tasks.iter().any(|t| t.status == TaskStatus::Completed) { RunStatus::PartiallyCompleted }
-                    else { RunStatus::Failed };
+                run.status = if all_success {
+                    RunStatus::Completed
+                } else if run.tasks.iter().any(|t| t.status == TaskStatus::Completed) {
+                    RunStatus::PartiallyCompleted
+                } else {
+                    RunStatus::Failed
+                };
             }
         }
     }
@@ -409,17 +451,23 @@ impl Orchestrator {
     }
 
     /// Get a run's status.
-    #[must_use] pub fn get_run(&self, run_id: &str) -> Option<&ParallelRun> {
+    #[must_use]
+    pub fn get_run(&self, run_id: &str) -> Option<&ParallelRun> {
         self.runs.get(run_id)
     }
 
     /// List all runs.
-    #[must_use] pub fn list_runs(&self) -> Vec<&ParallelRun> {
+    #[must_use]
+    pub fn list_runs(&self) -> Vec<&ParallelRun> {
         self.runs.values().collect()
     }
 
     /// Swarm Autonomous Scaling: Dynamically adjust concurrency based on queue depth.
-    pub fn scale_check(&mut self, registry: &backend::BackendRegistry, budget_remaining: f32) -> Option<(String, Option<intelligence::ConsensusReport>)> {
+    pub fn scale_check(
+        &mut self,
+        _registry: &backend::BackendRegistry,
+        budget_remaining: f32,
+    ) -> Option<(String, Option<intelligence::ConsensusReport>)> {
         let now = now_epoch();
         if now < self.last_scale_event + self.policy.cool_down_secs {
             return None;
@@ -427,39 +475,67 @@ impl Orchestrator {
 
         let pending = self.queue.len();
         let active = self.active_workers;
-        
+
         // If we have many pending tasks and room to grow, scale up
         if pending > 2 && self.max_workers < self.policy.max_workers {
             let requested = (self.max_workers + 2).min(self.policy.max_workers);
-            
+
             // Phase 30: Governance Authorization
-            let report = intelligence::ConsensusEngine::review_scaling(self.max_workers, requested, budget_remaining);
-            
+            let report = intelligence::ConsensusEngine::review_scaling(
+                self.max_workers,
+                requested,
+                budget_remaining,
+            );
+
             if report.is_approved {
                 self.max_workers = requested;
                 self.last_scale_event = now;
-                return Some((format!("Scaling UP swarm capacity to {} workers due to mission load ({} pending)", self.max_workers, pending), Some(report)));
-            } else {
-                self.last_scale_event = now; // still cool down
-                return Some((format!("Scaling UP BLOCKED by governance: {}", report.reviews.iter().find(|r| r.veto).map(|r| r.rationale.as_str()).unwrap_or("Consensus rejected")), Some(report)));
+                return Some((
+                    format!(
+                        "Scaling UP swarm capacity to {} workers due to mission load ({} pending)",
+                        self.max_workers, pending
+                    ),
+                    Some(report),
+                ));
             }
+            self.last_scale_event = now; // still cool down
+            return Some((
+                format!(
+                    "Scaling UP BLOCKED by governance: {}",
+                    report
+                        .reviews
+                        .iter()
+                        .find(|r| r.veto)
+                        .map(|r| r.rationale.as_str())
+                        .unwrap_or("Consensus rejected")
+                ),
+                Some(report),
+            ));
         }
 
         // If we are idle and have excess capacity, scale down
         if pending == 0 && active == 0 && self.max_workers > self.policy.min_workers {
             self.max_workers = (self.max_workers - 1).max(self.policy.min_workers);
             self.last_scale_event = now;
-            return Some((format!("Scaling DOWN swarm capacity to {} workers (mission complete)", self.max_workers), None));
+            return Some((
+                format!(
+                    "Scaling DOWN swarm capacity to {} workers (mission complete)",
+                    self.max_workers
+                ),
+                None,
+            ));
         }
 
         None
     }
 
-    #[must_use] pub fn active_count(&self) -> usize {
+    #[must_use]
+    pub fn active_count(&self) -> usize {
         self.active_workers
     }
 
-    #[must_use] pub fn pending_count(&self) -> usize {
+    #[must_use]
+    pub fn pending_count(&self) -> usize {
         self.queue.len()
     }
 
@@ -484,13 +560,15 @@ impl Orchestrator {
     }
 
     /// Load historical runs from the JSONL run log on daemon startup.
-    #[must_use] pub fn load_run_history(workspace_root: &std::path::Path) -> Vec<ParallelRun> {
+    #[must_use]
+    pub fn load_run_history(workspace_root: &std::path::Path) -> Vec<ParallelRun> {
         let log_path = workspace_root.join(".tachy").join("runs.jsonl");
         let content = match std::fs::read_to_string(&log_path) {
             Ok(c) => c,
             Err(_) => return Vec::new(),
         };
-        content.lines()
+        content
+            .lines()
             .filter(|l| !l.trim().is_empty())
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
@@ -518,29 +596,41 @@ pub fn execute_parallel_run(
     loop {
         let task = {
             let mut orch = orchestrator.lock().unwrap();
-            
+
             // Phase 30: Autonomous Scaling
             let (reg, budget) = {
-                let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let s = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let cap = run.max_cost_usd.unwrap_or(50.0); // default $50 cap for scaling
                 let spent: f64 = if let Some(ref team_id) = run.team_id {
                     s.commerce.metering.team_accumulated_cost_usd(team_id)
                 } else {
-                    s.commerce.metering.counters().values().map(|a| a.total_cost_usd).sum()
+                    s.commerce
+                        .metering
+                        .counters()
+                        .values()
+                        .map(|a| a.total_cost_usd)
+                        .sum()
                 };
                 let remaining = (cap - spent).max(0.0) as f32;
                 (s.registry.clone(), remaining)
             };
-            
+
             if let Some((msg, report)) = orch.scale_check(&reg, budget) {
-                state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .publish_event("swarm_scale", serde_json::json!({
-                        "message": msg,
-                        "max_workers": orch.max_workers,
-                        "consensus": report,
-                    }));
+                state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .publish_event(
+                        "swarm_scale",
+                        serde_json::json!({
+                            "message": msg,
+                            "max_workers": orch.max_workers,
+                            "consensus": report,
+                        }),
+                    );
             }
-            
+
             orch.next_task()
         };
 
@@ -550,12 +640,17 @@ pub fn execute_parallel_run(
             // handing the task to a worker. Refuse (fail fast) if over budget.
             if let Some(cap) = run.max_cost_usd {
                 let accumulated = {
-                    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let s = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if let Some(ref team_id) = task.team_id {
                         s.commerce.metering.team_accumulated_cost_usd(team_id)
                     } else {
                         // No team — sum all users as a proxy
-                        s.commerce.metering.counters().values()
+                        s.commerce
+                            .metering
+                            .counters()
+                            .values()
                             .map(|a| a.total_cost_usd)
                             .sum::<f64>()
                     }
@@ -567,16 +662,21 @@ pub fn execute_parallel_run(
                     );
                     let mut orch = orchestrator.lock().unwrap();
                     // Mark task as failed due to budget so the run can still complete
-                    orch.complete_task(&task.id, TaskResult {
-                        success: false,
-                        summary: format!("Budget cap ${cap:.2} exceeded (${accumulated:.2} accumulated)"),
-                        iterations: 0,
-                        tool_invocations: 0,
-                        audit_hash: String::new(),
-                        tokens_in: 0,
-                        tokens_out: 0,
-                        cost_usd: 0.0,
-                    });
+                    orch.complete_task(
+                        &task.id,
+                        TaskResult {
+                            success: false,
+                            summary: format!(
+                                "Budget cap ${cap:.2} exceeded (${accumulated:.2} accumulated)"
+                            ),
+                            iterations: 0,
+                            tool_invocations: 0,
+                            audit_hash: String::new(),
+                            tokens_in: 0,
+                            tokens_out: 0,
+                            cost_usd: 0.0,
+                        },
+                    );
                     continue;
                 }
             }
@@ -589,15 +689,20 @@ pub fn execute_parallel_run(
                 // Execute the agent task
                 let result = execute_single_task(&task, &bg_state, run.is_simulation);
                 // Publish task_complete event to the live SSE bus
-                bg_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .publish_event("task_complete", serde_json::json!({
-                        "task_id": task_id,
-                        "run_id": task.run_id,
-                        "success": result.success,
-                        "iterations": result.iterations,
-                        "tokens_in": result.tokens_in,
-                        "tokens_out": result.tokens_out,
-                    }));
+                bg_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .publish_event(
+                        "task_complete",
+                        serde_json::json!({
+                            "task_id": task_id,
+                            "run_id": task.run_id,
+                            "success": result.success,
+                            "iterations": result.iterations,
+                            "tokens_in": result.tokens_in,
+                            "tokens_out": result.tokens_out,
+                        }),
+                    );
                 let mut orch = orch.lock().unwrap();
                 orch.complete_task(&task_id, result);
             });
@@ -628,7 +733,8 @@ pub fn execute_parallel_run(
     // Post-merge semantic validation: run LSP diagnostics across the workspace
     // and surface conflicts introduced by the parallel workers.
     if !completed_run.tasks.is_empty() {
-        let workspace_root = state.lock()
+        let workspace_root = state
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .workspace_root
             .clone();
@@ -651,9 +757,14 @@ pub fn execute_parallel_run(
 /// errors/warnings that were introduced (did not exist before the run started).
 /// Since we cannot snapshot the "before" state efficiently here, we report all
 /// errors currently present in touched files and flag them for human review.
-fn validate_merge_semantics(run: &ParallelRun, workspace_root: &std::path::Path) -> Vec<SemanticConflict> {
+fn validate_merge_semantics(
+    run: &ParallelRun,
+    workspace_root: &std::path::Path,
+) -> Vec<SemanticConflict> {
     // Collect every file referenced in task prompts — rough but cheap heuristic
-    let touched_files: Vec<String> = run.tasks.iter()
+    let touched_files: Vec<String> = run
+        .tasks
+        .iter()
         .flat_map(|t| extract_file_paths_from_prompt(&t.prompt))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -670,7 +781,10 @@ fn validate_merge_semantics(run: &ParallelRun, workspace_root: &std::path::Path)
         let diags = lsp.get_diagnostics(file);
         for diag in diags {
             use intelligence::lsp::DiagnosticSeverity;
-            let is_actionable = matches!(diag.severity, DiagnosticSeverity::Error | DiagnosticSeverity::Warning);
+            let is_actionable = matches!(
+                diag.severity,
+                DiagnosticSeverity::Error | DiagnosticSeverity::Warning
+            );
             if is_actionable {
                 let severity_str = match diag.severity {
                     DiagnosticSeverity::Error => "error",
@@ -678,7 +792,9 @@ fn validate_merge_semantics(run: &ParallelRun, workspace_root: &std::path::Path)
                     _ => "info",
                 };
                 // Find which tasks mention this file — they are the suspects
-                let suspects: Vec<TaskId> = run.tasks.iter()
+                let suspects: Vec<TaskId> = run
+                    .tasks
+                    .iter()
                     .filter(|t| t.prompt.contains(file.as_str()))
                     .map(|t| t.id.clone())
                     .collect();
@@ -702,11 +818,20 @@ fn extract_file_paths_from_prompt(prompt: &str) -> Vec<String> {
     prompt
         .split_whitespace()
         .filter(|w| {
-            (w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".py")
-                || w.ends_with(".go") || w.ends_with(".js") || w.ends_with(".tsx"))
+            (w.ends_with(".rs")
+                || w.ends_with(".ts")
+                || w.ends_with(".py")
+                || w.ends_with(".go")
+                || w.ends_with(".js")
+                || w.ends_with(".tsx"))
                 && !w.contains("://")
         })
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-').to_string())
+        .map(|w| {
+            w.trim_matches(|c: char| {
+                !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
+            })
+            .to_string()
+        })
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -722,11 +847,19 @@ fn execute_single_task(
     // Extract all cloneable data from state before releasing the lock so that
     // run_agent (which re-locks state for webhook firing) does not deadlock.
     let (workspace_root, file_locks, config, registry, governance, intel_cfg) = {
-        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let workspace_root = task.work_dir.clone().unwrap_or_else(|| s.workspace_root.clone());
+        let s = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let workspace_root = task
+            .work_dir
+            .clone()
+            .unwrap_or_else(|| s.workspace_root.clone());
         let file_locks = s.file_locks.clone();
 
-        let template = s.config.agent_templates.iter()
+        let template = s
+            .config
+            .agent_templates
+            .iter()
             .find(|t| t.name == task.template)
             .cloned()
             .unwrap_or_else(|| {
@@ -765,9 +898,17 @@ fn execute_single_task(
     // Retry loop with exponential backoff.
     // Attempts: 1st immediate, 2nd after 500ms, 3rd after 1000ms.
     let mut result = super::AgentEngine::run_agent(
-        &task.id, &config, &task.prompt, &registry, &governance,
-        Arc::clone(&task_audit), &intel_cfg, &workspace_root,
-        Some(file_locks.clone()), Some(Arc::clone(state)), is_simulation,
+        &task.id,
+        &config,
+        &task.prompt,
+        &registry,
+        &governance,
+        Arc::clone(&task_audit),
+        &intel_cfg,
+        &workspace_root,
+        Some(file_locks.clone()),
+        Some(Arc::clone(state)),
+        is_simulation,
     );
 
     if !result.success {
@@ -779,9 +920,17 @@ fn execute_single_task(
                 task.id, attempt, MAX_TASK_RETRIES, backoff_ms
             );
             result = super::AgentEngine::run_agent(
-                &task.id, &config, &task.prompt, &registry, &governance,
-                Arc::clone(&task_audit), &intel_cfg, &workspace_root,
-                Some(file_locks.clone()), Some(Arc::clone(state)), is_simulation,
+                &task.id,
+                &config,
+                &task.prompt,
+                &registry,
+                &governance,
+                Arc::clone(&task_audit),
+                &intel_cfg,
+                &workspace_root,
+                Some(file_locks.clone()),
+                Some(Arc::clone(state)),
+                is_simulation,
             );
             if result.success {
                 break;
@@ -794,7 +943,8 @@ fn execute_single_task(
 
     // Get the final audit hash from the shared state logger (it will have been
     // updated by the daemon's own sink during tool calls via the shared state).
-    let audit_hash = state.lock()
+    let audit_hash = state
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .audit_logger
         .last_hash();
@@ -828,20 +978,46 @@ mod tests {
     fn task_queue_respects_priority() {
         let mut q = TaskQueue::new();
         q.enqueue(AgentTask {
-            id: "low".into(), run_id: "r1".into(), template: "chat".into(),
-            prompt: "a".into(), model: None, deps: vec![], priority: 1,
+            id: "low".into(),
+            run_id: "r1".into(),
+            template: "chat".into(),
+            prompt: "a".into(),
+            model: None,
+            deps: vec![],
+            priority: 1,
             role: TaskRole::General,
-            status: TaskStatus::Queued, result: None, created_at: 0,
-            started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
+            status: TaskStatus::Queued,
+            result: None,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+            team_id: None,
+            conditions: TaskConditions::default(),
+            approval_required: false,
+            approved: false,
         });
         q.enqueue(AgentTask {
-            id: "high".into(), run_id: "r1".into(), template: "chat".into(),
-            prompt: "b".into(), model: None, deps: vec![], priority: 10,
+            id: "high".into(),
+            run_id: "r1".into(),
+            template: "chat".into(),
+            prompt: "b".into(),
+            model: None,
+            deps: vec![],
+            priority: 10,
             role: TaskRole::General,
-            status: TaskStatus::Queued, result: None, created_at: 0,
-            started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
+            status: TaskStatus::Queued,
+            result: None,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+            team_id: None,
+            conditions: TaskConditions::default(),
+            approval_required: false,
+            approved: false,
         });
-        let next = q.poll(&[], &Default::default()).unwrap();
+        let next = q.poll(&[], &BTreeMap::default()).unwrap();
         assert_eq!(next.id, "high");
     }
 
@@ -849,16 +1025,29 @@ mod tests {
     fn task_queue_respects_dependencies() {
         let mut q = TaskQueue::new();
         q.enqueue(AgentTask {
-            id: "t2".into(), run_id: "r1".into(), template: "chat".into(),
-            prompt: "b".into(), model: None, deps: vec!["t1".into()], priority: 5,
+            id: "t2".into(),
+            run_id: "r1".into(),
+            template: "chat".into(),
+            prompt: "b".into(),
+            model: None,
+            deps: vec!["t1".into()],
+            priority: 5,
             role: TaskRole::General,
-            status: TaskStatus::Queued, result: None, created_at: 0,
-            started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
+            status: TaskStatus::Queued,
+            result: None,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+            team_id: None,
+            conditions: TaskConditions::default(),
+            approval_required: false,
+            approved: false,
         });
         // t2 depends on t1, which isn't completed yet
-        assert!(q.poll(&[], &Default::default()).is_none());
+        assert!(q.poll(&[], &BTreeMap::default()).is_none());
         // Now t1 is completed
-        let next = q.poll(&["t1".into()], &Default::default()).unwrap();
+        let next = q.poll(&["t1".into()], &BTreeMap::default()).unwrap();
         assert_eq!(next.id, "t2");
     }
 
@@ -867,15 +1056,26 @@ mod tests {
         let mut orch = Orchestrator::new(4);
         let run = ParallelRun {
             id: "run-1".into(),
-            tasks: vec![
-                AgentTask {
-                    id: "t1".into(), run_id: "run-1".into(), template: "chat".into(),
-                    prompt: "a".into(), model: None, deps: vec![], priority: 5,
-                    role: TaskRole::General,
-                    status: TaskStatus::Pending, result: None, created_at: 0,
-                    started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
-                },
-            ],
+            tasks: vec![AgentTask {
+                id: "t1".into(),
+                run_id: "run-1".into(),
+                template: "chat".into(),
+                prompt: "a".into(),
+                model: None,
+                deps: vec![],
+                priority: 5,
+                role: TaskRole::General,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
+            }],
             status: RunStatus::Running,
             created_at: 0,
             max_concurrency: 4,
@@ -887,11 +1087,19 @@ mod tests {
         orch.submit(run);
         let task = orch.next_task().unwrap();
         assert_eq!(task.id, "t1");
-        orch.complete_task("t1", TaskResult {
-            success: true, summary: "done".into(), iterations: 1,
-            tool_invocations: 0, audit_hash: "abc".into(),
-            tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
-        });
+        orch.complete_task(
+            "t1",
+            TaskResult {
+                success: true,
+                summary: "done".into(),
+                iterations: 1,
+                tool_invocations: 0,
+                audit_hash: "abc".into(),
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0.0,
+            },
+        );
         let run = orch.get_run("run-1").unwrap();
         assert_eq!(run.status, RunStatus::Completed);
     }
@@ -900,18 +1108,41 @@ mod tests {
     // Wave 2B: RunCost aggregation
     // -----------------------------------------------------------------------
 
-    fn task_with_cost(id: &str, run_id: &str, tokens_in: u32, tokens_out: u32, cost: f32) -> AgentTask {
+    fn task_with_cost(
+        id: &str,
+        run_id: &str,
+        tokens_in: u32,
+        tokens_out: u32,
+        cost: f32,
+    ) -> AgentTask {
         AgentTask {
-            id: id.into(), run_id: run_id.into(), template: "chat".into(),
-            prompt: "p".into(), model: None, deps: vec![], priority: 5,
+            id: id.into(),
+            run_id: run_id.into(),
+            template: "chat".into(),
+            prompt: "p".into(),
+            model: None,
+            deps: vec![],
+            priority: 5,
             role: TaskRole::General,
             status: TaskStatus::Completed,
             result: Some(TaskResult {
-                success: true, summary: "ok".into(), iterations: 1,
-                tool_invocations: 0, audit_hash: "h".into(),
-                tokens_in, tokens_out, cost_usd: cost,
+                success: true,
+                summary: "ok".into(),
+                iterations: 1,
+                tool_invocations: 0,
+                audit_hash: "h".into(),
+                tokens_in,
+                tokens_out,
+                cost_usd: cost,
             }),
-            created_at: 0, started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            work_dir: None,
+            team_id: None,
+            conditions: TaskConditions::default(),
+            approval_required: false,
+            approved: false,
         }
     }
 
@@ -944,15 +1175,26 @@ mod tests {
     fn run_cost_zero_when_no_token_data() {
         let run = ParallelRun {
             id: "rc-2".into(),
-            tasks: vec![
-                AgentTask {
-                    id: "t1".into(), run_id: "rc-2".into(), template: "chat".into(),
-                    prompt: "p".into(), model: None, deps: vec![], priority: 5,
-                    role: TaskRole::General,
-                    status: TaskStatus::Pending, result: None,
-                    created_at: 0, started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: TaskConditions::default(), approval_required: false, approved: false,
-                },
-            ],
+            tasks: vec![AgentTask {
+                id: "t1".into(),
+                run_id: "rc-2".into(),
+                template: "chat".into(),
+                prompt: "p".into(),
+                model: None,
+                deps: vec![],
+                priority: 5,
+                role: TaskRole::General,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
+            }],
             status: RunStatus::Running,
             created_at: 0,
             max_concurrency: 1,
@@ -963,16 +1205,21 @@ mod tests {
         };
         let cost = RunCost::from_run(&run);
         assert_eq!(cost.total_tokens, 0);
-        assert_eq!(cost.estimated_cost_usd, 0.0);
+        assert!((cost.estimated_cost_usd - 0.0).abs() < f64::EPSILON);
         assert_eq!(cost.tasks_with_cost, 0);
     }
 
     #[test]
     fn task_result_serde_roundtrip_with_cost_fields() {
         let r = TaskResult {
-            success: true, summary: "ok".into(), iterations: 2,
-            tool_invocations: 3, audit_hash: "abc".into(),
-            tokens_in: 512, tokens_out: 256, cost_usd: 0.0042,
+            success: true,
+            summary: "ok".into(),
+            iterations: 2,
+            tool_invocations: 3,
+            audit_hash: "abc".into(),
+            tokens_in: 512,
+            tokens_out: 256,
+            cost_usd: 0.0042,
         };
         let json = serde_json::to_string(&r).unwrap();
         let decoded: TaskResult = serde_json::from_str(&json).unwrap();
@@ -988,6 +1235,6 @@ mod tests {
         let r: TaskResult = serde_json::from_str(json).unwrap();
         assert_eq!(r.tokens_in, 0);
         assert_eq!(r.tokens_out, 0);
-        assert_eq!(r.cost_usd, 0.0);
+        assert!((r.cost_usd - 0.0).abs() < f32::EPSILON);
     }
 }

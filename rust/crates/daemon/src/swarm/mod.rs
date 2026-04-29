@@ -1,12 +1,19 @@
+use platform::PeerInfo;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use platform::{PeerInfo, PeerStatus};
 
 pub struct SwarmManager {
     peers: Arc<Mutex<BTreeMap<String, PeerInfo>>>,
 }
 
+impl Default for SwarmManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SwarmManager {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             peers: Arc::new(Mutex::new(BTreeMap::new())),
@@ -18,11 +25,13 @@ impl SwarmManager {
         peers.insert(peer.id.clone(), peer);
     }
 
+    #[must_use]
     pub fn get_peer(&self, id: &str) -> Option<PeerInfo> {
         let peers = self.peers.lock().unwrap();
         peers.get(id).cloned()
     }
 
+    #[must_use]
     pub fn list_peers(&self) -> Vec<PeerInfo> {
         let peers = self.peers.lock().unwrap();
         peers.values().cloned().collect()

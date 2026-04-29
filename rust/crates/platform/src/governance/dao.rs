@@ -1,7 +1,6 @@
 //! Sovereign Governance DAO — autonomous system configuration management.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ProposalStatus {
@@ -39,17 +38,24 @@ pub struct ConsensusEngine {
 }
 
 impl ConsensusEngine {
+    #[must_use]
     pub fn new(threshold: f32) -> Self {
         Self { threshold }
     }
 
-    pub fn evaluate(&self, proposal: &mut GovernanceProposal, total_eligible_voters: usize) -> ProposalStatus {
+    pub fn evaluate(
+        &self,
+        proposal: &mut GovernanceProposal,
+        total_eligible_voters: usize,
+    ) -> ProposalStatus {
         if proposal.status != ProposalStatus::Pending {
             return proposal.status.clone();
         }
 
         let total_votes = proposal.votes_yes + proposal.votes_no;
-        if total_eligible_voters == 0 { return ProposalStatus::Pending; }
+        if total_eligible_voters == 0 {
+            return ProposalStatus::Pending;
+        }
 
         let participation = total_votes as f32 / total_eligible_voters as f32;
         let support = if total_votes > 0 {
@@ -58,7 +64,8 @@ impl ConsensusEngine {
             0.0
         };
 
-        if participation >= 0.5 { // 50% quorum
+        if participation >= 0.5 {
+            // 50% quorum
             if support >= self.threshold {
                 return ProposalStatus::Passed;
             } else if support < (1.0 - self.threshold) {
@@ -74,7 +81,14 @@ pub struct SovereignCharter {
     pub immutable_rules: Vec<String>,
 }
 
+impl Default for SovereignCharter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SovereignCharter {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             immutable_rules: vec![

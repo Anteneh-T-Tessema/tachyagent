@@ -4,36 +4,33 @@
 //! Property 4: Billing aggregation reports correct totals per user.
 //! Validates: Requirements 2.1, 2.4
 
-use std::sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}};
-
-use proptest::prelude::*;
-use audit::{
-    AuditLogger, BillingError, MeteringService, StripeBillingConnector, UsageEvent, UsageEventType,
-    billing::{BillingBackend, SubscriptionInfo},
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Mutex,
 };
+
 use audit::cost_model::CostModelRegistry;
+use audit::{
+    billing::{BillingBackend, SubscriptionInfo},
+    AuditLogger, BillingError, MeteringService, StripeBillingConnector, UsageEvent, UsageEventType,
+};
+use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Mock billing backend
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-struct ReportedCall {
-    quantity: u64,
-}
-
 struct MockBackend {
-    calls: Arc<Mutex<Vec<ReportedCall>>>,
+    calls: Arc<Mutex<Vec<u64>>>,
     fail_count: AtomicU32,
 }
 
 impl MockBackend {
     fn new() -> Self {
-        Self { calls: Arc::new(Mutex::new(Vec::new())), fail_count: AtomicU32::new(0) }
-    }
-
-    fn total_quantity(&self) -> u64 {
-        self.calls.lock().unwrap().iter().map(|c| c.quantity).sum()
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            fail_count: AtomicU32::new(0),
+        }
     }
 }
 
@@ -44,7 +41,7 @@ impl BillingBackend for MockBackend {
             self.fail_count.store(rem - 1, Ordering::SeqCst);
             return Err(BillingError::StripeApiError("transient".into()));
         }
-        self.calls.lock().unwrap().push(ReportedCall { quantity: qty });
+        self.calls.lock().unwrap().push(qty);
         Ok(())
     }
 
@@ -84,16 +81,23 @@ fn make_event(user_id: &str, input: u64, output: u64, tools: u32, ts: u64) -> Us
 // Property 4: Billing aggregation reports correct totals per user
 // ---------------------------------------------------------------------------
 
-/// Verify flush_period calls report_usage with the correct combined token total.
+/// Verify `flush_period` calls `report_usage` with the correct combined token total.
 #[test]
 fn flush_period_reports_correct_totals() {
     // Feature: product-hardening-v3, Property 4: Billing aggregation reports correct totals
-    let mut metering = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
+    let mut metering =
+        MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
 
     // Record 3 events: (100+50) + (200+100) + (300+150) = 150 + 300 + 450 = 900
-    metering.record_event(make_event("user-a", 100, 50, 0, 1)).unwrap();
-    metering.record_event(make_event("user-a", 200, 100, 2, 2)).unwrap();
-    metering.record_event(make_event("user-a", 300, 150, 1, 3)).unwrap();
+    metering
+        .record_event(make_event("user-a", 100, 50, 0, 1))
+        .unwrap();
+    metering
+        .record_event(make_event("user-a", 200, 100, 2, 2))
+        .unwrap();
+    metering
+        .record_event(make_event("user-a", 300, 150, 1, 3))
+        .unwrap();
 
     let expected_tokens = 900u64; // sum of (input + output) across all events
 
@@ -103,9 +107,14 @@ fn flush_period_reports_correct_totals() {
 
     let report = connector.flush_period(&mut metering).unwrap();
 
-    assert_eq!(report.total_tokens, expected_tokens,
-        "reported total_tokens should equal sum of input+output");
-    assert_eq!(report.users_reported, 1, "should report for exactly one user");
+    assert_eq!(
+        report.total_tokens, expected_tokens,
+        "reported total_tokens should equal sum of input+output"
+    );
+    assert_eq!(
+        report.users_reported, 1,
+        "should report for exactly one user"
+    );
 }
 
 proptest! {

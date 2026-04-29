@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
-use sha2::{Sha256, Digest};
-use serde::{Serialize, Deserialize};
 
 /// Result stored in the semantic cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,13 +22,14 @@ pub trait Embedder: Send + Sync {
 
 /// A sovereign semantic cache for zero-latency AI responses.
 pub struct SemanticCache {
-    /// Exact match cache (PromptHash -> Result)
+    /// Exact match cache (`PromptHash` -> Result)
     exact_cache: Arc<Mutex<std::collections::HashMap<String, CachedResult>>>,
     /// Hit counter for metrics
     hits: Arc<Mutex<u64>>,
 }
 
 impl SemanticCache {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             exact_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -38,13 +39,15 @@ impl SemanticCache {
 
     pub fn load(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let cache: std::collections::HashMap<String, CachedResult> = serde_json::from_str(&content)?;
+        let cache: std::collections::HashMap<String, CachedResult> =
+            serde_json::from_str(&content)?;
         Ok(Self {
             exact_cache: Arc::new(Mutex::new(cache)),
             hits: Arc::new(Mutex::new(0)),
         })
     }
 
+    #[must_use]
     pub fn hits(&self) -> u64 {
         *self.hits.lock().unwrap()
     }
@@ -62,6 +65,7 @@ impl SemanticCache {
     }
 
     /// Calculate a hash for the prompt and context.
+    #[must_use]
     pub fn hash_prompt(prompt: &str, system_prompt: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(prompt.as_bytes());
@@ -70,6 +74,7 @@ impl SemanticCache {
     }
 
     /// Lookup a result in the cache using exact hash matching.
+    #[must_use]
     pub fn lookup(&self, prompt: &str, system_prompt: &str) -> Option<CachedResult> {
         let hash = Self::hash_prompt(prompt, system_prompt);
         let cache = self.exact_cache.lock().unwrap();
@@ -81,6 +86,7 @@ impl SemanticCache {
     }
 
     /// Lookup a result in the cache using semantic similarity.
+    #[must_use]
     pub fn lookup_semantic(&self, query_emb: &[f32], threshold: f32) -> Option<CachedResult> {
         let cache = self.exact_cache.lock().unwrap();
         let mut best_match: Option<(&CachedResult, f32)> = None;
@@ -108,21 +114,32 @@ impl SemanticCache {
     }
 
     /// Store a result in the cache with optional expert guidance.
-    pub fn store(&self, prompt: &str, system_prompt: &str, output: &str, model: &str, 
-                 embedding: Option<Vec<f32>>, expert_trace: Option<String>, reward_score: f32) {
+    pub fn store(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+        output: &str,
+        model: &str,
+        embedding: Option<Vec<f32>>,
+        expert_trace: Option<String>,
+        reward_score: f32,
+    ) {
         let hash = Self::hash_prompt(prompt, system_prompt);
         let mut cache = self.exact_cache.lock().unwrap();
-        cache.insert(hash, CachedResult {
-            output: output.to_string(),
-            model: model.to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            embedding,
-            expert_trace,
-            reward_score,
-        });
+        cache.insert(
+            hash,
+            CachedResult {
+                output: output.to_string(),
+                model: model.to_string(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                embedding,
+                expert_trace,
+                reward_score,
+            },
+        );
     }
 
     /// Clear the cache.
@@ -154,14 +171,19 @@ impl Default for SemanticCache {
 
 impl SemanticCache {
     /// Update the reward score of a specific cached result (for manual guidance reweighting).
-    pub fn reweight(&self, prompt: &str, system_prompt: &str, new_score: f32) -> Result<(), String> {
+    pub fn reweight(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+        new_score: f32,
+    ) -> Result<(), String> {
         let hash = Self::hash_prompt(prompt, system_prompt);
         let mut cache = self.exact_cache.lock().unwrap();
         if let Some(result) = cache.get_mut(&hash) {
             result.reward_score = new_score.clamp(0.0, 1.0);
             Ok(())
         } else {
-            Err(format!("Hash {} not found in cache", hash))
+            Err(format!("Hash {hash} not found in cache"))
         }
     }
 
@@ -172,7 +194,7 @@ impl SemanticCache {
             result.reward_score = new_score.clamp(0.0, 1.0);
             Ok(())
         } else {
-            Err(format!("Hash {} not found in cache", hash))
+            Err(format!("Hash {hash} not found in cache"))
         }
     }
 }

@@ -1,11 +1,11 @@
-//! SaaS platform property tests.
+//! `SaaS` platform property tests.
 //!
 //! Feature: product-hardening-v3
-//! Properties 20–23: SaaSPlatform correctness.
+//! Properties 20–23: `SaaSPlatform` correctness.
 //! Validates: Requirements 8.1–8.5
 
+use daemon::{SaaSError, SaaSPlatform};
 use proptest::prelude::*;
-use daemon::{SaaSPlatform, SaaSError};
 
 const SECRET: &str = "test-jwt-secret-key";
 
@@ -60,11 +60,19 @@ proptest! {
 fn signup_creates_tenant_with_workspace() {
     // Feature: product-hardening-v3, Property 21: Tenant signup creates all required resources
     let mut platform = make_platform();
-    let (tenant, token) = platform.signup("user@example.com", "password_hash").unwrap();
+    let (tenant, token) = platform
+        .signup("user@example.com", "password_hash")
+        .unwrap();
 
     assert!(!tenant.id.is_empty(), "tenant ID must be non-empty");
-    assert!(!tenant.workspace_dir.as_os_str().is_empty(), "workspace dir must be set");
-    assert!(!tenant.ollama_endpoint.is_empty(), "ollama endpoint must be set");
+    assert!(
+        !tenant.workspace_dir.as_os_str().is_empty(),
+        "workspace dir must be set"
+    );
+    assert!(
+        !tenant.ollama_endpoint.is_empty(),
+        "ollama endpoint must be set"
+    );
     assert!(!token.is_empty(), "JWT token must be returned");
     assert!(tenant.resource_limits.max_concurrent_agents > 0);
     assert!(tenant.resource_limits.max_tokens_per_day > 0);
@@ -119,7 +127,10 @@ fn jwt_round_trip_basic() {
 fn invalid_jwt_rejected() {
     // Feature: product-hardening-v3, Property 22: JWT authentication round-trip
     let platform = SaaSPlatform::new(SECRET);
-    assert!(matches!(platform.validate_jwt("not.a.jwt"), Err(SaaSError::InvalidJwt(_))));
+    assert!(matches!(
+        platform.validate_jwt("not.a.jwt"),
+        Err(SaaSError::InvalidJwt(_))
+    ));
 }
 
 #[test]
@@ -128,7 +139,10 @@ fn jwt_from_different_secret_rejected() {
     let mut platform_a = SaaSPlatform::new("secret-a");
     let platform_b = SaaSPlatform::new("secret-b");
     let (_, token) = platform_a.signup("cross@example.com", "hash").unwrap();
-    assert!(matches!(platform_b.validate_jwt(&token), Err(SaaSError::InvalidJwt(_))));
+    assert!(matches!(
+        platform_b.validate_jwt(&token),
+        Err(SaaSError::InvalidJwt(_))
+    ));
 }
 
 proptest! {

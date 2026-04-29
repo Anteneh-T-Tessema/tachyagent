@@ -1,30 +1,58 @@
-use std::sync::{Arc, Mutex};
+use crate::http::types::{ErrorResponse, Response};
 use crate::state::DaemonState;
-use crate::http::types::{Response, ErrorResponse};
 use platform::{DelegatedTask, DelegationResult};
+use std::sync::{Arc, Mutex};
 
 pub async fn handle_swarm_execute(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let task: DelegatedTask = match serde_json::from_str(body) {
         Ok(t) => t,
-        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid task: {e}") }),
+        Err(e) => {
+            return Response::json(
+                400,
+                &ErrorResponse {
+                    error: format!("invalid task: {e}"),
+                },
+            )
+        }
     };
 
     // 1. Verify signature (Security layer)
     let hash = format!("{}:{}:{}", task.task_id, task.instruction, task.session_id);
     if !task.signature.is_empty() {
-        if let Err(e) = platform::crypto::AgentIdentity::verify_static(&task.signature, &task.public_key, hash.as_bytes()) {
-            return Response::json(401, &ErrorResponse { error: format!("invalid task signature: {e}") });
+        if let Err(e) = platform::crypto::AgentIdentity::verify_static(
+            &task.signature,
+            &task.public_key,
+            hash.as_bytes(),
+        ) {
+            return Response::json(
+                401,
+                &ErrorResponse {
+                    error: format!("invalid task signature: {e}"),
+                },
+            );
         }
     }
 
     // 2. Prepare AgentConfig for local execution
-    let template = state.lock().unwrap().config.agent_templates.iter()
+    let template = state
+        .lock()
+        .unwrap()
+        .config
+        .agent_templates
+        .iter()
         .find(|t| t.name == task.template_name)
         .cloned();
-    
+
     let template = match template {
         Some(t) => t,
-        None => return Response::json(404, &ErrorResponse { error: format!("template {} not found", task.template_name) }),
+        None => {
+            return Response::json(
+                404,
+                &ErrorResponse {
+                    error: format!("template {} not found", task.template_name),
+                },
+            )
+        }
     };
 
     let agent_config = platform::AgentConfig {
@@ -53,7 +81,12 @@ pub async fn handle_swarm_execute(body: &str, state: &Arc<Mutex<DaemonState>>) -
 
     // Use a temporary identity for signing the result if needed
     // In Phase 23, we use the daemon's own identity if available
-    let agent_identity = state.lock().unwrap().identity.get_or_create_identity("swarm-worker").ok();
+    let agent_identity = state
+        .lock()
+        .unwrap()
+        .identity
+        .get_or_create_identity("swarm-worker")
+        .ok();
 
     let result = crate::AgentEngine::run_agent(
         &task.task_id,
@@ -103,11 +136,20 @@ pub async fn handle_swarm_execute(body: &str, state: &Arc<Mutex<DaemonState>>) -
 
 pub async fn handle_swarm_register(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(serde::Deserialize)]
-    struct RegisterReq { url: String }
-    
+    struct RegisterReq {
+        url: String,
+    }
+
     let req: RegisterReq = match serde_json::from_str(body) {
         Ok(r) => r,
-        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid request: {e}") }),
+        Err(e) => {
+            return Response::json(
+                400,
+                &ErrorResponse {
+                    error: format!("invalid request: {e}"),
+                },
+            )
+        }
     };
 
     let peer = platform::PeerInfo {
@@ -119,7 +161,7 @@ pub async fn handle_swarm_register(body: &str, state: &Arc<Mutex<DaemonState>>) 
     };
 
     state.lock().unwrap().swarm_manager.register_peer(peer);
-    Response::json(200, &serde_json::json!({ "status": "registered" }))
+    Response::json(200, serde_json::json!({ "status": "registered" }))
 }
 
 pub async fn handle_swarm_list_nodes(state: &Arc<Mutex<DaemonState>>) -> Response {

@@ -460,7 +460,10 @@ pub fn approval_prompt(
                 let _ = execute!(out, Print(format!("{}\n", render_diff(diff_text))));
             }
             _ => {
-                let _ = execute!(out, Print("  Enter y (apply), n (skip), or d (full diff)\n"));
+                let _ = execute!(
+                    out,
+                    Print("  Enter y (apply), n (skip), or d (full diff)\n")
+                );
             }
         }
     }

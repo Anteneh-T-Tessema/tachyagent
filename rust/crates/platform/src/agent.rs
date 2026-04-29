@@ -28,14 +28,16 @@ pub struct AgentTemplate {
     /// Whether to inject local workspace intelligence such as codebase context.
     #[serde(default = "default_true")]
     pub use_workspace_context: bool,
-    /// Optional Expert Adapter id (from the AdapterRegistry) to use when this
+    /// Optional Expert Adapter id (from the `AdapterRegistry`) to use when this
     /// template runs.  If set and the adapter is `Active`, its model overrides
     /// the `model` field at dispatch time.
     #[serde(default)]
     pub preferred_adapter: Option<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl AgentTemplate {
     #[must_use]
@@ -50,7 +52,8 @@ impl AgentTemplate {
                 "3. Performance issues\n",
                 "4. Code style and readability\n",
                 "Be specific. Reference line numbers. Suggest fixes."
-            ).to_string(),
+            )
+            .to_string(),
             allowed_tools: vec![
                 "list_directory".to_string(),
                 "read_file".to_string(),
@@ -110,7 +113,8 @@ impl AgentTemplate {
                 "3. Update existing docs when code changes\n",
                 "4. Write API references, guides, and READMEs\n",
                 "Be concise. Use code examples. Follow the project's existing doc style."
-            ).to_string(),
+            )
+            .to_string(),
             allowed_tools: vec![
                 "list_directory".to_string(),
                 "read_file".to_string(),
@@ -201,7 +205,8 @@ impl AgentTemplate {
     pub fn chat_assistant() -> Self {
         Self {
             name: "chat".to_string(),
-            description: "General-purpose AI assistant for questions, code help, and tasks".to_string(),
+            description: "General-purpose AI assistant for questions, code help, and tasks"
+                .to_string(),
             system_prompt: concat!(
                 "You are Tachy, a helpful AI assistant running locally on the user's machine.\n\n",
                 "IMPORTANT RULES:\n",
@@ -221,7 +226,8 @@ impl AgentTemplate {
                 "- list_directory: list files and folders in a directory\n",
                 "- web_search: search the web for documentation, solutions, or information\n",
                 "- web_fetch: fetch and read a web page\n"
-            ).to_string(),
+            )
+            .to_string(),
             allowed_tools: vec![
                 "list_directory".to_string(),
                 "read_file".to_string(),
@@ -690,7 +696,7 @@ mod tests {
             template: AgentTemplate::code_reviewer(),
             session_id: "sess-1".to_string(),
             working_directory: "/tmp/project".to_string(),
-            environment: Default::default(),
+            environment: std::collections::BTreeMap::default(),
             team_id: None,
         };
         let mut agent = AgentInstance::new("agent-1", config);
@@ -708,22 +714,32 @@ mod tests {
     fn migrator_template_requires_approval_and_has_test_tool() {
         let t = AgentTemplate::migrator();
         assert!(t.requires_approval, "migrator should require approval");
-        assert!(t.allowed_tools.iter().any(|s| s.contains("bash") || s.contains("test")),
-            "migrator should be able to run tests");
+        assert!(
+            t.allowed_tools
+                .iter()
+                .any(|s| s.contains("bash") || s.contains("test")),
+            "migrator should be able to run tests"
+        );
         assert!(t.max_iterations >= 20);
     }
 
     #[test]
     fn localizer_template_requires_approval() {
         let t = AgentTemplate::localizer();
-        assert!(t.requires_approval, "localizer should require approval before writing i18n files");
+        assert!(
+            t.requires_approval,
+            "localizer should require approval before writing i18n files"
+        );
         assert!(!t.system_prompt.is_empty());
     }
 
     #[test]
     fn benchmark_template_does_not_require_approval() {
         let t = AgentTemplate::benchmark();
-        assert!(!t.requires_approval, "benchmark is read-heavy and should not require approval");
+        assert!(
+            !t.requires_approval,
+            "benchmark is read-heavy and should not require approval"
+        );
         assert!(t.max_iterations >= 15);
     }
 
@@ -752,11 +768,18 @@ mod tests {
             AgentTemplate::api_compat(),
         ];
         for t in &new_templates {
-            assert!(!t.system_prompt.is_empty(),
-                "template '{}' has empty system_prompt", t.name);
+            assert!(
+                !t.system_prompt.is_empty(),
+                "template '{}' has empty system_prompt",
+                t.name
+            );
             // Prompt should be reasonably descriptive (>50 chars)
-            assert!(t.system_prompt.len() > 50,
-                "template '{}' system_prompt too short: '{}'", t.name, t.system_prompt);
+            assert!(
+                t.system_prompt.len() > 50,
+                "template '{}' system_prompt too short: '{}'",
+                t.name,
+                t.system_prompt
+            );
         }
     }
 
@@ -775,7 +798,10 @@ mod tests {
         ];
         let prompts: Vec<_> = templates.iter().map(|t| &t.system_prompt).collect();
         let unique: std::collections::HashSet<_> = prompts.iter().collect();
-        assert_eq!(prompts.len(), unique.len(), "templates share identical system prompts");
+        assert_eq!(
+            prompts.len(),
+            unique.len(),
+            "templates share identical system prompts"
+        );
     }
 }
-

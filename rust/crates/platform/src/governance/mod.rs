@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod dao;
-pub use dao::{GovernanceProposal, ProposalStatus, ConsensusEngine, SovereignCharter, VoteRecord};
+pub use dao::{ConsensusEngine, GovernanceProposal, ProposalStatus, SovereignCharter, VoteRecord};
 
 /// The Graduated Trust Spectrum: 7 levels of autonomous permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -42,17 +42,35 @@ pub enum PolicyDecision {
 
 impl PermissionMode {
     /// Evaluate a proposed action against the trust spectrum.
-    pub fn evaluate(&self, is_read_only: bool, is_in_workspace: bool, reward_score: f32) -> PolicyDecision {
+    #[must_use]
+    pub fn evaluate(
+        &self,
+        is_read_only: bool,
+        is_in_workspace: bool,
+        reward_score: f32,
+    ) -> PolicyDecision {
         match self {
             Self::PlanOnly => PolicyDecision::Escalate,
             Self::Restricted => {
-                if is_read_only { PolicyDecision::Allow } else { PolicyDecision::Escalate }
+                if is_read_only {
+                    PolicyDecision::Allow
+                } else {
+                    PolicyDecision::Escalate
+                }
             }
             Self::AcceptEdits => {
-                if is_read_only || is_in_workspace { PolicyDecision::Allow } else { PolicyDecision::Escalate }
+                if is_read_only || is_in_workspace {
+                    PolicyDecision::Allow
+                } else {
+                    PolicyDecision::Escalate
+                }
             }
             Self::SovereignAuto => {
-                if reward_score > 0.90 { PolicyDecision::Allow } else { PolicyDecision::Escalate }
+                if reward_score > 0.90 {
+                    PolicyDecision::Allow
+                } else {
+                    PolicyDecision::Escalate
+                }
             }
             Self::DontAsk | Self::Bypass | Self::Bubble => PolicyDecision::Allow,
         }

@@ -6,7 +6,9 @@ use backend::BackendRegistry;
 use platform::PlatformConfig;
 
 pub(crate) fn json_output_enabled() -> bool {
-    std::env::var("TACHY_OUTPUT_JSON").map(|v| v == "1").unwrap_or(false)
+    std::env::var("TACHY_OUTPUT_JSON")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 pub(crate) fn list_channels() {
@@ -26,10 +28,19 @@ pub(crate) fn list_channels() {
     println!("Configured channels:\n");
     for ch in &channels {
         let status = if ch.enabled { "enabled" } else { "disabled" };
-        println!("  {:12} {:10} template={:15} [{}]",
+        println!(
+            "  {:12} {:10} template={:15} [{}]",
             format!("{:?}", ch.r#type).to_lowercase(),
-            if ch.channel.is_empty() { &ch.channel_id } else { &ch.channel },
-            if ch.template.is_empty() { "chat" } else { &ch.template },
+            if ch.channel.is_empty() {
+                &ch.channel_id
+            } else {
+                &ch.channel
+            },
+            if ch.template.is_empty() {
+                "chat"
+            } else {
+                &ch.template
+            },
             status,
         );
     }
@@ -52,8 +63,15 @@ pub(crate) fn list_tools() {
                 tools::custom::ToolType::Shell => "shell",
                 tools::custom::ToolType::Http => "http",
             };
-            let approval = if tool.approval_required { " [approval required]" } else { "" };
-            println!("  {:20} {} ({}){}", tool.name, tool.description, type_str, approval);
+            let approval = if tool.approval_required {
+                " [approval required]"
+            } else {
+                ""
+            };
+            println!(
+                "  {:20} {} ({}){}",
+                tool.name, tool.description, type_str, approval
+            );
         }
     }
 }
@@ -61,20 +79,31 @@ pub(crate) fn list_tools() {
 pub(crate) fn list_models() {
     let registry = BackendRegistry::with_defaults();
     if json_output_enabled() {
-        let models: Vec<serde_json::Value> = registry.list_models().iter().map(|m| {
-            serde_json::json!({
-                "name": m.name,
-                "backend": format!("{:?}", m.backend),
-                "context_window": m.context_window,
-                "supports_tool_use": m.supports_tool_use,
+        let models: Vec<serde_json::Value> = registry
+            .list_models()
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "name": m.name,
+                    "backend": format!("{:?}", m.backend),
+                    "context_window": m.context_window,
+                    "supports_tool_use": m.supports_tool_use,
+                })
             })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&models).unwrap_or_default());
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&models).unwrap_or_default()
+        );
         return;
     }
     println!("Available models:\n");
     for model in registry.list_models() {
-        let tools = if model.supports_tool_use { "tools" } else { "no-tools" };
+        let tools = if model.supports_tool_use {
+            "tools"
+        } else {
+            "no-tools"
+        };
         println!(
             "  {:30} {:12} ctx={:>7}  {}",
             model.name,
@@ -107,25 +136,34 @@ pub(crate) fn list_models_local() {
 pub(crate) fn list_agents() {
     let config = PlatformConfig::default();
     if json_output_enabled() {
-        let agents: Vec<serde_json::Value> = config.agent_templates.iter().map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "description": t.description,
-                "model": t.model,
-                "max_iterations": t.max_iterations,
-                "requires_approval": t.requires_approval,
-                "allowed_tools": t.allowed_tools,
+        let agents: Vec<serde_json::Value> = config
+            .agent_templates
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "model": t.model,
+                    "max_iterations": t.max_iterations,
+                    "requires_approval": t.requires_approval,
+                    "allowed_tools": t.allowed_tools,
+                })
             })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&agents).unwrap_or_default());
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&agents).unwrap_or_default()
+        );
         return;
     }
     println!("Built-in agent templates:\n");
     for template in &config.agent_templates {
         println!("  {}", template.name);
         println!("    {}", template.description);
-        println!("    model: {}  max_iterations: {}  approval: {}",
-            template.model, template.max_iterations, template.requires_approval);
+        println!(
+            "    model: {}  max_iterations: {}  approval: {}",
+            template.model, template.max_iterations, template.requires_approval
+        );
         println!("    tools: {}", template.allowed_tools.join(", "));
         println!();
     }
@@ -136,10 +174,15 @@ fn daemon_url() -> String {
 }
 
 fn daemon_api_key() -> Option<String> {
-    env::var("TACHY_API_KEY").ok().filter(|value| !value.trim().is_empty())
+    env::var("TACHY_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
-fn load_yaya_preferences_json(workspace: &str, subject: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+fn load_yaya_preferences_json(
+    workspace: &str,
+    subject: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut command = std::process::Command::new("curl");
     command.arg("-sf");
     if let Some(api_key) = daemon_api_key() {
@@ -156,7 +199,7 @@ fn load_yaya_preferences_json(workspace: &str, subject: &str) -> Result<serde_js
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("failed to load yaya retrieval preferences: {}{}", stdout, stderr).into());
+        return Err(format!("failed to load yaya retrieval preferences: {stdout}{stderr}").into());
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -191,7 +234,7 @@ fn save_yaya_preferences_json(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("failed to save yaya retrieval preferences: {}{}", stdout, stderr).into());
+        return Err(format!("failed to save yaya retrieval preferences: {stdout}{stderr}").into());
     }
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(serde_json::from_str(&text)?)
@@ -218,12 +261,24 @@ pub(crate) fn handle_yaya_preferences(
         let mut sources = current
             .get("explicit_preferred_sources")
             .and_then(|v| v.as_array())
-            .map(|items| items.iter().filter_map(|v| v.as_str()).map(ToString::to_string).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let mut terms = current
             .get("explicit_preferred_source_terms")
             .and_then(|v| v.as_array())
-            .map(|items| items.iter().filter_map(|v| v.as_str()).map(ToString::to_string).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         if clear {
@@ -246,7 +301,10 @@ pub(crate) fn handle_yaya_preferences(
     show_yaya_preferences(workspace, subject)
 }
 
-pub(crate) fn show_yaya_preferences(workspace: &str, subject: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn show_yaya_preferences(
+    workspace: &str,
+    subject: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let json = load_yaya_preferences_json(workspace, subject)?;
     if json_output_enabled() {
         println!("{}", serde_json::to_string_pretty(&json)?);
@@ -254,16 +312,35 @@ pub(crate) fn show_yaya_preferences(workspace: &str, subject: &str) -> Result<()
     }
 
     println!("Yaya retrieval preferences\n");
-    println!("  Workspace: {}", json.get("workspace").and_then(|v| v.as_str()).unwrap_or(workspace));
-    println!("  Subject:   {}", json.get("subject").and_then(|v| v.as_str()).unwrap_or(subject));
-    println!("  Strategy:  {}", json.get("strategy").and_then(|v| v.as_str()).unwrap_or("workspace_wide"));
+    println!(
+        "  Workspace: {}",
+        json.get("workspace")
+            .and_then(|v| v.as_str())
+            .unwrap_or(workspace)
+    );
+    println!(
+        "  Subject:   {}",
+        json.get("subject")
+            .and_then(|v| v.as_str())
+            .unwrap_or(subject)
+    );
+    println!(
+        "  Strategy:  {}",
+        json.get("strategy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("workspace_wide")
+    );
     println!(
         "  Updated:   {}",
-        json.get("updated_at").and_then(|v| v.as_str()).unwrap_or("inferred only")
+        json.get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("inferred only")
     );
     println!(
         "  Approved examples: {}",
-        json.get("approved_example_count").and_then(|v| v.as_u64()).unwrap_or(0)
+        json.get("approved_example_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
     );
 
     let print_list = |label: &str, key: &str| {

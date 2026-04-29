@@ -84,17 +84,20 @@ impl TeamManager {
     }
 
     /// Returns a reference to the teams map.
-    #[must_use] pub fn teams(&self) -> &BTreeMap<String, Team> {
+    #[must_use]
+    pub fn teams(&self) -> &BTreeMap<String, Team> {
         &self.teams
     }
 
     /// Returns a reference to the invitations map.
-    #[must_use] pub fn invitations(&self) -> &BTreeMap<String, WorkspaceInvitation> {
+    #[must_use]
+    pub fn invitations(&self) -> &BTreeMap<String, WorkspaceInvitation> {
         &self.invitations
     }
 
     /// Look up a user's role in a specific team.
-    #[must_use] pub fn get_member_role(&self, team_id: &str, user_id: &str) -> Option<Role> {
+    #[must_use]
+    pub fn get_member_role(&self, team_id: &str, user_id: &str) -> Option<Role> {
         self.teams
             .get(team_id)
             .and_then(|t| t.members.get(user_id))
@@ -175,7 +178,12 @@ impl TeamManager {
     }
 
     /// Join a team at a specific timestamp (for testing).
-    pub fn join_at(&mut self, token: &str, user_id: &str, now: u64) -> Result<TeamMember, TeamError> {
+    pub fn join_at(
+        &mut self,
+        token: &str,
+        user_id: &str,
+        now: u64,
+    ) -> Result<TeamMember, TeamError> {
         let invitation = self
             .invitations
             .get(token)
@@ -235,7 +243,11 @@ impl TeamManager {
 
         // If demoting an Admin, check last-admin invariant
         if target.role == Role::Admin && new_role != Role::Admin {
-            let admin_count = team.members.values().filter(|m| m.role == Role::Admin).count();
+            let admin_count = team
+                .members
+                .values()
+                .filter(|m| m.role == Role::Admin)
+                .count();
             if admin_count <= 1 {
                 return Err(TeamError::LastAdmin);
             }
@@ -272,7 +284,11 @@ impl TeamManager {
 
         // If removing an Admin, check last-admin invariant
         if target.role == Role::Admin {
-            let admin_count = team.members.values().filter(|m| m.role == Role::Admin).count();
+            let admin_count = team
+                .members
+                .values()
+                .filter(|m| m.role == Role::Admin)
+                .count();
             if admin_count <= 1 {
                 return Err(TeamError::LastAdmin);
             }
@@ -352,7 +368,9 @@ mod tests {
         let team_id = mgr.create_team("Team D", "admin-1").unwrap();
 
         // Cannot remove the only admin
-        let err = mgr.remove_member(&team_id, "admin-1", "admin-1").unwrap_err();
+        let err = mgr
+            .remove_member(&team_id, "admin-1", "admin-1")
+            .unwrap_err();
         assert_eq!(err, TeamError::LastAdmin);
     }
 

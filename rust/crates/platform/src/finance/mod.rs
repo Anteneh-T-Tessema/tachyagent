@@ -1,3 +1,5 @@
 pub mod liquidity;
 
-pub use liquidity::{LiquidityMonitor, StrategyEngine, ProtocolRate, ArbitrageOpportunity, InvestmentPolicy};
+pub use liquidity::{
+    ArbitrageOpportunity, InvestmentPolicy, LiquidityMonitor, ProtocolRate, StrategyEngine,
+};

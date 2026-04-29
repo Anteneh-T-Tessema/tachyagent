@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::rag::{Chunker, CodeChunk, VectorStore};
 use backend::{cosine_similarity, EmbeddingClient};
-use crate::rag::{VectorStore, CodeChunk, Chunker};
 
 use super::{FileEntry, IndexerConfig};
 
@@ -55,9 +55,13 @@ pub fn embed_summaries(
 
         // 2. Embed Chunks — incremental: skip files whose content hash is
         //    already represented in the vector store to avoid redundant work.
-        let already_embedded = vector_store.chunks.iter()
+        let already_embedded = vector_store
+            .chunks
+            .iter()
             .any(|c| c.path == *path && c.content_hash == entry.content_hash);
-        if already_embedded { continue; }
+        if already_embedded {
+            continue;
+        }
 
         // Remove stale chunks for this path before adding fresh ones
         vector_store.chunks.retain(|c| c.path != *path);
@@ -84,7 +88,13 @@ pub fn embed_summaries(
 
 /// Compute a semantic score for a file given a pre-embedded query vector.
 /// Falls back to keyword scoring when embeddings are unavailable.
-#[must_use] pub fn semantic_score(entry: &FileEntry, query_embedding: Option<&[f32]>, keywords: &[String], prompt: &str) -> f32 {
+#[must_use]
+pub fn semantic_score(
+    entry: &FileEntry,
+    query_embedding: Option<&[f32]>,
+    keywords: &[String],
+    prompt: &str,
+) -> f32 {
     let mut score = 0.0f32;
 
     // Semantic similarity — dominant signal when available
@@ -117,8 +127,12 @@ pub fn embed_summaries(
         }
     }
     // Penalise very large files slightly
-    if entry.lines > 500 { score *= 0.9; }
-    if entry.lines > 1000 { score *= 0.8; }
+    if entry.lines > 500 {
+        score *= 0.9;
+    }
+    if entry.lines > 1000 {
+        score *= 0.8;
+    }
 
     score
 }

@@ -76,7 +76,9 @@ fn is_valid_semver(version: &str) -> bool {
     if parts.len() != 3 {
         return false;
     }
-    parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// The agent marketplace.
@@ -94,7 +96,8 @@ impl Marketplace {
     }
 
     /// Returns a reference to the listings map.
-    #[must_use] pub fn listings(&self) -> &BTreeMap<String, MarketplaceListing> {
+    #[must_use]
+    pub fn listings(&self) -> &BTreeMap<String, MarketplaceListing> {
         &self.listings
     }
 
@@ -196,7 +199,8 @@ impl Marketplace {
     /// Results are sorted by `average_rating` descending.
     /// Optional query filters on listing name (case-insensitive substring match).
     /// Paginated with `page` (0-indexed) and `page_size`.
-    #[must_use] pub fn search(
+    #[must_use]
+    pub fn search(
         &self,
         query: Option<&str>,
         page: usize,
@@ -209,15 +213,11 @@ impl Marketplace {
                 // Visibility check: Public or matching Team
                 if l.visibility == ListingVisibility::Team {
                     // Note: Filtering by user's teams happens in the HTTP handler
-                    return true; 
+                    return true;
                 }
                 true
             })
-            .filter(|l| {
-                query.is_none_or(|q| {
-                    l.name.to_lowercase().contains(&q.to_lowercase())
-                })
-            })
+            .filter(|l| query.is_none_or(|q| l.name.to_lowercase().contains(&q.to_lowercase())))
             .collect();
 
         // Sort by average_rating descending (stable sort for determinism)
@@ -461,9 +461,9 @@ mod tests {
 
         let results = mp.search(None, 0, 10);
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].name, "beta");   // 5.0
-        assert_eq!(results[1].name, "gamma");  // 3.0
-        assert_eq!(results[2].name, "alpha");  // 2.0
+        assert_eq!(results[0].name, "beta"); // 5.0
+        assert_eq!(results[1].name, "gamma"); // 3.0
+        assert_eq!(results[2].name, "alpha"); // 2.0
     }
 
     #[test]
@@ -572,11 +572,7 @@ mod tests {
             .unwrap();
 
         let result = mp
-            .install_with_tools_check(
-                &id,
-                None,
-                &["read_file".to_string(), "bash".to_string()],
-            )
+            .install_with_tools_check(&id, None, &["read_file".to_string(), "bash".to_string()])
             .unwrap();
         assert!(result.warnings.is_empty());
     }
@@ -620,8 +616,14 @@ mod tests {
             .publish(test_template("agent"), "desc", "1.0.0", "user-1")
             .unwrap();
 
-        assert_eq!(mp.rate(&id, "u1", 0).unwrap_err(), MarketplaceError::InvalidRating);
-        assert_eq!(mp.rate(&id, "u1", 6).unwrap_err(), MarketplaceError::InvalidRating);
+        assert_eq!(
+            mp.rate(&id, "u1", 0).unwrap_err(),
+            MarketplaceError::InvalidRating
+        );
+        assert_eq!(
+            mp.rate(&id, "u1", 6).unwrap_err(),
+            MarketplaceError::InvalidRating
+        );
     }
 
     #[test]

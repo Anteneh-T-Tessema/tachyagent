@@ -41,8 +41,12 @@ pub struct SsoConfig {
     pub session_duration_secs: u64,
 }
 
-fn default_role() -> Role { Role::Developer }
-fn default_session_duration() -> u64 { 28800 } // 8 hours
+fn default_role() -> Role {
+    Role::Developer
+}
+fn default_session_duration() -> u64 {
+    28800
+} // 8 hours
 
 impl Default for SsoConfig {
     fn default() -> Self {
@@ -90,23 +94,27 @@ pub struct SsoManager {
 }
 
 impl SsoManager {
-    #[must_use] pub fn new(config: SsoConfig) -> Self {
+    #[must_use]
+    pub fn new(config: SsoConfig) -> Self {
         Self {
             config,
             sessions: BTreeMap::new(),
         }
     }
 
-    #[must_use] pub fn is_enabled(&self) -> bool {
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
-    #[must_use] pub fn config(&self) -> &SsoConfig {
+    #[must_use]
+    pub fn config(&self) -> &SsoConfig {
         &self.config
     }
 
     /// Build the SAML `AuthnRequest` redirect URL.
-    #[must_use] pub fn build_login_url(&self, relay_state: Option<&str>) -> String {
+    #[must_use]
+    pub fn build_login_url(&self, relay_state: Option<&str>) -> String {
         let request_id = format!("_tachy_{}", now_epoch());
         let issue_instant = iso8601_now();
 
@@ -119,19 +127,14 @@ impl SsoManager {
             ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST">\
             <saml:Issuer>{}</saml:Issuer>\
             </samlp:AuthnRequest>"#,
-            self.config.idp_sso_url,
-            self.config.sp_acs_url,
-            self.config.sp_entity_id,
+            self.config.idp_sso_url, self.config.sp_acs_url, self.config.sp_entity_id,
         );
 
         // Base64 + deflate encode for redirect binding
         let encoded = base64_encode(authn_request.as_bytes());
         let encoded_url = urlencod(&encoded);
 
-        let mut url = format!(
-            "{}?SAMLRequest={encoded_url}",
-            self.config.idp_sso_url,
-        );
+        let mut url = format!("{}?SAMLRequest={encoded_url}", self.config.idp_sso_url,);
         if let Some(rs) = relay_state {
             url.push_str(&format!("&RelayState={}", urlencod(rs)));
         }
@@ -145,10 +148,8 @@ impl SsoManager {
         user_store: &mut UserStore,
     ) -> Result<SsoSession, String> {
         // Decode the SAMLResponse
-        let xml = base64_decode(saml_response_b64)
-            .map_err(|e| format!("invalid base64: {e}"))?;
-        let xml_str = String::from_utf8(xml)
-            .map_err(|e| format!("invalid UTF-8: {e}"))?;
+        let xml = base64_decode(saml_response_b64).map_err(|e| format!("invalid base64: {e}"))?;
+        let xml_str = String::from_utf8(xml).map_err(|e| format!("invalid UTF-8: {e}"))?;
 
         // Parse the SAML assertion
         let assertion = parse_saml_response(&xml_str)?;
@@ -166,9 +167,14 @@ impl SsoManager {
 
         // Create or update user in the store
         let email = &assertion.subject_name_id;
-        let user_id = format!("sso-{}", hash_api_key(email).chars().take(12).collect::<String>());
+        let user_id = format!(
+            "sso-{}",
+            hash_api_key(email).chars().take(12).collect::<String>()
+        );
 
-        let display_name = assertion.attributes.get("displayName")
+        let display_name = assertion
+            .attributes
+            .get("displayName")
             .or_else(|| assertion.attributes.get("name"))
             .cloned()
             .unwrap_or_else(|| email.clone());
@@ -203,7 +209,8 @@ impl SsoManager {
     }
 
     /// Validate a session token. Returns the session if valid and not expired.
-    #[must_use] pub fn validate_session(&self, token: &str) -> Option<&SsoSession> {
+    #[must_use]
+    pub fn validate_session(&self, token: &str) -> Option<&SsoSession> {
         let session = self.sessions.get(token)?;
         if now_epoch() > session.expires_at {
             return None;
@@ -223,9 +230,13 @@ impl SsoManager {
     }
 
     /// List active sessions.
-    #[must_use] pub fn active_sessions(&self) -> Vec<&SsoSession> {
+    #[must_use]
+    pub fn active_sessions(&self) -> Vec<&SsoSession> {
         let now = now_epoch();
-        self.sessions.values().filter(|s| s.expires_at > now).collect()
+        self.sessions
+            .values()
+            .filter(|s| s.expires_at > now)
+            .collect()
     }
 
     /// Resolve a role from `IdP` groups using the role mapping.
@@ -236,9 +247,15 @@ impl SsoManager {
             }
             // Common group name patterns
             let lower = group.to_lowercase();
-            if lower.contains("admin") { return Role::Admin; }
-            if lower.contains("developer") || lower.contains("engineer") { return Role::Developer; }
-            if lower.contains("viewer") || lower.contains("readonly") { return Role::Viewer; }
+            if lower.contains("admin") {
+                return Role::Admin;
+            }
+            if lower.contains("developer") || lower.contains("engineer") {
+                return Role::Developer;
+            }
+            if lower.contains("viewer") || lower.contains("readonly") {
+                return Role::Viewer;
+            }
         }
         self.config.default_role
     }
@@ -251,12 +268,10 @@ impl SsoManager {
 /// Parse a SAML Response XML to extract the assertion.
 fn parse_saml_response(xml: &str) -> Result<SamlAssertion, String> {
     // Extract NameID (subject)
-    let name_id = extract_xml_value(xml, "NameID")
-        .ok_or("SAMLResponse missing NameID")?;
+    let name_id = extract_xml_value(xml, "NameID").ok_or("SAMLResponse missing NameID")?;
 
     // Extract Issuer
-    let issuer = extract_xml_value(xml, "Issuer")
-        .unwrap_or_default();
+    let issuer = extract_xml_value(xml, "Issuer").unwrap_or_default();
 
     // Extract SessionIndex from AuthnStatement
     let session_index = extract_xml_attr(xml, "AuthnStatement", "SessionIndex");
@@ -265,7 +280,8 @@ fn parse_saml_response(xml: &str) -> Result<SamlAssertion, String> {
     let attributes = extract_saml_attributes(xml);
 
     // Extract groups from attributes
-    let groups = attributes.get("groups")
+    let groups = attributes
+        .get("groups")
         .or_else(|| attributes.get("memberOf"))
         .or_else(|| attributes.get("role"))
         .map(|g| g.split(',').map(|s| s.trim().to_string()).collect())
@@ -358,7 +374,11 @@ fn extract_name_attr(s: &str) -> Option<String> {
 
 fn extract_attr_value_after(xml: &str, from: usize) -> Option<String> {
     let search = &xml[from..];
-    for prefix in &["<saml:AttributeValue", "<saml2:AttributeValue", "<AttributeValue"] {
+    for prefix in &[
+        "<saml:AttributeValue",
+        "<saml2:AttributeValue",
+        "<AttributeValue",
+    ] {
         if let Some(pos) = search.find(prefix) {
             let after = &search[pos..];
             let content_start = after.find('>')? + 1;
@@ -410,7 +430,8 @@ fn urlencod(s: &str) -> String {
     out
 }
 
-#[must_use] pub fn base64_encode(data: &[u8]) -> String {
+#[must_use]
+pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
@@ -440,7 +461,9 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     let chars: Vec<u8> = clean.bytes().collect();
 
     for chunk in chars.chunks(4) {
-        if chunk.len() < 2 { break; }
+        if chunk.len() < 2 {
+            break;
+        }
         let a = b64_val(chunk[0])?;
         let b = b64_val(chunk[1])?;
         out.push((a << 2) | (b >> 4));
@@ -573,20 +596,26 @@ mod tests {
 
     #[test]
     fn sso_session_invalidation() {
-        let config = SsoConfig { enabled: true, ..SsoConfig::default() };
+        let config = SsoConfig {
+            enabled: true,
+            ..SsoConfig::default()
+        };
         let mut mgr = SsoManager::new(config);
 
         // Manually insert a session
         let token = "sso-test-token".to_string();
-        mgr.sessions.insert(token.clone(), SsoSession {
-            token: token.clone(),
-            user_id: "u1".to_string(),
-            email: "test@test.com".to_string(),
-            role: Role::Developer,
-            created_at: now_epoch(),
-            expires_at: now_epoch() + 3600,
-            idp_session_index: None,
-        });
+        mgr.sessions.insert(
+            token.clone(),
+            SsoSession {
+                token: token.clone(),
+                user_id: "u1".to_string(),
+                email: "test@test.com".to_string(),
+                role: Role::Developer,
+                created_at: now_epoch(),
+                expires_at: now_epoch() + 3600,
+                idp_session_index: None,
+            },
+        );
 
         assert!(mgr.validate_session(&token).is_some());
         mgr.invalidate_session(&token);
@@ -607,9 +636,15 @@ mod tests {
         };
         let mgr = SsoManager::new(config);
 
-        assert_eq!(mgr.resolve_role(&["platform-admins".to_string()]), Role::Admin);
+        assert_eq!(
+            mgr.resolve_role(&["platform-admins".to_string()]),
+            Role::Admin
+        );
         assert_eq!(mgr.resolve_role(&["devs".to_string()]), Role::Developer);
-        assert_eq!(mgr.resolve_role(&["unknown-group".to_string()]), Role::Viewer);
+        assert_eq!(
+            mgr.resolve_role(&["unknown-group".to_string()]),
+            Role::Viewer
+        );
         assert_eq!(mgr.resolve_role(&[]), Role::Viewer);
     }
 
@@ -623,7 +658,7 @@ mod tests {
         let mut mgr = SsoManager::new(config);
         let mut user_store = UserStore::new();
 
-        let xml = r#"<samlp:Response><saml:Issuer>https://evil-idp.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user@evil.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let xml = r"<samlp:Response><saml:Issuer>https://evil-idp.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user@evil.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>";
         let b64 = base64_encode(xml.as_bytes());
 
         let err = mgr.process_callback(&b64, &mut user_store).unwrap_err();
@@ -647,21 +682,21 @@ mod tests {
 
     #[test]
     fn parse_xml_with_nested_tags() {
-        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let xml = r"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>";
         let result = super::parse_saml_response(xml).unwrap();
         assert_eq!(result.subject_name_id, "user@test.com");
     }
 
     #[test]
     fn parse_xml_with_special_chars_in_nameid() {
-        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user+tag@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let xml = r"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>user+tag@test.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>";
         let result = super::parse_saml_response(xml).unwrap();
         assert_eq!(result.subject_name_id, "user+tag@test.com");
     }
 
     #[test]
     fn parse_xml_with_no_attributes() {
-        let xml = r#"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>u@t.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+        let xml = r"<samlp:Response><saml:Issuer>idp</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>u@t.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>";
         let result = super::parse_saml_response(xml).unwrap();
         assert!(result.attributes.is_empty());
         assert!(result.groups.is_empty());
@@ -677,16 +712,24 @@ mod tests {
 
     #[test]
     fn parse_malformed_base64_rejected() {
-        let config = SsoConfig { enabled: true, ..SsoConfig::default() };
+        let config = SsoConfig {
+            enabled: true,
+            ..SsoConfig::default()
+        };
         let mut mgr = SsoManager::new(config);
         let mut users = UserStore::new();
-        let err = mgr.process_callback("not-valid-base64!!!", &mut users).unwrap_err();
+        let err = mgr
+            .process_callback("not-valid-base64!!!", &mut users)
+            .unwrap_err();
         assert!(err.contains("invalid") || err.contains("base64") || err.contains("UTF-8"));
     }
 
     #[test]
     fn parse_binary_garbage_rejected() {
-        let config = SsoConfig { enabled: true, ..SsoConfig::default() };
+        let config = SsoConfig {
+            enabled: true,
+            ..SsoConfig::default()
+        };
         let mut mgr = SsoManager::new(config);
         let mut users = UserStore::new();
         // Valid base64 but not XML

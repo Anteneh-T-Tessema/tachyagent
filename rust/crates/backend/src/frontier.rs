@@ -41,13 +41,17 @@ pub struct CoordinatorConfig {
 
 impl CoordinatorConfig {
     /// Load from environment variables. Falls back to local if unset.
-    #[must_use] pub fn from_env() -> Self {
+    #[must_use]
+    pub fn from_env() -> Self {
         let air_gap = std::env::var("TACHY_AIR_GAP")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
 
         if air_gap {
-            return Self { air_gap: true, ..Default::default() };
+            return Self {
+                air_gap: true,
+                ..Default::default()
+            };
         }
 
         let provider = match std::env::var("TACHY_COORDINATOR_PROVIDER")
@@ -56,31 +60,46 @@ impl CoordinatorConfig {
             .as_str()
         {
             "anthropic" => CoordinatorProvider::Anthropic,
-            "openai"    => CoordinatorProvider::OpenAi,
-            _           => CoordinatorProvider::Local,
+            "openai" => CoordinatorProvider::OpenAi,
+            _ => CoordinatorProvider::Local,
         };
 
-        let model     = std::env::var("TACHY_COORDINATOR_MODEL").ok();
-        let api_key   = std::env::var("TACHY_COORDINATOR_API_KEY").ok();
-        let base_url  = std::env::var("TACHY_COORDINATOR_BASE_URL").ok();
+        let model = std::env::var("TACHY_COORDINATOR_MODEL").ok();
+        let api_key = std::env::var("TACHY_COORDINATOR_API_KEY").ok();
+        let base_url = std::env::var("TACHY_COORDINATOR_BASE_URL").ok();
 
-        Self { provider, model, api_key, base_url, air_gap }
+        Self {
+            provider,
+            model,
+            api_key,
+            base_url,
+            air_gap,
+        }
     }
 
     /// Effective provider after air-gap enforcement.
-    #[must_use] pub fn effective_provider(&self) -> &CoordinatorProvider {
-        if self.air_gap { &CoordinatorProvider::Local } else { &self.provider }
+    #[must_use]
+    pub fn effective_provider(&self) -> &CoordinatorProvider {
+        if self.air_gap {
+            &CoordinatorProvider::Local
+        } else {
+            &self.provider
+        }
     }
 
     /// Effective model name for this configuration.
-    #[must_use] pub fn effective_model(&self) -> String {
+    #[must_use]
+    pub fn effective_model(&self) -> String {
         if self.air_gap {
-            return self.model.clone().unwrap_or_else(|| "gemma4:26b".to_string());
+            return self
+                .model
+                .clone()
+                .unwrap_or_else(|| "gemma4:26b".to_string());
         }
         self.model.clone().unwrap_or_else(|| match &self.provider {
             CoordinatorProvider::Anthropic => "claude-sonnet-4-6".to_string(),
-            CoordinatorProvider::OpenAi    => "gpt-4o".to_string(),
-            CoordinatorProvider::Local     => "gemma4:26b".to_string(),
+            CoordinatorProvider::OpenAi => "gpt-4o".to_string(),
+            CoordinatorProvider::Local => "gemma4:26b".to_string(),
         })
     }
 }
@@ -93,7 +112,8 @@ pub struct FrontierPlanner {
 }
 
 impl FrontierPlanner {
-    #[must_use] pub fn new(config: CoordinatorConfig) -> Self {
+    #[must_use]
+    pub fn new(config: CoordinatorConfig) -> Self {
         Self {
             config,
             client: reqwest::blocking::Client::builder()
@@ -105,16 +125,20 @@ impl FrontierPlanner {
 
     /// Send a planning prompt and return the raw text response.
     /// Returns `None` if the provider is local (caller falls back to Ollama).
-    #[must_use] pub fn plan(&self, prompt: &str) -> Option<String> {
+    #[must_use]
+    pub fn plan(&self, prompt: &str) -> Option<String> {
         match self.config.effective_provider() {
             CoordinatorProvider::Local => None,
             CoordinatorProvider::Anthropic => self.call_anthropic(prompt),
-            CoordinatorProvider::OpenAi    => self.call_openai(prompt),
+            CoordinatorProvider::OpenAi => self.call_openai(prompt),
         }
     }
 
     fn call_anthropic(&self, prompt: &str) -> Option<String> {
-        let api_key = self.config.api_key.as_deref()
+        let api_key = self
+            .config
+            .api_key
+            .as_deref()
             .or({
                 // borrow checker: can't use .ok() inside closure that borrows self
                 None
@@ -133,7 +157,8 @@ impl FrontierPlanner {
             }],
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &api_key)
             .header("anthropic-version", "2023-06-01")
@@ -151,17 +176,22 @@ impl FrontierPlanner {
         json["content"]
             .as_array()?
             .iter()
-            .find(|b| b["type"] == "text")?
-            ["text"]
+            .find(|b| b["type"] == "text")?["text"]
             .as_str()
             .map(str::to_string)
     }
 
     fn call_openai(&self, prompt: &str) -> Option<String> {
-        let api_key = self.config.api_key.clone()
+        let api_key = self
+            .config
+            .api_key
+            .clone()
             .or_else(|| std::env::var("OPENAI_API_KEY").ok())?;
 
-        let base = self.config.base_url.as_deref()
+        let base = self
+            .config
+            .base_url
+            .as_deref()
             .unwrap_or("https://api.openai.com");
         let url = format!("{base}/v1/chat/completions");
         let model = self.config.effective_model();
@@ -176,7 +206,8 @@ impl FrontierPlanner {
             "temperature": 0.2,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .bearer_auth(&api_key)
             .json(&body)
@@ -189,10 +220,7 @@ impl FrontierPlanner {
         }
 
         let json: serde_json::Value = resp.json().ok()?;
-        json["choices"]
-            .as_array()?
-            .first()?
-            ["message"]["content"]
+        json["choices"].as_array()?.first()?["message"]["content"]
             .as_str()
             .map(str::to_string)
     }

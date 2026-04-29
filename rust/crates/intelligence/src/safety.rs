@@ -1,6 +1,6 @@
 //! Safety Agent for Command Sanitization.
 //!
-//! Provides rule-based and model-based verification for shell commands 
+//! Provides rule-based and model-based verification for shell commands
 //! to prevent destructive or unauthorized actions.
 
 use serde::{Deserialize, Serialize};
@@ -16,9 +16,10 @@ pub struct SafetyAgent;
 
 impl SafetyAgent {
     /// Verify a bash command against standard safety rules.
+    #[must_use]
     pub fn verify_command(command: &str) -> SafetyReport {
         let cmd = command.trim().to_lowercase();
-        
+
         // 1. Rule-based checks (Hard blockers)
         if cmd.contains("rm -rf /") || cmd.contains("rm -rf /*") {
             return SafetyReport {
@@ -36,10 +37,14 @@ impl SafetyAgent {
             };
         }
 
-        if cmd.contains(".env") && (cmd.contains("cat") || cmd.contains("grep") || cmd.contains("read")) {
+        if cmd.contains(".env")
+            && (cmd.contains("cat") || cmd.contains("grep") || cmd.contains("read"))
+        {
             return SafetyReport {
                 is_safe: false,
-                reason: Some("Accessing .env files is restricted to prevent credential leakage.".to_string()),
+                reason: Some(
+                    "Accessing .env files is restricted to prevent credential leakage.".to_string(),
+                ),
                 suggested_command: None,
             };
         }

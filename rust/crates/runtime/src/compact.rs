@@ -114,7 +114,7 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
 /// Distill the session into a high-density "Memory Digest".
 pub fn digest_session(session: &Session) -> String {
     let mut lines = vec!["# Session Digest (Compacted)\n".to_string()];
-    
+
     // Extract reasoning and tools
     for msg in &session.messages {
         let _role = match msg.role {
@@ -140,7 +140,11 @@ pub fn digest_session(session: &Session) -> String {
                 ContentBlock::ToolUse { name, .. } => {
                     lines.push(format!("- [Tool Call] {name}"));
                 }
-                ContentBlock::ToolResult { tool_name, is_error, .. } => {
+                ContentBlock::ToolResult {
+                    tool_name,
+                    is_error,
+                    ..
+                } => {
                     if *is_error {
                         lines.push(format!("- [Tool Error] {tool_name}"));
                     }
@@ -271,7 +275,12 @@ mod tests {
 
     #[test]
     fn leaves_small_sessions_unchanged() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(), success: false, human_override: false, team_id: None,
+        let session = Session {
+            branches: Vec::new(),
+            current_branch: String::new(),
+            success: false,
+            human_override: false,
+            team_id: None,
             version: 1,
             messages: vec![ConversationMessage::user_text("hello")],
         };
@@ -284,7 +293,12 @@ mod tests {
 
     #[test]
     fn compacts_older_messages_into_a_system_summary() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(), success: false, human_override: false, team_id: None,
+        let session = Session {
+            branches: Vec::new(),
+            current_branch: String::new(),
+            success: false,
+            human_override: false,
+            team_id: None,
             version: 1,
             messages: vec![
                 ConversationMessage::user_text("one ".repeat(200)),

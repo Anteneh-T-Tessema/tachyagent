@@ -2,7 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use rand::{RngCore, thread_rng};
+use rand::{thread_rng, RngCore};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -29,9 +29,8 @@ pub struct SovereignCrypto;
 impl SovereignCrypto {
     /// Encrypt a plaintext buffer using AES-256-GCM.
     pub fn encrypt(plaintext: &[u8], key: &[u8; 32]) -> Result<EncryptedPayload, CryptoError> {
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|_| CryptoError::InvalidKey)?;
-        
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidKey)?;
+
         let mut nonce_bytes = [0u8; 12];
         thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -48,9 +47,8 @@ impl SovereignCrypto {
 
     /// Decrypt an encrypted payload using AES-256-GCM.
     pub fn decrypt(payload: &EncryptedPayload, key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|_| CryptoError::InvalidKey)?;
-        
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidKey)?;
+
         let nonce = Nonce::from_slice(&payload.nonce);
 
         cipher
@@ -77,12 +75,18 @@ impl AgentIdentity {
         self.signing_key.verifying_key()
     }
 
+    #[must_use]
     pub fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature {
         use ed25519_dalek::Signer;
         self.signing_key.sign(message)
     }
 
-    pub fn verify(message: &[u8], signature: &ed25519_dalek::Signature, public_key: &ed25519_dalek::VerifyingKey) -> bool {
+    #[must_use]
+    pub fn verify(
+        message: &[u8],
+        signature: &ed25519_dalek::Signature,
+        public_key: &ed25519_dalek::VerifyingKey,
+    ) -> bool {
         use ed25519_dalek::Verifier;
         public_key.verify(message, signature).is_ok()
     }
@@ -92,6 +96,7 @@ impl AgentIdentity {
         self.signing_key.to_bytes()
     }
 
+    #[must_use]
     pub fn from_bytes(bytes: &[u8; 32]) -> Self {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(bytes);
         Self { signing_key }
@@ -100,20 +105,37 @@ impl AgentIdentity {
 impl AgentIdentity {
     pub fn asymmetric_sign(&self, message: &[u8]) -> Result<String, String> {
         let signature = self.sign(message);
-        Ok(signature.to_bytes().iter().map(|b| format!("{b:02x}")).collect())
+        Ok(signature
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect())
     }
 
+    #[must_use]
     pub fn public_key_hex(&self) -> String {
-        self.public_key().to_bytes().iter().map(|b| format!("{b:02x}")).collect()
+        self.public_key()
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
-    pub fn verify_static(signature_hex: &str, public_key_hex: &str, message: &[u8]) -> Result<(), String> {
+    pub fn verify_static(
+        signature_hex: &str,
+        public_key_hex: &str,
+        message: &[u8],
+    ) -> Result<(), String> {
         let sig_bytes = hex::decode(signature_hex).map_err(|e| e.to_string())?;
         let pk_bytes = hex::decode(public_key_hex).map_err(|e| e.to_string())?;
-        
-        let signature = ed25519_dalek::Signature::from_slice(&sig_bytes).map_err(|e| e.to_string())?;
-        let public_key = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes.try_into().map_err(|_| "invalid pk size")?).map_err(|e| e.to_string())?;
-        
+
+        let signature =
+            ed25519_dalek::Signature::from_slice(&sig_bytes).map_err(|e| e.to_string())?;
+        let public_key = ed25519_dalek::VerifyingKey::from_bytes(
+            &pk_bytes.try_into().map_err(|_| "invalid pk size")?,
+        )
+        .map_err(|e| e.to_string())?;
+
         if Self::verify(message, &signature, &public_key) {
             Ok(())
         } else {
@@ -125,7 +147,11 @@ impl AgentIdentity {
 impl audit::AsymmetricSigner for AgentIdentity {
     fn sign_payload(&self, message: &[u8]) -> (String, String) {
         let signature = self.sign(message);
-        let sig_hex = signature.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        let sig_hex = signature
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let pk_hex = self.public_key_hex();
         (sig_hex, pk_hex)
     }
@@ -137,21 +163,31 @@ pub struct FinancialVault {
 }
 
 impl FinancialVault {
+    #[must_use]
     pub fn new(identity: AgentIdentity, policy: super::finance::InvestmentPolicy) -> Self {
         Self { identity, policy }
     }
 
     pub fn authorize_transaction(&self, protocol: &str, amount: f64) -> Result<String, String> {
-        if self.policy.restricted_protocols.contains(&protocol.to_string()) {
-            return Err(format!("SECURITY: Protocol '{}' is restricted by investment policy.", protocol));
+        if self
+            .policy
+            .restricted_protocols
+            .contains(&protocol.to_string())
+        {
+            return Err(format!(
+                "SECURITY: Protocol '{protocol}' is restricted by investment policy."
+            ));
         }
 
         if amount > self.policy.max_exposure_per_protocol {
-            return Err(format!("EXPOSURE: Transaction amount ${} exceeds protocol limit of ${}.", amount, self.policy.max_exposure_per_protocol));
+            return Err(format!(
+                "EXPOSURE: Transaction amount ${} exceeds protocol limit of ${}.",
+                amount, self.policy.max_exposure_per_protocol
+            ));
         }
 
         // Sign the authorization token
-        let auth_msg = format!("AUTH_TX:{}:{}", protocol, amount);
+        let auth_msg = format!("AUTH_TX:{protocol}:{amount}");
         self.identity.asymmetric_sign(auth_msg.as_bytes())
     }
 }

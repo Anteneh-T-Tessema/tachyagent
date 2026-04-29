@@ -56,7 +56,10 @@ pub enum PolicyRuleType {
     /// Block patches whose diff contains specific patterns (checks added lines only).
     DiffContentBlock { patterns: Vec<String> },
     /// Execute a WASM module for custom policy logic.
-    Wasm { module_path: String, function_name: String },
+    Wasm {
+        module_path: String,
+        function_name: String,
+    },
     /// Require tests to pass before applying.
     RequireTests,
 }
@@ -74,12 +77,14 @@ pub struct PolicyEngine {
 }
 
 impl PolicyEngine {
-    #[must_use] pub fn new(rules: Vec<PolicyRule>) -> Self {
+    #[must_use]
+    pub fn new(rules: Vec<PolicyRule>) -> Self {
         Self { rules }
     }
 
     /// Load default enterprise rules.
-    #[must_use] pub fn enterprise_default() -> Self {
+    #[must_use]
+    pub fn enterprise_default() -> Self {
         Self::new(vec![
             PolicyRule {
                 name: "protect_auth".to_string(),
@@ -139,7 +144,8 @@ impl PolicyEngine {
     }
 
     /// Evaluate a patch against all rules.
-    #[must_use] pub fn evaluate(&self, patch: &FilePatch) -> PolicyDecision {
+    #[must_use]
+    pub fn evaluate(&self, patch: &FilePatch) -> PolicyDecision {
         for rule in &self.rules {
             match self.check_rule(rule, patch) {
                 PolicyDecision::AutoApprove => {}
@@ -159,7 +165,10 @@ impl PolicyEngine {
                                 reason: format!("rule '{}': path matches '{}'", rule.name, pattern),
                             },
                             PolicyAction::Reject => PolicyDecision::Reject {
-                                reason: format!("rule '{}': path blocked by '{}'", rule.name, pattern),
+                                reason: format!(
+                                    "rule '{}': path blocked by '{}'",
+                                    rule.name, pattern
+                                ),
                             },
                         };
                     }
@@ -171,10 +180,16 @@ impl PolicyEngine {
                 if total > *max_lines {
                     return match rule.action {
                         PolicyAction::RequireApproval => PolicyDecision::RequiresApproval {
-                            reason: format!("rule '{}': patch is {} lines (max {})", rule.name, total, max_lines),
+                            reason: format!(
+                                "rule '{}': patch is {} lines (max {})",
+                                rule.name, total, max_lines
+                            ),
                         },
                         PolicyAction::Reject => PolicyDecision::Reject {
-                            reason: format!("rule '{}': patch too large ({} lines)", rule.name, total),
+                            reason: format!(
+                                "rule '{}': patch too large ({} lines)",
+                                rule.name, total
+                            ),
                         },
                     };
                 }
@@ -186,10 +201,16 @@ impl PolicyEngine {
                         if re.is_match(&patch.new_content) {
                             return match rule.action {
                                 PolicyAction::RequireApproval => PolicyDecision::RequiresApproval {
-                                    reason: format!("rule '{}': content matches '{}'", rule.name, pattern),
+                                    reason: format!(
+                                        "rule '{}': content matches '{}'",
+                                        rule.name, pattern
+                                    ),
                                 },
                                 PolicyAction::Reject => PolicyDecision::Reject {
-                                    reason: format!("rule '{}': blocked content pattern '{}'", rule.name, pattern),
+                                    reason: format!(
+                                        "rule '{}': blocked content pattern '{}'",
+                                        rule.name, pattern
+                                    ),
                                 },
                             };
                         }
@@ -208,10 +229,16 @@ impl PolicyEngine {
                         if re.is_match(&patch.diff_summary) {
                             return match rule.action {
                                 PolicyAction::RequireApproval => PolicyDecision::RequiresApproval {
-                                    reason: format!("rule '{}': diff matches '{}'", rule.name, pattern),
+                                    reason: format!(
+                                        "rule '{}': diff matches '{}'",
+                                        rule.name, pattern
+                                    ),
                                 },
                                 PolicyAction::Reject => PolicyDecision::Reject {
-                                    reason: format!("rule '{}': blocked diff pattern '{}'", rule.name, pattern),
+                                    reason: format!(
+                                        "rule '{}': blocked diff pattern '{}'",
+                                        rule.name, pattern
+                                    ),
                                 },
                             };
                         }
@@ -219,44 +246,80 @@ impl PolicyEngine {
                 }
                 PolicyDecision::AutoApprove
             }
-            PolicyRuleType::Wasm { module_path, function_name } => {
-                self.evaluate_wasm(module_path, function_name, patch)
-            }
+            PolicyRuleType::Wasm {
+                module_path,
+                function_name,
+            } => self.evaluate_wasm(module_path, function_name, patch),
         }
     }
 
-    fn evaluate_wasm(&self, module_path: &str, function_name: &str, patch: &FilePatch) -> PolicyDecision {
-        use wasmtime::*;
+    #[allow(clippy::unused_self)]
+    fn evaluate_wasm(
+        &self,
+        module_path: &str,
+        function_name: &str,
+        patch: &FilePatch,
+    ) -> PolicyDecision {
+        use wasmtime::{Engine, Linker, Module, Store};
 
         let engine = Engine::default();
         let module = match Module::from_file(&engine, module_path) {
             Ok(m) => m,
-            Err(e) => return PolicyDecision::Reject { reason: format!("failed to load WASM module: {e}") },
+            Err(e) => {
+                return PolicyDecision::Reject {
+                    reason: format!("failed to load WASM module: {e}"),
+                }
+            }
         };
 
         let mut store = Store::new(&engine, ());
         let linker = Linker::new(&engine);
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(i) => i,
-            Err(e) => return PolicyDecision::Reject { reason: format!("failed to instantiate WASM: {e}") },
+            Err(e) => {
+                return PolicyDecision::Reject {
+                    reason: format!("failed to instantiate WASM: {e}"),
+                }
+            }
         };
 
-        let func = match instance.get_typed_func::<(u32, u32, u32, u32), i32>(&mut store, function_name) {
-            Ok(f) => f,
-            Err(_) => return PolicyDecision::Reject { reason: format!("function '{function_name}' not found in WASM") },
-        };
+        let func =
+            match instance.get_typed_func::<(u32, u32, u32, u32), i32>(&mut store, function_name) {
+                Ok(f) => f,
+                Err(_) => {
+                    return PolicyDecision::Reject {
+                        reason: format!("function '{function_name}' not found in WASM"),
+                    }
+                }
+            };
 
         // Simplified interface: pass additions, deletions, path length, content length
         // In a real production system, we'd share memory for full patch access.
         let path_len = patch.file_path.len() as u32;
         let content_len = patch.new_content.len() as u32;
-        
-        match func.call(&mut store, (patch.additions as u32, patch.deletions as u32, path_len, content_len)) {
+
+        match func.call(
+            &mut store,
+            (
+                patch.additions as u32,
+                patch.deletions as u32,
+                path_len,
+                content_len,
+            ),
+        ) {
             Ok(0) => PolicyDecision::AutoApprove,
-            Ok(1) => PolicyDecision::RequiresApproval { reason: "WASM policy flagged for review".to_string() },
-            Ok(2) => PolicyDecision::Reject { reason: "WASM policy rejected patch".to_string() },
-            Ok(n) => PolicyDecision::Reject { reason: format!("WASM policy returned unknown code: {n}") },
-            Err(e) => PolicyDecision::Reject { reason: format!("WASM execution failed: {e}") },
+            Ok(1) => PolicyDecision::RequiresApproval {
+                reason: "WASM policy flagged for review".to_string(),
+            },
+            Ok(2) => PolicyDecision::Reject {
+                reason: "WASM policy rejected patch".to_string(),
+            },
+            Ok(n) => PolicyDecision::Reject {
+                reason: format!("WASM policy returned unknown code: {n}"),
+            },
+            Err(e) => PolicyDecision::Reject {
+                reason: format!("WASM execution failed: {e}"),
+            },
         }
     }
 }
@@ -278,7 +341,9 @@ fn path_matches(path: &str, pattern: &str) -> bool {
         let parts: Vec<&str> = pattern.split('*').collect();
         let mut pos = 0;
         for part in &parts {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(found) = path[pos..].find(part) {
                 pos += found + part.len();
             } else {
@@ -289,7 +354,6 @@ fn path_matches(path: &str, pattern: &str) -> bool {
     }
     path == pattern || path.ends_with(pattern)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -323,7 +387,7 @@ mod tests {
             PolicyDecision::RequiresApproval { reason } => {
                 assert!(reason.contains("auth"));
             }
-            other => panic!("expected RequiresApproval, got {:?}", other),
+            other => panic!("expected RequiresApproval, got {other:?}"),
         }
     }
 
@@ -335,7 +399,7 @@ mod tests {
             PolicyDecision::RequiresApproval { reason } => {
                 assert!(reason.contains("600 lines"));
             }
-            other => panic!("expected RequiresApproval, got {:?}", other),
+            other => panic!("expected RequiresApproval, got {other:?}"),
         }
     }
 
@@ -347,7 +411,7 @@ mod tests {
             PolicyDecision::Reject { reason } => {
                 assert!(reason.contains("password"));
             }
-            other => panic!("expected Reject, got {:?}", other),
+            other => panic!("expected Reject, got {other:?}"),
         }
     }
 
@@ -360,15 +424,13 @@ mod tests {
 
     #[test]
     fn diff_content_block_checks_diff_summary() {
-        let engine = PolicyEngine::new(vec![
-            PolicyRule {
-                name: "block_unsafe".to_string(),
-                rule_type: PolicyRuleType::DiffContentBlock {
-                    patterns: vec!["unsafe".to_string()],
-                },
-                action: PolicyAction::RequireApproval,
+        let engine = PolicyEngine::new(vec![PolicyRule {
+            name: "block_unsafe".to_string(),
+            rule_type: PolicyRuleType::DiffContentBlock {
+                patterns: vec!["unsafe".to_string()],
             },
-        ]);
+            action: PolicyAction::RequireApproval,
+        }]);
         let patch = test_patch("src/lib.rs", "safe code", 5, 2);
         assert_eq!(engine.evaluate(&patch), PolicyDecision::AutoApprove);
 
@@ -380,7 +442,7 @@ mod tests {
             PolicyDecision::RequiresApproval { reason } => {
                 assert!(reason.contains("unsafe"));
             }
-            other => panic!("expected RequiresApproval, got {:?}", other),
+            other => panic!("expected RequiresApproval, got {other:?}"),
         }
     }
 }

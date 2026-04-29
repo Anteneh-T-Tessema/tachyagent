@@ -94,8 +94,12 @@ pub enum ToolType {
     Http,
 }
 
-fn default_tool_type() -> ToolType { ToolType::Shell }
-fn default_timeout() -> u64 { 30 }
+fn default_tool_type() -> ToolType {
+    ToolType::Shell
+}
+fn default_timeout() -> u64 {
+    30
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamDef {
@@ -109,7 +113,9 @@ pub struct ParamDef {
     pub default: Option<String>,
 }
 
-fn default_param_type() -> String { "string".to_string() }
+fn default_param_type() -> String {
+    "string".to_string()
+}
 
 /// The tools.yaml file format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,7 +132,8 @@ pub struct CustomToolRegistry {
 
 impl CustomToolRegistry {
     /// Load custom tools from `.tachy/tools.yaml`.
-    #[must_use] pub fn load(tachy_dir: &Path) -> Self {
+    #[must_use]
+    pub fn load(tachy_dir: &Path) -> Self {
         let yaml_path = tachy_dir.join("tools.yaml");
         let yml_path = tachy_dir.join("tools.yml");
 
@@ -153,51 +160,59 @@ impl CustomToolRegistry {
         }
     }
 
-    #[must_use] pub fn tools(&self) -> &[CustomTool] {
+    #[must_use]
+    pub fn tools(&self) -> &[CustomTool] {
         &self.tools
     }
 
-    #[must_use] pub fn find(&self, name: &str) -> Option<&CustomTool> {
+    #[must_use]
+    pub fn find(&self, name: &str) -> Option<&CustomTool> {
         self.tools.iter().find(|t| t.name == name)
     }
 
     /// Generate tool specs for the LLM (same format as built-in tools).
-    #[must_use] pub fn tool_specs(&self) -> Vec<super::ToolSpec> {
-        self.tools.iter().map(|t| {
-            let mut properties = serde_json::Map::new();
-            let mut required = Vec::new();
+    #[must_use]
+    pub fn tool_specs(&self) -> Vec<super::ToolSpec> {
+        self.tools
+            .iter()
+            .map(|t| {
+                let mut properties = serde_json::Map::new();
+                let mut required = Vec::new();
 
-            for (name, param) in &t.parameters {
-                let mut prop = serde_json::Map::new();
-                prop.insert("type".to_string(), json!(param.r#type));
-                if let Some(desc) = &param.description {
-                    prop.insert("description".to_string(), json!(desc));
+                for (name, param) in &t.parameters {
+                    let mut prop = serde_json::Map::new();
+                    prop.insert("type".to_string(), json!(param.r#type));
+                    if let Some(desc) = &param.description {
+                        prop.insert("description".to_string(), json!(desc));
+                    }
+                    properties.insert(name.clone(), Value::Object(prop));
+                    if param.required {
+                        required.push(json!(name));
+                    }
                 }
-                properties.insert(name.clone(), Value::Object(prop));
-                if param.required {
-                    required.push(json!(name));
+
+                // Leak the strings so we get &'static str (safe for program lifetime)
+                let name: &'static str = Box::leak(t.name.clone().into_boxed_str());
+                let desc: &'static str = Box::leak(t.description.clone().into_boxed_str());
+
+                super::ToolSpec {
+                    name,
+                    description: desc,
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    }),
                 }
-            }
-
-            // Leak the strings so we get &'static str (safe for program lifetime)
-            let name: &'static str = Box::leak(t.name.clone().into_boxed_str());
-            let desc: &'static str = Box::leak(t.description.clone().into_boxed_str());
-
-            super::ToolSpec {
-                name,
-                description: desc,
-                input_schema: json!({
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                }),
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Execute a custom tool with the given input.
     pub fn execute(&self, name: &str, input: &Value) -> Result<String, String> {
-        let tool = self.find(name).ok_or_else(|| format!("custom tool not found: {name}"))?;
+        let tool = self
+            .find(name)
+            .ok_or_else(|| format!("custom tool not found: {name}"))?;
 
         match tool.r#type {
             ToolType::Shell => execute_shell_tool(tool, input),
@@ -208,7 +223,9 @@ impl CustomToolRegistry {
 
 /// Execute a shell-type custom tool.
 fn execute_shell_tool(tool: &CustomTool, input: &Value) -> Result<String, String> {
-    let template = tool.command.as_deref()
+    let template = tool
+        .command
+        .as_deref()
         .ok_or_else(|| format!("tool '{}' has type=shell but no command", tool.name))?;
 
     // Substitute parameters into the command template
@@ -218,28 +235,34 @@ fn execute_shell_tool(tool: &CustomTool, input: &Value) -> Result<String, String
     let lower = command.to_lowercase();
     for pattern in ["rm -rf /", "mkfs", "dd if=", "> /dev/"] {
         if lower.contains(pattern) {
-            return Err(format!("blocked: command contains dangerous pattern '{pattern}'"));
+            return Err(format!(
+                "blocked: command contains dangerous pattern '{pattern}'"
+            ));
         }
     }
 
-    let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
-    let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+    let shell = if cfg!(target_os = "windows") {
+        "cmd"
+    } else {
+        "sh"
+    };
+    let flag = if cfg!(target_os = "windows") {
+        "/C"
+    } else {
+        "-c"
+    };
 
     let timeout_secs: u64 = std::env::var("TACHY_TOOL_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30)
-        .max(5)
-        .min(300);
+        .clamp(5, 300);
 
     // Run in a background thread so we can enforce a hard deadline.
     let command_owned = command.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = Command::new(shell)
-            .arg(flag)
-            .arg(&command_owned)
-            .output();
+        let result = Command::new(shell).arg(flag).arg(&command_owned).output();
         let _ = tx.send(result);
     });
     let output = rx
@@ -257,20 +280,31 @@ fn execute_shell_tool(tool: &CustomTool, input: &Value) -> Result<String, String
             Ok(stdout)
         }
     } else {
-        Err(format!("command failed (exit {}): {}", output.status.code().unwrap_or(-1), stderr))
+        Err(format!(
+            "command failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr
+        ))
     }
 }
 
 /// Execute an HTTP-type custom tool.
 fn execute_http_tool(tool: &CustomTool, input: &Value) -> Result<String, String> {
-    let url_template = tool.url.as_deref()
+    let url_template = tool
+        .url
+        .as_deref()
         .ok_or_else(|| format!("tool '{}' has type=http but no url", tool.name))?;
     let method = tool.method.as_deref().unwrap_or("GET").to_uppercase();
 
     let url = substitute_params(url_template, &tool.parameters, input)?;
 
     // Build the request using curl (no additional Rust HTTP dependency needed)
-    let mut args = vec!["-s".to_string(), "-S".to_string(), "--max-time".to_string(), tool.timeout_secs.to_string()];
+    let mut args = vec![
+        "-s".to_string(),
+        "-S".to_string(),
+        "--max-time".to_string(),
+        tool.timeout_secs.to_string(),
+    ];
 
     args.push("-X".to_string());
     args.push(method);
@@ -320,7 +354,11 @@ fn substitute_params(
         if result.contains(&placeholder) {
             let value = obj
                 .and_then(|o| o.get(name))
-                .and_then(|v| v.as_str().map(std::string::ToString::to_string).or_else(|| Some(v.to_string())))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(std::string::ToString::to_string)
+                        .or_else(|| Some(v.to_string()))
+                })
                 .or_else(|| def.default.clone())
                 .ok_or_else(|| {
                     if def.required {
@@ -360,7 +398,10 @@ fn expand_env_vars(s: &str) -> String {
     let mut output = String::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() && (chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_') {
+        if chars[i] == '$'
+            && i + 1 < chars.len()
+            && (chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_')
+        {
             // Read the variable name
             let start = i + 1;
             let mut end = start;
@@ -431,7 +472,12 @@ fn parse_tools_yaml(content: &str) -> Result<Vec<CustomTool>, String> {
                     tools.push(t);
                 }
             }
-            let name = trimmed.strip_prefix("- name:").unwrap().trim().trim_matches('"').trim_matches('\'');
+            let name = trimmed
+                .strip_prefix("- name:")
+                .unwrap()
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
             let mut map = serde_json::Map::new();
             map.insert("name".to_string(), json!(name));
             current_tool = Some(map);
@@ -471,7 +517,12 @@ fn parse_tools_yaml(content: &str) -> Result<Vec<CustomTool>, String> {
 
             if in_tags {
                 if trimmed.starts_with("- ") {
-                    let val = trimmed.strip_prefix("- ").unwrap().trim().trim_matches('"').trim_matches('\'');
+                    let val = trimmed
+                        .strip_prefix("- ")
+                        .unwrap()
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     if let Some(tags) = current_tags.as_mut() {
                         tags.push(json!(val));
                     }
@@ -492,14 +543,18 @@ fn parse_tools_yaml(content: &str) -> Result<Vec<CustomTool>, String> {
                         continue;
                     }
                 }
-                if indent <= 4 { in_headers = false; }
+                if indent <= 4 {
+                    in_headers = false;
+                }
             }
 
             if in_params {
                 // Parameter name line: "      query:" (indent 6+, ends with :, no value)
                 if indent >= 6 && trimmed.ends_with(':') && !trimmed.contains(": ") {
                     // Save previous param
-                    if let (Some(pname), Some(pmap)) = (current_param_name.take(), current_param.take()) {
+                    if let (Some(pname), Some(pmap)) =
+                        (current_param_name.take(), current_param.take())
+                    {
                         if let Some(params) = current_params.as_mut() {
                             params.insert(pname, Value::Object(pmap));
                         }
@@ -531,7 +586,9 @@ fn parse_tools_yaml(content: &str) -> Result<Vec<CustomTool>, String> {
                     in_params = false;
                     in_param_detail = false;
                     // Save last param
-                    if let (Some(pname), Some(pmap)) = (current_param_name.take(), current_param.take()) {
+                    if let (Some(pname), Some(pmap)) =
+                        (current_param_name.take(), current_param.take())
+                    {
                         if let Some(params) = current_params.as_mut() {
                             params.insert(pname, Value::Object(pmap));
                         }
@@ -660,12 +717,15 @@ tools:
     #[test]
     fn substitutes_params() {
         let mut params = BTreeMap::new();
-        params.insert("name".to_string(), ParamDef {
-            r#type: "string".to_string(),
-            description: None,
-            required: true,
-            default: None,
-        });
+        params.insert(
+            "name".to_string(),
+            ParamDef {
+                r#type: "string".to_string(),
+                description: None,
+                required: true,
+                default: None,
+            },
+        );
         let input = json!({"name": "Alice"});
         let result = substitute_params("hello {name}", &params, &input).unwrap();
         assert_eq!(result, "hello Alice");
@@ -705,16 +765,21 @@ tools:
             description: "test".to_string(),
             r#type: ToolType::Shell,
             command: Some("echo {msg}".to_string()),
-            method: None, url: None, headers: BTreeMap::new(),
+            method: None,
+            url: None,
+            headers: BTreeMap::new(),
             body_template: None,
             parameters: {
                 let mut p = BTreeMap::new();
-                p.insert("msg".to_string(), ParamDef {
-                    r#type: "string".to_string(),
-                    description: None,
-                    required: true,
-                    default: None,
-                });
+                p.insert(
+                    "msg".to_string(),
+                    ParamDef {
+                        r#type: "string".to_string(),
+                        description: None,
+                        required: true,
+                        default: None,
+                    },
+                );
                 p
             },
             approval_required: false,
@@ -733,16 +798,21 @@ tools:
             description: "test".to_string(),
             r#type: ToolType::Shell,
             command: Some("rm -rf / {path}".to_string()),
-            method: None, url: None, headers: BTreeMap::new(),
+            method: None,
+            url: None,
+            headers: BTreeMap::new(),
             body_template: None,
             parameters: {
                 let mut p = BTreeMap::new();
-                p.insert("path".to_string(), ParamDef {
-                    r#type: "string".to_string(),
-                    description: None,
-                    required: true,
-                    default: None,
-                });
+                p.insert(
+                    "path".to_string(),
+                    ParamDef {
+                        r#type: "string".to_string(),
+                        description: None,
+                        required: true,
+                        default: None,
+                    },
+                );
                 p
             },
             approval_required: false,

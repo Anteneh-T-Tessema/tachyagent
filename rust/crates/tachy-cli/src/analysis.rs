@@ -6,7 +6,10 @@ use std::io::{self, Write};
 
 use crate::DEFAULT_MODEL;
 
-pub(crate) fn run_graph(format: &str, file: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_graph(
+    format: &str,
+    file: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let graph = intelligence::DependencyGraph::build(&cwd);
 
@@ -28,8 +31,13 @@ pub(crate) fn run_graph(format: &str, file: Option<&str>) -> Result<(), Box<dyn 
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         "summary" => {
-            println!("Dependency graph — {} nodes, {} edges", graph.nodes.len(), graph.edge_count);
-            let mut langs: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+            println!(
+                "Dependency graph — {} nodes, {} edges",
+                graph.nodes.len(),
+                graph.edge_count
+            );
+            let mut langs: std::collections::BTreeMap<&str, usize> =
+                std::collections::BTreeMap::new();
             for node in graph.nodes.values() {
                 *langs.entry(node.language.as_str()).or_default() += 1;
             }
@@ -37,7 +45,11 @@ pub(crate) fn run_graph(format: &str, file: Option<&str>) -> Result<(), Box<dyn 
                 println!("  {lang}: {count} files");
             }
         }
-        _ => return Err(format!("unknown graph format: {format}\n  supported: json, summary").into()),
+        _ => {
+            return Err(
+                format!("unknown graph format: {format}\n  supported: json, summary").into(),
+            )
+        }
     }
     Ok(())
 }
@@ -75,12 +87,26 @@ pub(crate) fn run_dashboard() -> Result<(), Box<dyn std::error::Error>> {
                 println!();
                 println!("  Total requests : {}", json["total_requests"]);
                 println!("  Total tokens   : {}", json["total_tokens"]);
-                println!("  Avg tokens/sec : {:.1}", json["avg_tokens_per_sec"].as_f64().unwrap_or(0.0));
-                println!("  Last tokens/sec: {:.1}", json["last_tokens_per_sec"].as_f64().unwrap_or(0.0));
-                println!("  p50 TTFT       : {:.0}ms", json["p50_ttft_ms"].as_f64().unwrap_or(0.0));
-                println!("  p95 TTFT       : {:.0}ms", json["p95_ttft_ms"].as_f64().unwrap_or(0.0));
+                println!(
+                    "  Avg tokens/sec : {:.1}",
+                    json["avg_tokens_per_sec"].as_f64().unwrap_or(0.0)
+                );
+                println!(
+                    "  Last tokens/sec: {:.1}",
+                    json["last_tokens_per_sec"].as_f64().unwrap_or(0.0)
+                );
+                println!(
+                    "  p50 TTFT       : {:.0}ms",
+                    json["p50_ttft_ms"].as_f64().unwrap_or(0.0)
+                );
+                println!(
+                    "  p95 TTFT       : {:.0}ms",
+                    json["p95_ttft_ms"].as_f64().unwrap_or(0.0)
+                );
                 let cost = json["estimated_cost_usd"].as_f64().unwrap_or(0.0);
-                println!("  Est. cost      : ${cost:.4}  (local compute proxy at $0.002/1k tokens)");
+                println!(
+                    "  Est. cost      : ${cost:.4}  (local compute proxy at $0.002/1k tokens)"
+                );
                 println!();
                 if let Some(models) = json["models"].as_array() {
                     if !models.is_empty() {
@@ -110,7 +136,10 @@ pub(crate) fn run_search(query: &str, limit: usize) -> Result<(), Box<dyn std::e
     let resp = std::process::Command::new("curl")
         .args([
             "-sf",
-            &format!("{daemon_url}/api/search?q={}&limit={limit}", urlencoding_simple(query)),
+            &format!(
+                "{daemon_url}/api/search?q={}&limit={limit}",
+                urlencoding_simple(query)
+            ),
         ])
         .output();
 
@@ -126,7 +155,9 @@ pub(crate) fn run_search(query: &str, limit: usize) -> Result<(), Box<dyn std::e
 
     println!("Searching codebase for: {query}\n");
     let cfg = intelligence::IndexerConfig::default();
-    let index = if let Ok(i) = intelligence::CodebaseIndexer::load_index(&cwd) { i } else {
+    let index = if let Ok(i) = intelligence::CodebaseIndexer::load_index(&cwd) {
+        i
+    } else {
         print!("Building index... ");
         io::stdout().flush().ok();
         let idx = intelligence::CodebaseIndexer::build_index(&cwd, &cfg)?;
@@ -183,12 +214,10 @@ fn print_search_results(query: &str, json: &serde_json::Value) {
                 let path = item.get("path").and_then(|v| v.as_str()).unwrap_or("?");
                 let lang = item.get("language").and_then(|v| v.as_str()).unwrap_or("");
                 let summary = item.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-                let exports: Vec<_> = item.get("exports")
+                let exports: Vec<_> = item
+                    .get("exports")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.iter()
-                        .filter_map(|e| e.as_str())
-                        .take(5)
-                        .collect())
+                    .map(|a| a.iter().filter_map(|e| e.as_str()).take(5).collect())
                     .unwrap_or_default();
                 println!("  {}. {} ({})", i + 1, path, lang);
                 if !exports.is_empty() {
@@ -207,7 +236,10 @@ fn print_search_results(query: &str, json: &serde_json::Value) {
     }
 }
 
-pub(crate) fn run_export_audit(format: &str, output: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_export_audit(
+    format: &str,
+    output: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let audit_path = cwd.join(".tachy").join("audit.log");
 
@@ -222,13 +254,13 @@ pub(crate) fn run_export_audit(format: &str, output: Option<&str>) -> Result<(),
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
 
-    let outfile = output.map(std::path::Path::new).unwrap_or_else(|| {
-        match format {
+    let outfile = output
+        .map(std::path::Path::new)
+        .unwrap_or_else(|| match format {
             "soc2" => std::path::Path::new("tachy-soc2-report.json"),
-            "csv"  => std::path::Path::new("tachy-audit.csv"),
-            _      => std::path::Path::new("tachy-audit-export.json"),
-        }
-    });
+            "csv" => std::path::Path::new("tachy-audit.csv"),
+            _ => std::path::Path::new("tachy-audit-export.json"),
+        });
 
     match format {
         "soc2" => {
@@ -250,10 +282,10 @@ pub(crate) fn run_export_audit(format: &str, output: Option<&str>) -> Result<(),
         "csv" => {
             let mut csv = "timestamp,kind,severity,description\n".to_string();
             for e in &events {
-                let ts    = e["timestamp"].as_str().unwrap_or("-").replace(',', " ");
-                let kind  = e["kind"].as_str().unwrap_or("-").replace(',', " ");
-                let sev   = e["severity"].as_str().unwrap_or("-").replace(',', " ");
-                let desc  = e["description"].as_str().unwrap_or("-").replace(',', " ");
+                let ts = e["timestamp"].as_str().unwrap_or("-").replace(',', " ");
+                let kind = e["kind"].as_str().unwrap_or("-").replace(',', " ");
+                let sev = e["severity"].as_str().unwrap_or("-").replace(',', " ");
+                let desc = e["description"].as_str().unwrap_or("-").replace(',', " ");
                 csv.push_str(&format!("{ts},{kind},{sev},{desc}\n"));
             }
             std::fs::write(outfile, csv)?;
@@ -275,10 +307,15 @@ fn chrono_now_str_iso() -> String {
     format!("{secs}Z (unix {secs})")
 }
 
-pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_policy(
+    subcommand: &str,
+    file: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let default_policy_path = cwd.join("tachy-policy.yaml");
-    let policy_path = file.map(std::path::Path::new).unwrap_or(&default_policy_path);
+    let policy_path = file
+        .map(std::path::Path::new)
+        .unwrap_or(&default_policy_path);
 
     match subcommand {
         "show" => {
@@ -288,33 +325,38 @@ pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box
         }
         "init" => {
             if policy_path.exists() {
-                return Err(format!("{} already exists — remove it first", policy_path.display()).into());
+                return Err(
+                    format!("{} already exists — remove it first", policy_path.display()).into(),
+                );
             }
             let pf = audit::PolicyFile::enterprise_default();
-            pf.save(policy_path).map_err(|e| format!("failed to write policy: {e}"))?;
+            pf.save(policy_path)
+                .map_err(|e| format!("failed to write policy: {e}"))?;
             println!("Created {}", policy_path.display());
             println!("Edit it, then run: tachy policy validate");
         }
-        "validate" => {
-            match audit::PolicyFile::load(policy_path) {
-                Ok(pf) => {
-                    println!("Policy '{}' is valid.", policy_path.display());
-                    let json = serde_json::to_string_pretty(&pf)?;
-                    let rule_count = json.matches("allow").count() + json.matches("deny").count();
-                    println!("  {rule_count} allow/deny rules found");
-                }
-                Err(e) => return Err(format!("invalid policy: {e}").into()),
+        "validate" => match audit::PolicyFile::load(policy_path) {
+            Ok(pf) => {
+                println!("Policy '{}' is valid.", policy_path.display());
+                let json = serde_json::to_string_pretty(&pf)?;
+                let rule_count = json.matches("allow").count() + json.matches("deny").count();
+                println!("  {rule_count} allow/deny rules found");
             }
-        }
+            Err(e) => return Err(format!("invalid policy: {e}").into()),
+        },
         "set" => {
             let pf = audit::PolicyFile::load(policy_path)
                 .map_err(|e| format!("cannot load policy '{}': {e}", policy_path.display()))?;
             let body = serde_json::to_string(&pf)?;
             let out = std::process::Command::new("curl")
                 .args([
-                    "-sf", "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                    "-d", &body,
+                    "-sf",
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-d",
+                    &body,
                     "http://127.0.0.1:7777/api/policy",
                 ])
                 .output();
@@ -324,7 +366,12 @@ pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box
                 Err(_) => eprintln!("Daemon not running — start with: tachy serve"),
             }
         }
-        other => return Err(format!("unknown policy subcommand: {other}\n  usage: tachy policy show|init|validate|set").into()),
+        other => {
+            return Err(format!(
+                "unknown policy subcommand: {other}\n  usage: tachy policy show|init|validate|set"
+            )
+            .into())
+        }
     }
     Ok(())
 }
@@ -343,12 +390,25 @@ pub(crate) fn run_swarm(
             let node_url = url.ok_or("usage: swarm register <url>")?;
             let body = serde_json::json!({ "url": node_url });
             let out = std::process::Command::new("curl")
-                .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body.to_string(),
-                       &format!("{daemon_url}/api/swarm/register")])
+                .args([
+                    "-sf",
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-d",
+                    &body.to_string(),
+                    &format!("{daemon_url}/api/swarm/register"),
+                ])
                 .output();
             match out {
-                Ok(o) if o.status.success() => println!("✓ Node {node_url} registered successfully."),
-                Ok(o) => eprintln!("✗ Failed to register node: {}", String::from_utf8_lossy(&o.stderr)),
+                Ok(o) if o.status.success() => {
+                    println!("✓ Node {node_url} registered successfully.");
+                }
+                Ok(o) => eprintln!(
+                    "✗ Failed to register node: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                ),
                 Err(_) => eprintln!("⚠ Daemon not running — start with: tachy serve"),
             }
         }
@@ -385,13 +445,24 @@ pub(crate) fn run_swarm(
                         for entry in rd.flatten() {
                             let p = entry.path();
                             if p.is_dir() {
-                                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                                if !matches!(name.as_str(), "target" | "node_modules" | ".git" | ".tachy") {
+                                let name = p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                if !matches!(
+                                    name.as_str(),
+                                    "target" | "node_modules" | ".git" | ".tachy"
+                                ) {
                                     collect(&p, out);
                                 }
                             } else if let Some(ext) = p.extension() {
-                                if matches!(ext.to_str().unwrap_or(""), "rs" | "ts" | "tsx" | "js" | "py" | "go") {
-                                    if let Ok(rel) = p.strip_prefix(std::env::current_dir().unwrap_or_default()) {
+                                if matches!(
+                                    ext.to_str().unwrap_or(""),
+                                    "rs" | "ts" | "tsx" | "js" | "py" | "go"
+                                ) {
+                                    if let Ok(rel) =
+                                        p.strip_prefix(std::env::current_dir().unwrap_or_default())
+                                    {
                                         out.push(rel.to_string_lossy().to_string());
                                     }
                                 }
@@ -414,28 +485,44 @@ pub(crate) fn run_swarm(
             });
 
             let out = std::process::Command::new("curl")
-                .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body.to_string(),
-                       &format!("{daemon_url}/api/swarm/runs")])
+                .args([
+                    "-sf",
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-d",
+                    &body.to_string(),
+                    &format!("{daemon_url}/api/swarm/runs"),
+                ])
                 .output();
 
             match out {
                 Ok(o) if o.status.success() => {
                     let resp = String::from_utf8_lossy(&o.stdout);
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
-                        println!("✓ Swarm run submitted: run_id={}", v["run_id"].as_str().unwrap_or("?"));
+                        println!(
+                            "✓ Swarm run submitted: run_id={}",
+                            v["run_id"].as_str().unwrap_or("?")
+                        );
                         println!("  Nodes will coordinate implementation steps asynchronously.");
                     }
                 }
                 _ => eprintln!("⚠ Daemon not running — swarm requires an active coordinator node."),
             }
         }
-        other => eprintln!("Unknown swarm subcommand: {other}\nUsage: tachy swarm register|list|status|run"),
+        other => eprintln!(
+            "Unknown swarm subcommand: {other}\nUsage: tachy swarm register|list|status|run"
+        ),
     }
 
     Ok(())
 }
 
-pub(crate) fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_finetune(
+    output: Option<&str>,
+    base_model: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let sessions_dir = cwd.join(".tachy").join("sessions");
 
@@ -443,7 +530,8 @@ pub(crate) fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Re
         return Err("no session history found in .tachy/sessions/ — chat with tachy first to generate training data".into());
     }
 
-    let dataset = intelligence::FinetuneDataset::from_sessions_isolated(&sessions_dir, false, None, None);
+    let dataset =
+        intelligence::FinetuneDataset::from_sessions_isolated(&sessions_dir, false, None, None);
     if dataset.entries.is_empty() {
         println!("⚠ No (user, assistant) pairs found in session history.");
         return Ok(());
@@ -454,7 +542,10 @@ pub(crate) fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Re
 
     let jsonl_path = std::path::Path::new(out_dir).join("dataset.jsonl");
     dataset.save_jsonl(&jsonl_path)?;
-    println!("✓ Dataset: {} training pairs from {} sessions", dataset.total_pairs, dataset.source_sessions);
+    println!(
+        "✓ Dataset: {} training pairs from {} sessions",
+        dataset.total_pairs, dataset.source_sessions
+    );
     println!("  Written to {}", jsonl_path.display());
 
     let base = base_model.unwrap_or(DEFAULT_MODEL);
@@ -491,13 +582,17 @@ pub(crate) fn run_optimize_brain() -> Result<(), Box<dyn std::error::Error>> {
     println!("⚡ Tachy Autonomous Optimization");
     println!("  Analyzing session history for Gold Standard candidates...");
 
-    match intelligence::FinetuneDataset::prepare_training_bundle(&sessions_dir, &output_dir, base_model) {
+    match intelligence::FinetuneDataset::prepare_training_bundle(
+        &sessions_dir,
+        &output_dir,
+        base_model,
+    ) {
         Ok(path) => {
             println!("✓ Optimization bundle ready at {path}");
             println!();
             println!("Next steps:");
-            println!("  1. bash {}/train.sh", path);
-            println!("  2. ollama create my-tachy-model -f {}/Modelfile", path);
+            println!("  1. bash {path}/train.sh");
+            println!("  2. ollama create my-tachy-model -f {path}/Modelfile");
             Ok(())
         }
         Err(e) => Err(format!("Optimization failed: {e}").into()),
@@ -509,24 +604,34 @@ pub(crate) fn print_help() {
     println!("Usage:");
     println!("  tachy init                                Initialize workspace (.tachy/)");
     println!("  tachy setup                               Full setup: check Ollama, pull model, init workspace");
-    println!("  tachy doctor                              Check Ollama, GPU, models, test tool calling");
+    println!(
+        "  tachy doctor                              Check Ollama, GPU, models, test tool calling"
+    );
     println!("  tachy pull <model>                        Pull a model via Ollama");
     println!("  tachy models                              List registered models");
     println!("  tachy models --local                      List locally installed models");
     println!("  tachy agents                              List agent templates");
     println!("  tachy yaya-preferences --subject NAME     Show Yaya retrieval policy context for a subject");
     println!("  tachy yaya-preferences --subject NAME --set-sources a,b [--set-terms x,y]");
-    println!("                                           Update Yaya retrieval preferences from Tachy");
+    println!(
+        "                                           Update Yaya retrieval preferences from Tachy"
+    );
     println!("  tachy search <query>                      Search the indexed codebase");
     println!("  tachy pipeline run <pipeline.yaml>        Run an agent pipeline from YAML");
     println!("  tachy pipeline validate <pipeline.yaml>   Validate pipeline without running");
     println!("  tachy pipeline init [output.yaml]         Generate a starter pipeline YAML");
     println!("  tachy graph [--format json|summary]       Print dependency/call graph (C1)");
     println!("  tachy graph --file <path>                 Show transitive dependents of a file");
-    println!("  tachy monorepo                            Detect monorepo structure and members (C3)");
+    println!(
+        "  tachy monorepo                            Detect monorepo structure and members (C3)"
+    );
     println!("  tachy dashboard                           Show live performance dashboard (E2)");
-    println!("  tachy export-audit [--format json|soc2|csv] [--output FILE]  Export audit log (F1)");
-    println!("  tachy finetune [--output DIR] [--base-model MODEL]  Generate LoRA training data (F3)");
+    println!(
+        "  tachy export-audit [--format json|soc2|csv] [--output FILE]  Export audit log (F1)"
+    );
+    println!(
+        "  tachy finetune [--output DIR] [--base-model MODEL]  Generate LoRA training data (F3)"
+    );
     println!("  tachy verify-audit                        Verify audit trail integrity");
     println!("  tachy warmup [MODEL]                      Pre-load model into GPU memory");
     println!("  tachy [--model MODEL]                     Start interactive REPL");
@@ -546,7 +651,9 @@ pub(crate) fn print_help() {
     println!("  GET  /api/yaya/retrieval-preferences?workspace=<w>&subject=<s>  Inspect Yaya retrieval policy context");
     println!("  POST /api/yaya/retrieval-preferences      Update Yaya retrieval policy context");
     println!("  GET  /api/search?q=<q>    Search indexed codebase");
-    println!("  GET  /api/graph           Full dependency graph (add ?file=<path> for per-file view)");
+    println!(
+        "  GET  /api/graph           Full dependency graph (add ?file=<path> for per-file view)"
+    );
     println!("  GET  /api/monorepo        Monorepo workspace structure");
     println!("  GET  /api/dashboard       Live performance stats + cost estimate");
     println!("  GET  /api/policy          Get current tachy-policy.yaml");

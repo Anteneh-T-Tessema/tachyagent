@@ -4,9 +4,9 @@
 //! Properties 12–19: Marketplace correctness.
 //! Validates: Requirements 6.1–6.5, 7.1–7.5
 
-use proptest::prelude::*;
 use daemon::{Marketplace, MarketplaceError};
 use platform::AgentTemplate;
+use proptest::prelude::*;
 
 fn chat_template(name: &str) -> AgentTemplate {
     let mut t = AgentTemplate::chat_assistant();
@@ -23,7 +23,9 @@ fn publish_preserves_fields() {
     // Feature: product-hardening-v3, Property 12: Marketplace publish preserves all listing fields
     let mut mp = Marketplace::new();
     let tmpl = chat_template("my-agent");
-    let id = mp.publish(tmpl, "A chat agent", "1.0.0", "author-1").unwrap();
+    let id = mp
+        .publish(tmpl, "A chat agent", "1.0.0", "author-1")
+        .unwrap();
 
     let listings = mp.listings();
     let listing = listings.get(&id).unwrap();
@@ -74,12 +76,20 @@ proptest! {
 fn invalid_semver_rejected() {
     // Feature: product-hardening-v3, Property 13: Semver validation
     let mut mp = Marketplace::new();
-    let cases = ["1.0", "1", "v1.0.0", "1.0.0-alpha", "1.0.0.0", "", "one.two.three"];
+    let cases = [
+        "1.0",
+        "1",
+        "v1.0.0",
+        "1.0.0-alpha",
+        "1.0.0.0",
+        "",
+        "one.two.three",
+    ];
     for bad in &cases {
         let result = mp.publish(chat_template("t"), "d", bad, "a");
         assert!(
             matches!(result, Err(MarketplaceError::InvalidSemver)),
-            "version '{}' should be invalid", bad
+            "version '{bad}' should be invalid"
         );
     }
 }
@@ -113,15 +123,25 @@ proptest! {
 fn version_history_append_only() {
     // Feature: product-hardening-v3, Property 14: Version history is append-only with latest as default
     let mut mp = Marketplace::new();
-    mp.publish(chat_template("my-bot"), "Bot", "1.0.0", "a").unwrap();
-    mp.publish(chat_template("my-bot"), "Bot v2", "1.1.0", "a").unwrap();
-    mp.publish(chat_template("my-bot"), "Bot v3", "2.0.0", "a").unwrap();
+    mp.publish(chat_template("my-bot"), "Bot", "1.0.0", "a")
+        .unwrap();
+    mp.publish(chat_template("my-bot"), "Bot v2", "1.1.0", "a")
+        .unwrap();
+    mp.publish(chat_template("my-bot"), "Bot v3", "2.0.0", "a")
+        .unwrap();
 
     let listings = mp.listings();
     // All versions should be in a single listing
     let listing = listings.values().find(|l| l.name == "my-bot").unwrap();
-    assert_eq!(listing.versions.len(), 3, "all 3 versions should be retained");
-    assert_eq!(listing.default_version, "2.0.0", "latest version should be default");
+    assert_eq!(
+        listing.versions.len(),
+        3,
+        "all 3 versions should be retained"
+    );
+    assert_eq!(
+        listing.default_version, "2.0.0",
+        "latest version should be default"
+    );
 }
 
 proptest! {
@@ -157,7 +177,8 @@ proptest! {
 fn duplicate_version_rejected() {
     // Feature: product-hardening-v3, Property 15: Duplicate name+version conflict detection
     let mut mp = Marketplace::new();
-    mp.publish(chat_template("dupe-bot"), "Bot", "1.0.0", "a").unwrap();
+    mp.publish(chat_template("dupe-bot"), "Bot", "1.0.0", "a")
+        .unwrap();
     let result = mp.publish(chat_template("dupe-bot"), "Bot again", "1.0.0", "a");
     assert!(
         matches!(result, Err(MarketplaceError::ConflictVersion)),
@@ -197,20 +218,31 @@ fn search_sorted_by_rating_descending() {
     // Feature: product-hardening-v3, Property 16: Marketplace search results sorted by rating descending
     let mut mp = Marketplace::new();
 
-    let id_a = mp.publish(chat_template("agent-a"), "A", "1.0.0", "u1").unwrap();
-    let id_b = mp.publish(chat_template("agent-b"), "B", "1.0.0", "u2").unwrap();
-    let id_c = mp.publish(chat_template("agent-c"), "C", "1.0.0", "u3").unwrap();
+    let id_a = mp
+        .publish(chat_template("agent-a"), "A", "1.0.0", "u1")
+        .unwrap();
+    let id_b = mp
+        .publish(chat_template("agent-b"), "B", "1.0.0", "u2")
+        .unwrap();
+    let id_c = mp
+        .publish(chat_template("agent-c"), "C", "1.0.0", "u3")
+        .unwrap();
 
-    mp.rate(&id_a, "user-1", 5).unwrap();  // avg: 5.0
-    mp.rate(&id_c, "user-1", 3).unwrap();  // avg: 3.0
-    // id_b has no ratings: avg 0.0
+    mp.rate(&id_a, "user-1", 5).unwrap(); // avg: 5.0
+    mp.rate(&id_c, "user-1", 3).unwrap(); // avg: 3.0
+                                          // id_b has no ratings: avg 0.0
 
     let results = mp.search(None, 0, 10);
     assert_eq!(results.len(), 3);
-    assert!(results[0].average_rating >= results[1].average_rating,
-        "first result should have highest rating");
-    assert!(results[1].average_rating >= results[2].average_rating,
-        "results should be sorted descending by rating");
+    assert!(results.iter().any(|item| item.id == id_b));
+    assert!(
+        results[0].average_rating >= results[1].average_rating,
+        "first result should have highest rating"
+    );
+    assert!(
+        results[1].average_rating >= results[2].average_rating,
+        "results should be sorted descending by rating"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +255,9 @@ fn install_returns_correct_template() {
     let mut mp = Marketplace::new();
     let mut tmpl = AgentTemplate::code_reviewer();
     tmpl.name = "code-bot".to_string();
-    let id = mp.publish(tmpl.clone(), "Code reviewer", "1.0.0", "auth").unwrap();
+    let id = mp
+        .publish(tmpl.clone(), "Code reviewer", "1.0.0", "auth")
+        .unwrap();
 
     let result = mp.install(&id, None).unwrap();
     assert_eq!(result.template.name, "code-bot");
@@ -253,7 +287,9 @@ proptest! {
 fn rating_average_correct() {
     // Feature: product-hardening-v3, Property 18: Rating average correctness
     let mut mp = Marketplace::new();
-    let id = mp.publish(chat_template("rated-bot"), "R", "1.0.0", "a").unwrap();
+    let id = mp
+        .publish(chat_template("rated-bot"), "R", "1.0.0", "a")
+        .unwrap();
 
     mp.rate(&id, "user-1", 5).unwrap();
     mp.rate(&id, "user-2", 3).unwrap();
@@ -263,7 +299,8 @@ fn rating_average_correct() {
     let expected_avg = (5.0 + 3.0 + 4.0) / 3.0;
     assert!(
         (listing.average_rating - expected_avg).abs() < 0.01,
-        "average should be {expected_avg:.2}, got {:.2}", listing.average_rating
+        "average should be {expected_avg:.2}, got {:.2}",
+        listing.average_rating
     );
     assert_eq!(listing.rating_count, 3);
 }
@@ -272,14 +309,22 @@ fn rating_average_correct() {
 fn rating_is_per_user_idempotent() {
     // Feature: product-hardening-v3, Property 18: Rating average correctness
     let mut mp = Marketplace::new();
-    let id = mp.publish(chat_template("idem-bot"), "I", "1.0.0", "a").unwrap();
+    let id = mp
+        .publish(chat_template("idem-bot"), "I", "1.0.0", "a")
+        .unwrap();
 
     mp.rate(&id, "user-1", 2).unwrap();
     mp.rate(&id, "user-1", 5).unwrap(); // update — not a second rating
 
     let listing = &mp.listings()[&id];
-    assert_eq!(listing.rating_count, 1, "user-1 has only one rating (updated)");
-    assert!((listing.average_rating - 5.0).abs() < 0.01, "average should reflect the update");
+    assert_eq!(
+        listing.rating_count, 1,
+        "user-1 has only one rating (updated)"
+    );
+    assert!(
+        (listing.average_rating - 5.0).abs() < 0.01,
+        "average should reflect the update"
+    );
 }
 
 proptest! {
@@ -317,10 +362,15 @@ fn install_with_unknown_tools_warns() {
     let id = mp.publish(tmpl, "d", "1.0.0", "a").unwrap();
 
     let known_tools = vec!["read_file".to_string(), "write_file".to_string()];
-    let result = mp.install_with_tools_check(&id, None, &known_tools).unwrap();
+    let result = mp
+        .install_with_tools_check(&id, None, &known_tools)
+        .unwrap();
 
     assert!(
-        result.warnings.iter().any(|w| w.contains("nonexistent_tool")),
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("nonexistent_tool")),
         "should warn about the unknown tool"
     );
 }
@@ -334,7 +384,12 @@ fn install_with_all_known_tools_no_warnings() {
     let id = mp.publish(tmpl, "d", "1.0.0", "a").unwrap();
 
     let known_tools = vec!["read_file".to_string(), "write_file".to_string()];
-    let result = mp.install_with_tools_check(&id, None, &known_tools).unwrap();
+    let result = mp
+        .install_with_tools_check(&id, None, &known_tools)
+        .unwrap();
 
-    assert!(result.warnings.is_empty(), "no warnings when all tools are known");
+    assert!(
+        result.warnings.is_empty(),
+        "no warnings when all tools are known"
+    );
 }

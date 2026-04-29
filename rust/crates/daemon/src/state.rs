@@ -3,11 +3,14 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, HttpAuditSink, S3AuditSink, OAuthManager, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
+use audit::{
+    AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, FilePatch, HttpAuditSink,
+    MeteringService, OAuthManager, PolicyEngine, S3AuditSink, SsoManager, StripeBillingConnector,
+};
 use backend::BackendRegistry;
 use platform::{
-    AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace,
-    ScheduleRule, ScheduledTask, TaskScheduler,
+    AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace, ScheduleRule, ScheduledTask,
+    TaskScheduler,
 };
 use runtime::FileLockManager;
 use serde::{Deserialize, Serialize};
@@ -141,7 +144,13 @@ impl InferenceStats {
     }
 
     /// Record an inference with exact input/output token counts.
-    pub fn record_with_split(&mut self, ttft_ms: u32, tps: f32, input_tokens: u64, output_tokens: u64) {
+    pub fn record_with_split(
+        &mut self,
+        ttft_ms: u32,
+        tps: f32,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
         let tokens = input_tokens + output_tokens;
         self.input_tokens += input_tokens;
         self.output_tokens += output_tokens;
@@ -181,7 +190,10 @@ pub struct IdentityService {
 }
 
 impl IdentityService {
-    pub fn get_or_create_identity(&self, agent_id: &str) -> Result<platform::crypto::AgentIdentity, String> {
+    pub fn get_or_create_identity(
+        &self,
+        agent_id: &str,
+    ) -> Result<platform::crypto::AgentIdentity, String> {
         let mut identities = self.agent_identities.lock().unwrap();
         if let Some(id) = identities.get(agent_id) {
             Ok(id.clone())
@@ -210,7 +222,7 @@ impl CommerceService {
                 return Err(format!("Quota exceeded: {e}"));
             }
         }
-        
+
         // Also check local metering aggregates if needed (e.g. for self-hosted quotas)
         Ok(())
     }
@@ -248,13 +260,13 @@ pub struct DaemonState {
     pub task_counter: u64,
     pub conv_counter: u64,
     pub api_key: Option<String>,
-    
+
     // Refactored Services
     pub identity: IdentityService,
     pub commerce: CommerceService,
     pub swarm: SwarmService,
     pub connectivity: ConnectivityService,
-    
+
     /// Shared file lock manager for parallel agent safety.
     pub file_locks: FileLockManager,
     /// Policy engine for patch-level governance.
@@ -331,19 +343,23 @@ pub struct RunTemplate {
 }
 
 impl RunTemplate {
+    #[must_use]
     pub fn calculate_hash(&self) -> String {
         let mut text = format!("template:{}:v{}", self.name, self.version);
         for task in &self.tasks {
             text.push_str(&format!("|task:{}:{}", task.template, task.prompt));
             for dep in &task.deps {
-                text.push_str(&format!("|dep:{}", dep));
+                text.push_str(&format!("|dep:{dep}"));
             }
         }
         audit::hash_text(&text)
     }
 
-    #[must_use] pub fn verify_signature(&self) -> bool {
-        let Some(sig) = &self.signature else { return false; };
+    #[must_use]
+    pub fn verify_signature(&self) -> bool {
+        let Some(sig) = &self.signature else {
+            return false;
+        };
         let hash = self.calculate_hash();
         // In production, this would use a real public key.
         // For the hardening POC, we implement identity-signing (hash == signature).
@@ -351,8 +367,12 @@ impl RunTemplate {
     }
 }
 
-fn default_version() -> String { "1.0.0".to_string() }
-fn default_status() -> TemplateStatus { TemplateStatus::Draft }
+fn default_version() -> String {
+    "1.0.0".to_string()
+}
+fn default_status() -> TemplateStatus {
+    TemplateStatus::Draft
+}
 
 /// A task definition inside a `RunTemplate`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +387,9 @@ pub struct TemplateTask {
     pub priority: u8,
 }
 
-fn default_priority() -> u8 { 5 }
+fn default_priority() -> u8 {
+    5
+}
 
 /// Audit sink that fires SSE events on `Critical` severity or `GovernanceViolation` kind.
 /// Registered as a sink in `DaemonState::init` so alerting flows through the existing
@@ -401,7 +423,9 @@ impl audit::AuditSink for AlertAuditSink {
         Ok(())
     }
 
-    fn flush(&self) -> Result<(), String> { Ok(()) }
+    fn flush(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl DaemonState {
@@ -416,7 +440,9 @@ impl DaemonState {
             audit_logger.add_sink(sink);
         }
         // Wire critical-event alerting into the audit chain.
-        audit_logger.add_sink(AlertAuditSink { bus: event_bus_tx.clone() });
+        audit_logger.add_sink(AlertAuditSink {
+            bus: event_bus_tx.clone(),
+        });
 
         audit_logger.log(&AuditEvent::new(
             "daemon",
@@ -438,7 +464,8 @@ impl DaemonState {
             std::env::var("TACHY_AUDIT_S3_ACCESS_KEY"),
             std::env::var("TACHY_AUDIT_S3_SECRET_KEY"),
         ) {
-            let prefix = std::env::var("TACHY_AUDIT_S3_PREFIX").unwrap_or_else(|_| "audit".to_string());
+            let prefix =
+                std::env::var("TACHY_AUDIT_S3_PREFIX").unwrap_or_else(|_| "audit".to_string());
             let mut sink = S3AuditSink::new(bucket, prefix, region, access_key, secret_key, None);
             if let Ok(ep) = std::env::var("TACHY_AUDIT_S3_ENDPOINT") {
                 sink = sink.with_endpoint(ep);
@@ -454,9 +481,19 @@ impl DaemonState {
         let api_key = std::env::var("TACHY_API_KEY").ok();
 
         // Register all known env secrets for masking in the audit trail.
-        if let Some(ref k) = api_key { audit_logger.mask_secret(k); }
-        for var in &["YAYA_API_KEY", "TACHY_AUDIT_S3_ACCESS_KEY", "TACHY_AUDIT_S3_SECRET_KEY", "TACHY_SYNC_KEY", "TACHY_AUDIT_HTTP_TOKEN"] {
-            if let Ok(s) = std::env::var(var) { audit_logger.mask_secret(&s); }
+        if let Some(ref k) = api_key {
+            audit_logger.mask_secret(k);
+        }
+        for var in &[
+            "YAYA_API_KEY",
+            "TACHY_AUDIT_S3_ACCESS_KEY",
+            "TACHY_AUDIT_S3_SECRET_KEY",
+            "TACHY_SYNC_KEY",
+            "TACHY_AUDIT_HTTP_TOKEN",
+        ] {
+            if let Ok(s) = std::env::var(var) {
+                audit_logger.mask_secret(&s);
+            }
         }
 
         // Restore persisted state if it exists
@@ -464,27 +501,79 @@ impl DaemonState {
         let persisted = load_persisted_state(&state_path);
         let restored = persisted.clone();
 
-        let (agents, conversations, agent_counter, task_counter, conv_counter, patch_counter, pending_patches, inference_stats, device_id, plans, harnesses, proposals) = match persisted {
+        let (
+            agents,
+            conversations,
+            agent_counter,
+            task_counter,
+            conv_counter,
+            patch_counter,
+            pending_patches,
+            inference_stats,
+            device_id,
+            plans,
+            harnesses,
+            proposals,
+        ) = match persisted {
             Some(p) => {
                 let count = p.agents.len();
                 audit_logger.log(&AuditEvent::new(
                     "daemon",
                     AuditEventKind::SessionStart,
-                    format!("restored {count} agents, {} conversations from disk", p.conversations.len()),
+                    format!(
+                        "restored {count} agents, {} conversations from disk",
+                        p.conversations.len()
+                    ),
                 ));
-                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter, p.patch_counter, p.pending_patches, p.inference_stats, p.device_id, p.plans, p.harnesses, p.proposals)
+                (
+                    p.agents,
+                    p.conversations,
+                    p.agent_counter,
+                    p.task_counter,
+                    p.conv_counter,
+                    p.patch_counter,
+                    p.pending_patches,
+                    p.inference_stats,
+                    p.device_id,
+                    p.plans,
+                    p.harnesses,
+                    p.proposals,
+                )
             }
-            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0, 0, Vec::new(), InferenceStats::default(), format!("device-{}", uuid::Uuid::new_v4()), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+            None => (
+                BTreeMap::new(),
+                BTreeMap::new(),
+                0,
+                0,
+                0,
+                0,
+                Vec::new(),
+                InferenceStats::default(),
+                format!("device-{}", uuid::Uuid::new_v4()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
         };
 
         // Initialize SyncManager if a key is provided
         let sync_manager = if let Ok(key_hex) = std::env::var("TACHY_SYNC_KEY") {
             if let Ok(key_bytes) = hex::decode(key_hex) {
                 if let Ok(key) = key_bytes.try_into() {
-                    Some(platform::sync::SyncManager::new(workspace_root.clone(), device_id.clone(), key))
-                } else { None }
-            } else { None }
-        } else { None };
+                    Some(platform::sync::SyncManager::new(
+                        workspace_root.clone(),
+                        device_id.clone(),
+                        key,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Load webhooks from config
         let webhooks: Vec<WebhookConfig> = Vec::new(); // loaded from config if present
@@ -498,8 +587,12 @@ impl DaemonState {
             Arc::new(Mutex::new(orch))
         };
 
-        let cache_path = workspace_root.join(".tachy").join("cache").join("semantic.json");
-        let semantic_cache = runtime::SemanticCache::load(&cache_path).unwrap_or_else(|_| runtime::SemanticCache::new());
+        let cache_path = workspace_root
+            .join(".tachy")
+            .join("cache")
+            .join("semantic.json");
+        let semantic_cache = runtime::SemanticCache::load(&cache_path)
+            .unwrap_or_else(|_| runtime::SemanticCache::new());
 
         let mut state = Self {
             workspace_root: workspace_root.clone(),
@@ -530,7 +623,7 @@ impl DaemonState {
             commerce: CommerceService {
                 metering: MeteringService::new(
                     audit_logger.clone(),
-                    audit::cost_model::CostModelRegistry::load(&workspace_root)
+                    audit::cost_model::CostModelRegistry::load(&workspace_root),
                 ),
                 billing: None,
                 marketplace: Marketplace::new(),
@@ -557,7 +650,7 @@ impl DaemonState {
             patch_counter,
             adapter_registry: {
                 let mut reg = intelligence::AdapterRegistry::load(
-                    workspace_root.join(".tachy").join("adapters.json")
+                    workspace_root.join(".tachy").join("adapters.json"),
                 );
                 // Migrate any adapters previously stored in PersistedState
                 if let Some(ref p) = restored {
@@ -568,7 +661,8 @@ impl DaemonState {
             team_manager: TeamManager::new(),
             inference_stats,
             tracer: {
-                let collector = std::sync::Arc::new(Mutex::new(crate::telemetry::SpanCollector::new()));
+                let collector =
+                    std::sync::Arc::new(Mutex::new(crate::telemetry::SpanCollector::new()));
                 crate::telemetry::Tracer::new(collector)
             },
             event_bus: event_bus_tx,
@@ -578,27 +672,58 @@ impl DaemonState {
             evolution: crate::engine::EvolutionManager::new(&workspace_root),
             proposals,
             liquidity: platform::finance::LiquidityMonitor::new(),
-            investment_policy: restored.as_ref().map(|p| p.investment_policy.clone()).unwrap_or_default(),
-            active_proposals: restored.as_ref().map(|p| p.active_proposals.clone()).unwrap_or_default(),
-            hive_mind: restored.as_ref().map(|p| p.hive_mind.clone()).unwrap_or_default(),
-            agent_reputations: restored.as_ref().map(|p| p.agent_reputations.clone()).unwrap_or_default(),
-            active_nodes: restored.as_ref().map(|p| p.active_nodes.clone()).unwrap_or_default(),
-            swarm_nodes: restored.as_ref().map(|p| p.swarm_nodes.clone()).unwrap_or_default(),
+            investment_policy: restored
+                .as_ref()
+                .map(|p| p.investment_policy.clone())
+                .unwrap_or_default(),
+            active_proposals: restored
+                .as_ref()
+                .map(|p| p.active_proposals.clone())
+                .unwrap_or_default(),
+            hive_mind: restored
+                .as_ref()
+                .map(|p| p.hive_mind.clone())
+                .unwrap_or_default(),
+            agent_reputations: restored
+                .as_ref()
+                .map(|p| p.agent_reputations.clone())
+                .unwrap_or_default(),
+            active_nodes: restored
+                .as_ref()
+                .map(|p| p.active_nodes.clone())
+                .unwrap_or_default(),
+            swarm_nodes: restored
+                .as_ref()
+                .map(|p| p.swarm_nodes.clone())
+                .unwrap_or_default(),
             active_crisis: restored.as_ref().and_then(|p| p.active_crisis.clone()),
-            expert_adapters: restored.as_ref().map(|p| p.expert_adapters.clone()).unwrap_or_default(),
-            allied_swarms: restored.as_ref().map(|p| p.allied_swarms.clone()).unwrap_or_default(),
+            expert_adapters: restored
+                .as_ref()
+                .map(|p| p.expert_adapters.clone())
+                .unwrap_or_default(),
+            allied_swarms: restored
+                .as_ref()
+                .map(|p| p.allied_swarms.clone())
+                .unwrap_or_default(),
             // Attempt to load a pre-built index; agents will trigger incremental
             // updates after file writes via reindex_changed_files.
             codebase_index: intelligence::CodebaseIndexer::load_index(&workspace_root).ok(),
         };
 
         // Bridge platform logs to the dashboard
-        platform::logger::set_logger(Box::new(crate::logger::DashboardLogger::new(state.event_bus.clone())));
+        platform::logger::set_logger(Box::new(crate::logger::DashboardLogger::new(
+            state.event_bus.clone(),
+        )));
         println!("[DEBUG] Logger initialized in DaemonState::init");
         platform::log_info("Testing global logger bridge");
 
         // Auto-select Gemma 4 if no model is configured
-        if state.config.agent_templates.iter().all(|t| t.model.is_empty() || t.model == "gemma4:26b") {
+        if state
+            .config
+            .agent_templates
+            .iter()
+            .all(|t| t.model.is_empty() || t.model == "gemma4:26b")
+        {
             let report = backend::run_health_check("http://localhost:11434");
             if let Some(model) = report.recommended_model {
                 if model.contains("gemma4") {
@@ -612,7 +737,8 @@ impl DaemonState {
         }
 
         if let Some(api_key) = &state.api_key {
-            state.identity.user_store = audit::UserStore::with_default_admin(&audit::hash_api_key(api_key));
+            state.identity.user_store =
+                audit::UserStore::with_default_admin(&audit::hash_api_key(api_key));
         }
 
         let mut stale_agents = Vec::new();
@@ -623,13 +749,11 @@ impl DaemonState {
             }
         }
         if !stale_agents.is_empty() {
-            state.audit_logger.log(
-                &AuditEvent::new(
-                    "daemon",
-                    AuditEventKind::SessionStart,
-                    format!("recovered {} stale running agents", stale_agents.len()),
-                ),
-            );
+            state.audit_logger.log(&AuditEvent::new(
+                "daemon",
+                AuditEventKind::SessionStart,
+                format!("recovered {} stale running agents", stale_agents.len()),
+            ));
             state.save();
         }
 
@@ -684,7 +808,11 @@ impl DaemonState {
             patch_counter: self.patch_counter,
             pending_patches: self.pending_patches.clone(),
             inference_stats: self.inference_stats.clone(),
-            device_id: self.connectivity.sync_manager.as_ref().map(|m| m.device_id().to_string())
+            device_id: self
+                .connectivity
+                .sync_manager
+                .as_ref()
+                .map(|m| m.device_id().to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
             plans: self.plans.clone(),
             harnesses: self.harnesses.clone(),
@@ -709,12 +837,16 @@ impl DaemonState {
 
         // Persist semantic cache
         let cache_dir = state_dir.join("cache");
-        if !cache_dir.exists() { let _ = std::fs::create_dir_all(&cache_dir); }
+        if !cache_dir.exists() {
+            let _ = std::fs::create_dir_all(&cache_dir);
+        }
         let _ = self.semantic_cache.save(&cache_dir.join("semantic.json"));
     }
 
     pub fn trigger_evolution(&mut self) {
-        let proposals = self.evolution.analyze_performance(&self.config.intelligence);
+        let proposals = self
+            .evolution
+            .analyze_performance(&self.config.intelligence);
         for p in proposals {
             if !self.proposals.contains_key(&p.id) {
                 self.publish_event("optimization_proposed", serde_json::json!(&p));
@@ -725,36 +857,52 @@ impl DaemonState {
     }
 
     pub fn apply_optimization(&mut self, proposal_id: &str) -> Result<(), String> {
-        let mut proposal = self.proposals.get(proposal_id).cloned().ok_or("Proposal not found")?;
+        let mut proposal = self
+            .proposals
+            .get(proposal_id)
+            .cloned()
+            .ok_or("Proposal not found")?;
         if proposal.status != crate::engine::OptimizationStatus::Pending {
             return Err("Optimization already processed".to_string());
         }
 
         proposal.status = crate::engine::OptimizationStatus::Applied;
-        self.proposals.insert(proposal_id.to_string(), proposal.clone());
+        self.proposals
+            .insert(proposal_id.to_string(), proposal.clone());
 
-        self.publish_event("evolution_applied", serde_json::json!({
-            "id": proposal_id,
-            "template": proposal.template_name,
-        }));
-        
+        self.publish_event(
+            "evolution_applied",
+            serde_json::json!({
+                "id": proposal_id,
+                "template": proposal.template_name,
+            }),
+        );
+
         self.save();
         Ok(())
     }
 
     pub fn rollback_optimization(&mut self, proposal_id: &str) -> Result<(), String> {
-        let mut proposal = self.proposals.get(proposal_id).cloned().ok_or("Proposal not found")?;
+        let mut proposal = self
+            .proposals
+            .get(proposal_id)
+            .cloned()
+            .ok_or("Proposal not found")?;
         if proposal.status != crate::engine::OptimizationStatus::Applied {
             return Err("Only applied optimizations can be rolled back".to_string());
         }
 
         proposal.status = crate::engine::OptimizationStatus::RolledBack;
-        self.proposals.insert(proposal_id.to_string(), proposal.clone());
+        self.proposals
+            .insert(proposal_id.to_string(), proposal.clone());
 
-        self.publish_event("evolution_rolled_back", serde_json::json!({
-            "id": proposal_id,
-        }));
-        
+        self.publish_event(
+            "evolution_rolled_back",
+            serde_json::json!({
+                "id": proposal_id,
+            }),
+        );
+
         self.save();
         Ok(())
     }
@@ -788,7 +936,7 @@ impl DaemonState {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
             conv.messages.push(msg);
             conv.updated_at = timestamp();
-            
+
             // Trigger Summary Agent if conversation is getting long
             if conv.messages.len() > 15 && conv.messages.len() % 5 == 0 {
                 self.summarize_conversation(conv_id);
@@ -803,19 +951,23 @@ impl DaemonState {
 
     /// Run the Summary Agent to compress the conversation history.
     pub fn summarize_conversation(&mut self, conv_id: &str) {
-        let Some(conv) = self.conversations.get_mut(conv_id) else { return; };
-        
-        let json_messages: Vec<serde_json::Value> = conv.messages.iter()
+        let Some(conv) = self.conversations.get_mut(conv_id) else {
+            return;
+        };
+
+        let json_messages: Vec<serde_json::Value> = conv
+            .messages
+            .iter()
             .filter_map(|m| serde_json::to_value(m).ok())
             .collect();
-        
+
         let summary = intelligence::SummaryManager::summarize(&json_messages);
         conv.summary = Some(summary);
-        
+
         self.audit_logger.log(&audit::AuditEvent::new(
             "daemon",
             audit::AuditEventKind::SessionCompacted,
-            format!("Conversation {} context compressed by Summary Agent", conv_id)
+            format!("Conversation {conv_id} context compressed by Summary Agent"),
         ));
     }
 
@@ -835,16 +987,25 @@ impl DaemonState {
 
     /// Approve a pending patch — apply it to disk.
     pub fn approve_patch(&mut self, patch_id: &str) -> Result<String, String> {
-        let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
+        let idx = self
+            .pending_patches
+            .iter()
+            .position(|p| p.id == patch_id)
             .ok_or_else(|| format!("patch '{patch_id}' not found"))?;
         let pending = self.pending_patches.remove(idx);
         // Apply the patch
         std::fs::write(&pending.patch.file_path, &pending.patch.new_content)
             .map_err(|e| format!("failed to apply patch: {e}"))?;
         self.audit_logger.log(
-            &AuditEvent::new("daemon", AuditEventKind::PermissionGranted,
-                format!("patch {} approved and applied: {}", patch_id, pending.patch.file_path))
-                .with_agent(&pending.patch.agent_id),
+            &AuditEvent::new(
+                "daemon",
+                AuditEventKind::PermissionGranted,
+                format!(
+                    "patch {} approved and applied: {}",
+                    patch_id, pending.patch.file_path
+                ),
+            )
+            .with_agent(&pending.patch.agent_id),
         );
         self.save();
         Ok(pending.patch.file_path)
@@ -852,42 +1013,53 @@ impl DaemonState {
 
     /// Reject a pending patch — discard it.
     pub fn reject_patch(&mut self, patch_id: &str) -> Result<String, String> {
-        let idx = self.pending_patches.iter().position(|p| p.id == patch_id)
+        let idx = self
+            .pending_patches
+            .iter()
+            .position(|p| p.id == patch_id)
             .ok_or_else(|| format!("patch '{patch_id}' not found"))?;
         let pending = self.pending_patches.remove(idx);
         self.audit_logger.log(
-            &AuditEvent::new("daemon", AuditEventKind::PermissionDenied,
-                format!("patch {} rejected: {}", patch_id, pending.patch.file_path))
-                .with_agent(&pending.patch.agent_id)
-                .with_severity(audit::AuditSeverity::Warning),
+            &AuditEvent::new(
+                "daemon",
+                AuditEventKind::PermissionDenied,
+                format!("patch {} rejected: {}", patch_id, pending.patch.file_path),
+            )
+            .with_agent(&pending.patch.agent_id)
+            .with_severity(audit::AuditSeverity::Warning),
         );
         self.save();
         Ok(pending.patch.file_path)
     }
 
-    /// Transition a plan from SafePlanReady to InProgress.
+    /// Transition a plan from `SafePlanReady` to `InProgress`.
     pub fn approve_plan(&mut self, template_name: &str) -> Result<(), String> {
         if let Some(_template) = self.run_templates.get_mut(template_name) {
             // Find any task in SafePlanReady and move to InProgress (or Created if not started)
             // For now, we assume the whole template run is being approved.
-            self.audit_logger.log(
-                &AuditEvent::new("daemon", AuditEventKind::PermissionGranted,
-                    format!("plan for template {} approved for execution", template_name))
-            );
+            self.audit_logger.log(&AuditEvent::new(
+                "daemon",
+                AuditEventKind::PermissionGranted,
+                format!("plan for template {template_name} approved for execution"),
+            ));
             self.save();
             Ok(())
         } else {
-            Err(format!("template '{}' not found", template_name))
+            Err(format!("template '{template_name}' not found"))
         }
     }
 
     /// Fork a session at a specific cryptographic hash (Pillar 1: State Reconstruction).
     /// Pinpoints the exact event, finds its position in the session, and creates a new branch.
-    pub fn fork_session_at_hash(&mut self, session_id: &str, event_hash: &str) -> Result<String, String> {
+    pub fn fork_session_at_hash(
+        &mut self,
+        session_id: &str,
+        event_hash: &str,
+    ) -> Result<String, String> {
         let audit_path = self.workspace_root.join(".tachy").join("audit.jsonl");
         let content = std::fs::read_to_string(&audit_path)
-            .map_err(|e| format!("Failed to read audit log: {}", e))?;
-        
+            .map_err(|e| format!("Failed to read audit log: {e}"))?;
+
         let mut events = Vec::new();
         for line in content.lines() {
             if let Ok(event) = serde_json::from_str::<audit::AuditEvent>(line) {
@@ -896,15 +1068,17 @@ impl DaemonState {
                 }
             }
         }
-        
+
         // 1. Find the target event and verify it belongs to this session
-        let target_idx = events.iter().position(|e| e.hash == event_hash)
-            .ok_or_else(|| format!("Hash {} not found in session {}", event_hash, session_id))?;
-        
+        let target_idx = events
+            .iter()
+            .position(|e| e.hash == event_hash)
+            .ok_or_else(|| format!("Hash {event_hash} not found in session {session_id}"))?;
+
         // 2. Count messages up to this event to find the fork point
         let mut message_count = 0;
-        for i in 0..=target_idx {
-            match events[i].kind {
+        for event in events.iter().take(target_idx + 1) {
+            match event.kind {
                 audit::AuditEventKind::UserMessage | audit::AuditEventKind::AssistantMessage => {
                     message_count += 1;
                 }
@@ -913,13 +1087,24 @@ impl DaemonState {
         }
 
         // 3. Load the session and create a new fork
-        let session_path = self.workspace_root.join(".tachy").join("sessions").join(format!("{}.json", session_id));
+        let session_path = self
+            .workspace_root
+            .join(".tachy")
+            .join("sessions")
+            .join(format!("{session_id}.json"));
         let session_json = std::fs::read_to_string(&session_path)
-            .map_err(|e| format!("Failed to read session {}: {}", session_id, e))?;
+            .map_err(|e| format!("Failed to read session {session_id}: {e}"))?;
         let session: runtime::Session = serde_json::from_str(&session_json)
-            .map_err(|e| format!("Failed to parse session {}: {}", session_id, e))?;
-        
-        let new_session_id = format!("{}-fork-{}", session_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+            .map_err(|e| format!("Failed to parse session {session_id}: {e}"))?;
+
+        let new_session_id = format!(
+            "{}-fork-{}",
+            session_id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
         let mut forked_messages = session.messages.clone();
         forked_messages.truncate(message_count);
 
@@ -934,16 +1119,20 @@ impl DaemonState {
         };
 
         // 4. Persist and Log
-        let new_session_path = self.workspace_root.join(".tachy").join("sessions").join(format!("{}.json", new_session_id));
+        let new_session_path = self
+            .workspace_root
+            .join(".tachy")
+            .join("sessions")
+            .join(format!("{new_session_id}.json"));
         let new_session_json = serde_json::to_string_pretty(&forked_session)
-            .map_err(|e| format!("Failed to serialize forked session: {}", e))?;
+            .map_err(|e| format!("Failed to serialize forked session: {e}"))?;
         std::fs::write(&new_session_path, new_session_json)
-            .map_err(|e| format!("Failed to write forked session {}: {}", new_session_id, e))?;
+            .map_err(|e| format!("Failed to write forked session {new_session_id}: {e}"))?;
 
         self.audit_logger.log(&audit::AuditEvent::new(
             &new_session_id,
             audit::AuditEventKind::SessionStart,
-            format!("Forked from {} at hash {}", session_id, event_hash)
+            format!("Forked from {session_id} at hash {event_hash}"),
         ));
 
         Ok(new_session_id)
@@ -951,10 +1140,13 @@ impl DaemonState {
 
     /// Select the best available model for a given agent role.
     /// Returns the specialized adapter if promoted, otherwise falls back to the template default.
+    #[must_use]
     pub fn get_expert_model_for_role(&self, template_name: &str) -> String {
         if let Some(template) = self.run_templates.get(template_name) {
             // Find the first task and return its model, or a default
-            template.tasks.first()
+            template
+                .tasks
+                .first()
                 .and_then(|t| t.model.clone())
                 .unwrap_or_else(|| "gemma4:26b".to_string())
         } else {
@@ -964,20 +1156,25 @@ impl DaemonState {
 
     /// Hot-swap a model adapter for a specific template.
     /// This is used by the autonomous feedback loop to promote verified fine-tuned models.
-    pub fn promote_model_adapter(&mut self, template_name: &str, new_model_name: &str) -> Result<(), String> {
+    pub fn promote_model_adapter(
+        &mut self,
+        template_name: &str,
+        new_model_name: &str,
+    ) -> Result<(), String> {
         if let Some(template) = self.run_templates.get_mut(template_name) {
-            let old_model = template.tasks.iter_mut()
+            let old_model = template
+                .tasks
+                .iter_mut()
                 .find(|t| t.template == template_name || t.template == "default")
-                .map(|t| {
+                .and_then(|t| {
                     let old = t.model.clone();
                     t.model = Some(new_model_name.to_string());
                     old
-                })
-                .flatten();
+                });
 
             self.audit_logger.log(
                 &AuditEvent::new("daemon", AuditEventKind::ModelSwitch,
-                    format!("promoted model for template {}: {:?} -> {}", template_name, old_model, new_model_name))
+                    format!("promoted model for template {template_name}: {old_model:?} -> {new_model_name}"))
             );
             self.save();
             Ok(())
@@ -991,14 +1188,17 @@ impl DaemonState {
                 }
             }
             if found {
-                self.audit_logger.log(
-                    &AuditEvent::new("daemon", AuditEventKind::ModelSwitch,
-                        format!("promoted global model for template {}: -> {}", template_name, new_model_name))
-                );
+                self.audit_logger.log(&AuditEvent::new(
+                    "daemon",
+                    AuditEventKind::ModelSwitch,
+                    format!(
+                        "promoted global model for template {template_name}: -> {new_model_name}"
+                    ),
+                ));
                 self.save();
                 return Ok(());
             }
-            Err(format!("template '{}' not found", template_name))
+            Err(format!("template '{template_name}' not found"))
         }
     }
 
@@ -1019,8 +1219,14 @@ impl DaemonState {
     /// Outbound payloads are HMAC-SHA256 signed when a `secret` is configured.
     pub fn fire_webhooks(&self, event_type: &str, payload: &serde_json::Value) {
         for webhook in &self.connectivity.webhooks {
-            if !webhook.enabled { continue; }
-            if !webhook.events.contains(&event_type.to_string()) && !webhook.events.contains(&"*".to_string()) { continue; }
+            if !webhook.enabled {
+                continue;
+            }
+            if !webhook.events.contains(&event_type.to_string())
+                && !webhook.events.contains(&"*".to_string())
+            {
+                continue;
+            }
 
             let url = webhook.url.clone();
             let body_json = serde_json::json!({
@@ -1039,10 +1245,7 @@ impl DaemonState {
             let sig_hdr = signature_header.clone();
             // Fire and forget — don't block on webhook delivery
             std::thread::spawn(move || {
-                let mut args = vec![
-                    "-s", "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                ];
+                let mut args = vec!["-s", "-X", "POST", "-H", "Content-Type: application/json"];
                 let sig_arg;
                 if let Some(sig) = &sig_hdr {
                     sig_arg = format!("X-Tachy-Signature: {sig}");
@@ -1063,7 +1266,11 @@ impl DaemonState {
         payload: &[u8],
         signature_header: &str,
     ) -> Result<(), String> {
-        let webhook = self.connectivity.webhooks.iter().find(|w| w.url == webhook_url);
+        let webhook = self
+            .connectivity
+            .webhooks
+            .iter()
+            .find(|w| w.url == webhook_url);
         let secret = match webhook.and_then(|w| w.secret.as_deref()) {
             Some(s) => s,
             None => return Ok(()), // no secret configured → accept all
@@ -1078,11 +1285,7 @@ impl DaemonState {
     }
 
     /// Create an agent instance from a template name and prompt.
-    pub fn create_agent(
-        &mut self,
-        template_name: &str,
-        prompt: &str,
-    ) -> Result<String, String> {
+    pub fn create_agent(&mut self, template_name: &str, prompt: &str) -> Result<String, String> {
         let template = self
             .config
             .agent_templates
@@ -1098,7 +1301,8 @@ impl DaemonState {
             template,
             session_id: session_id.clone(),
             working_directory: self.workspace_root.to_string_lossy().to_string(),
-            environment: BTreeMap::new(), team_id: None,
+            environment: BTreeMap::new(),
+            team_id: None,
         };
 
         let mut instance = AgentInstance::new(&agent_id, config);
@@ -1136,7 +1340,8 @@ impl DaemonState {
             template,
             session_id,
             working_directory: self.workspace_root.to_string_lossy().to_string(),
-            environment: BTreeMap::new(), team_id: None,
+            environment: BTreeMap::new(),
+            team_id: None,
         };
 
         let task = ScheduledTask::new(&task_id, name, config, schedule);
@@ -1159,6 +1364,7 @@ impl DaemonState {
     }
 
     /// Get a conversation by ID.
+    #[must_use]
     pub fn get_conversation(&self, conv_id: &str) -> Option<&Conversation> {
         self.conversations.get(conv_id)
     }
@@ -1196,19 +1402,34 @@ impl DaemonState {
     pub fn clean_vision_cache(&self) {
         let vision_dir = self.workspace_root.join(".tachy").join("vision");
         match runtime::clean_old_snapshots(&vision_dir, 86400) {
-            Ok(count) if count > 0 => platform::log_info(&format!("[VISION] Cleaned up {count} old snapshots.")),
+            Ok(count) if count > 0 => {
+                platform::log_info(&format!("[VISION] Cleaned up {count} old snapshots."));
+            }
             _ => {}
         }
     }
 
-    pub fn vote_on_proposal(&mut self, proposal_id: &str, agent_id: &str, vote: bool, rationale: &str) -> Result<(), String> {
+    pub fn vote_on_proposal(
+        &mut self,
+        proposal_id: &str,
+        agent_id: &str,
+        vote: bool,
+        rationale: &str,
+    ) -> Result<(), String> {
         let (new_status, should_execute) = {
-            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            let proposal = self
+                .active_proposals
+                .get_mut(proposal_id)
+                .ok_or("Governance proposal not found")?;
             if proposal.status != platform::governance::ProposalStatus::Pending {
                 return Err("Proposal is no longer active".to_string());
             }
 
-            if vote { proposal.votes_yes += 1; } else { proposal.votes_no += 1; }
+            if vote {
+                proposal.votes_yes += 1;
+            } else {
+                proposal.votes_no += 1;
+            }
 
             let engine = platform::governance::ConsensusEngine::new(0.66);
             let eligible_voters = self.agents.len().max(3); // Assume at least 3 voters for simulation
@@ -1218,13 +1439,16 @@ impl DaemonState {
             let should_execute = new_status == platform::governance::ProposalStatus::Passed;
             (new_status, should_execute)
         };
-        self.publish_event("governance_vote", serde_json::json!({
-            "proposal_id": proposal_id,
-            "agent_id": agent_id,
-            "vote": vote,
-            "rationale": rationale,
-            "new_status": new_status,
-        }));
+        self.publish_event(
+            "governance_vote",
+            serde_json::json!({
+                "proposal_id": proposal_id,
+                "agent_id": agent_id,
+                "vote": vote,
+                "rationale": rationale,
+                "new_status": new_status,
+            }),
+        );
 
         if should_execute {
             self.execute_governance_proposal(proposal_id)?;
@@ -1236,7 +1460,10 @@ impl DaemonState {
 
     pub fn execute_governance_proposal(&mut self, proposal_id: &str) -> Result<(), String> {
         {
-            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            let proposal = self
+                .active_proposals
+                .get_mut(proposal_id)
+                .ok_or("Governance proposal not found")?;
             if proposal.status != platform::governance::ProposalStatus::Passed {
                 return Err("Only passed proposals can be executed".to_string());
             }
@@ -1253,17 +1480,26 @@ impl DaemonState {
 
             proposal.status = platform::governance::ProposalStatus::Executed;
         }
-        self.publish_event("governance_executed", serde_json::json!({ "proposal_id": proposal_id }));
+        self.publish_event(
+            "governance_executed",
+            serde_json::json!({ "proposal_id": proposal_id }),
+        );
         self.save();
         Ok(())
     }
 
     pub fn veto_proposal(&mut self, proposal_id: &str) -> Result<(), String> {
         {
-            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            let proposal = self
+                .active_proposals
+                .get_mut(proposal_id)
+                .ok_or("Governance proposal not found")?;
             proposal.status = platform::governance::ProposalStatus::Vetoed;
         }
-        self.publish_event("governance_vetoed", serde_json::json!({ "proposal_id": proposal_id }));
+        self.publish_event(
+            "governance_vetoed",
+            serde_json::json!({ "proposal_id": proposal_id }),
+        );
         self.save();
         Ok(())
     }
@@ -1271,46 +1507,60 @@ impl DaemonState {
     pub fn syndicate_knowledge(&mut self, agent_id: &str) {
         let tachy_dir = self.workspace_root.join(".tachy");
         let local_memory = intelligence::AgentMemory::load(&tachy_dir);
-        
+
         intelligence::MemorySyndicator::syndicate(&local_memory, &mut self.hive_mind, 0.9);
-        
-        self.publish_event("hive_mind_updated", serde_json::json!({
-            "agent_id": agent_id,
-            "total_insights": self.hive_mind.shared_insights.len(),
-        }));
-        
+
+        self.publish_event(
+            "hive_mind_updated",
+            serde_json::json!({
+                "agent_id": agent_id,
+                "total_insights": self.hive_mind.shared_insights.len(),
+            }),
+        );
+
         self.save();
     }
 
     pub fn update_reputation(&mut self, agent_id: &str, mission_success: bool, reward: f32) {
         let (new_mode, trust_index) = {
-            let score = self.agent_reputations.entry(agent_id.to_string()).or_insert_with(platform::reputation::ReputationScore::new);
-            
+            let score = self
+                .agent_reputations
+                .entry(agent_id.to_string())
+                .or_default();
+
             score.mission_count += 1;
             if mission_success {
                 score.success_rate = (score.success_rate * 0.9) + 0.1;
             } else {
-                score.success_rate = score.success_rate * 0.9;
+                score.success_rate *= 0.9;
             }
-            
+            score.token_efficiency =
+                (score.token_efficiency * 0.8) + (reward.clamp(0.0, 1.0) * 0.2);
+
             let new_mode = platform::reputation::TrustElevator::evaluate_autonomy(score);
             let trust_index = score.calculate_trust_index();
             (new_mode, trust_index)
         };
-        
-        self.publish_event("reputation_updated", serde_json::json!({
-            "agent_id": agent_id,
-            "new_trust_index": trust_index,
-            "permission_mode": new_mode,
-        }));
-        
+
+        self.publish_event(
+            "reputation_updated",
+            serde_json::json!({
+                "agent_id": agent_id,
+                "new_trust_index": trust_index,
+                "permission_mode": new_mode,
+            }),
+        );
+
         self.save();
     }
 
-    pub fn provision_infrastructure(&mut self, requirements: &platform::compute::NodeSpecs) -> Result<String, String> {
+    pub fn provision_infrastructure(
+        &mut self,
+        requirements: &platform::compute::NodeSpecs,
+    ) -> Result<String, String> {
         let orchestrator = platform::compute::ResourceOrchestrator::new(2.0); // $2/hr max budget
         let node = orchestrator.provision_node(requirements)?;
-        
+
         self.active_nodes.push(node.clone());
         self.publish_event("infrastructure_provisioned", serde_json::json!(&node));
         self.save();
@@ -1318,23 +1568,35 @@ impl DaemonState {
     }
 
     pub fn terminate_infrastructure(&mut self, node_id: &str) -> Result<(), String> {
-        let index = self.active_nodes.iter().position(|n| n.id == node_id).ok_or("Node not found")?;
+        let index = self
+            .active_nodes
+            .iter()
+            .position(|n| n.id == node_id)
+            .ok_or("Node not found")?;
         let mut node = self.active_nodes.remove(index);
         node.status = platform::compute::NodeStatus::Terminating;
-        
-        self.publish_event("infrastructure_terminated", serde_json::json!({ "node_id": node_id }));
+
+        self.publish_event(
+            "infrastructure_terminated",
+            serde_json::json!({ "node_id": node_id }),
+        );
         self.save();
         Ok(())
     }
 
     pub fn replicate_daemon(&mut self, node_id: &str) -> Result<String, String> {
-        let node = self.active_nodes.iter().find(|n| n.id == node_id).ok_or("Infrastructure node not found")?;
+        let node = self
+            .active_nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or("Infrastructure node not found")?;
         let spawner = platform::replication::DaemonSpawner;
         let linker = platform::replication::SwarmLinker;
-        
-        let new_daemon = spawner.spawn_instance(node_id, "remote-addr")?;
+
+        let target_addr = format!("{}-{}", node.provider.to_lowercase(), node.id);
+        let new_daemon = spawner.spawn_instance(node_id, &target_addr)?;
         linker.link_node("parent-daemon", &new_daemon)?;
-        
+
         self.swarm_nodes.push(new_daemon.clone());
         self.publish_event("swarm_replicated", serde_json::json!(&new_daemon));
         self.save();
@@ -1354,18 +1616,24 @@ impl DaemonState {
 
     pub fn trigger_red_alert(&mut self, telemetry: &str) -> Result<(), String> {
         let anomalies = intelligence::AnomalyDetector::scan_telemetry(telemetry);
-        if let Some(anomaly) = anomalies.into_iter().find(|a| matches!(a.severity, intelligence::CrisisSeverity::RedAlert)) {
+        if let Some(anomaly) = anomalies
+            .into_iter()
+            .find(|a| matches!(a.severity, intelligence::CrisisSeverity::RedAlert))
+        {
             let playbook = intelligence::PlaybookEngine::select_playbook(&anomaly);
             self.active_crisis = Some(anomaly.clone());
-            
-            self.publish_event("red_alert_triggered", serde_json::json!({
-                "anomaly": anomaly,
-                "playbook": playbook,
-            }));
-            
+
+            self.publish_event(
+                "red_alert_triggered",
+                serde_json::json!({
+                    "anomaly": anomaly,
+                    "playbook": playbook,
+                }),
+            );
+
             // Execute mock playbook: De-risk assets
             self.publish_event("playbook_executing", serde_json::json!({ "action": "Liquidating high-risk positions to EmergencyVault" }));
-            
+
             self.save();
         }
         Ok(())
@@ -1395,12 +1663,15 @@ impl DaemonState {
                 .unwrap_or_default()
                 .as_secs(),
         });
-        
-        self.publish_event("tuning_job_started", serde_json::json!({
-            "job_id": job_id,
-            "domain": domain,
-        }));
-        
+
+        self.publish_event(
+            "tuning_job_started",
+            serde_json::json!({
+                "job_id": job_id,
+                "domain": domain,
+            }),
+        );
+
         self.save();
         Ok(job_id)
     }
@@ -1408,7 +1679,7 @@ impl DaemonState {
     pub fn establish_diplomacy(&mut self, swarm_id: &str, signature: &str) -> Result<(), String> {
         let auth = platform::diplomacy::SwarmAuthenticator;
         let swarm = auth.authenticate_swarm(swarm_id, signature)?;
-        
+
         self.allied_swarms.push(swarm.clone());
         self.publish_event("diplomacy_established", serde_json::json!(&swarm));
         self.save();
@@ -1440,7 +1711,10 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> String {
     // ipad / opad
     let mut ipad = [0x36u8; BLOCK];
     let mut opad = [0x5cu8; BLOCK];
-    for i in 0..BLOCK { ipad[i] ^= k[i]; opad[i] ^= k[i]; }
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
     // inner hash
     let mut inner = ipad.to_vec();
     inner.extend_from_slice(msg);
@@ -1457,57 +1731,90 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> String {
 #[allow(clippy::unreadable_literal)]
 fn sha256(msg: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
-        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
-    let mut h: [u32; 8] = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
 
     // Padding
     let bit_len = (msg.len() as u64) * 8;
     let mut padded = msg.to_vec();
     padded.push(0x80);
-    while padded.len() % 64 != 56 { padded.push(0); }
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
     for chunk in padded.chunks(64) {
         let mut w = [0u32; 64];
-        for i in 0..16 { w[i] = u32::from_be_bytes(chunk[i*4..i*4+4].try_into().unwrap()); }
-        for i in 16..64 {
-            let s0 = w[i-15].rotate_right(7) ^ w[i-15].rotate_right(18) ^ (w[i-15] >> 3);
-            let s1 = w[i-2].rotate_right(17) ^ w[i-2].rotate_right(19) ^ (w[i-2] >> 10);
-            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
         }
-        let [mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut hh] = h;
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ (!e & g);
-            let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let t1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
             let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let t2 = s0.wrapping_add(maj);
-            hh=g; g=f; f=e; e=d.wrapping_add(t1);
-            d=c; c=b; b=a; a=t1.wrapping_add(t2);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
         }
-        h[0]=h[0].wrapping_add(a); h[1]=h[1].wrapping_add(b);
-        h[2]=h[2].wrapping_add(c); h[3]=h[3].wrapping_add(d);
-        h[4]=h[4].wrapping_add(e); h[5]=h[5].wrapping_add(f);
-        h[6]=h[6].wrapping_add(g); h[7]=h[7].wrapping_add(hh);
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
     }
     let mut out = [0u8; 32];
-    for (i, word) in h.iter().enumerate() { out[i*4..i*4+4].copy_from_slice(&word.to_be_bytes()); }
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
     out
 }
 
 /// Constant-time byte slice comparison to prevent timing attacks.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn timestamp() -> String {
@@ -1529,11 +1836,7 @@ mod tests {
     fn temp_root() -> PathBuf {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        std::env::temp_dir().join(format!(
-            "tachy-daemon-test-{}-{}",
-            std::process::id(),
-            id,
-        ))
+        std::env::temp_dir().join(format!("tachy-daemon-test-{}-{}", std::process::id(), id,))
     }
 
     #[test]
@@ -1550,11 +1853,15 @@ mod tests {
         let root = temp_root();
         let mut state = DaemonState::init(root.clone()).expect("should init");
 
-        let id = state.create_agent("code-reviewer", "review my code").expect("should create");
+        let id = state
+            .create_agent("code-reviewer", "review my code")
+            .expect("should create");
         assert_eq!(id, "agent-1");
         assert!(state.agents.contains_key("agent-1"));
 
-        let id2 = state.create_agent("test-runner", "run tests").expect("should create");
+        let id2 = state
+            .create_agent("test-runner", "run tests")
+            .expect("should create");
         assert_eq!(id2, "agent-2");
 
         assert!(state.create_agent("nonexistent", "x").is_err());
@@ -1568,7 +1875,9 @@ mod tests {
         // Create agents and save
         {
             let mut state = DaemonState::init(root.clone()).expect("should init");
-            state.create_agent("code-reviewer", "review").expect("create");
+            state
+                .create_agent("code-reviewer", "review")
+                .expect("create");
             state.create_agent("test-runner", "test").expect("create");
             assert_eq!(state.agents.len(), 2);
         }
@@ -1609,11 +1918,13 @@ mod tests {
         let root = temp_root();
         let mut state = DaemonState::init(root.clone()).expect("should init");
 
-        let id = state.schedule_agent(
-            "security-scanner",
-            ScheduleRule::Interval { seconds: 3600 },
-            "hourly scan",
-        ).expect("should schedule");
+        let id = state
+            .schedule_agent(
+                "security-scanner",
+                ScheduleRule::Interval { seconds: 3600 },
+                "hourly scan",
+            )
+            .expect("should schedule");
         assert_eq!(id, "task-1");
         assert_eq!(state.scheduler.list_tasks().len(), 1);
         std::fs::remove_dir_all(root).ok();

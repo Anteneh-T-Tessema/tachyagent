@@ -45,8 +45,16 @@ pub fn list_directory(
 
     // Skip common noise directories
     let skip_dirs = [
-        "node_modules", ".git", "target", "__pycache__", ".venv",
-        "venv", "dist", "build", ".next", ".cache",
+        "node_modules",
+        ".git",
+        "target",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".next",
+        ".cache",
     ];
 
     let walker = WalkDir::new(&base)

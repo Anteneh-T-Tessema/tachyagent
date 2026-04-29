@@ -8,7 +8,9 @@ use serde_json::{json, Value};
 pub mod custom;
 pub mod web;
 pub use custom::{CustomTool, CustomToolRegistry, CustomToolsFile};
-pub use web::{web_search, web_fetch, WebSearchInput, WebSearchOutput, WebFetchInput, WebFetchOutput};
+pub use web::{
+    web_fetch, web_search, WebFetchInput, WebFetchOutput, WebSearchInput, WebSearchOutput,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
@@ -317,8 +319,11 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "list_directory" => from_value::<ListDirInput>(input).and_then(run_list_directory),
         "web_search" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "web_fetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
-        "capture_screenshot" => from_value::<runtime::ScreenshotInput>(input).and_then(run_capture_screenshot),
-        "get_accessibility_tree" => from_value::<runtime::AccessibilityTreeInput>(input).and_then(run_get_accessibility_tree),
+        "capture_screenshot" => {
+            from_value::<runtime::ScreenshotInput>(input).and_then(run_capture_screenshot)
+        }
+        "get_accessibility_tree" => from_value::<runtime::AccessibilityTreeInput>(input)
+            .and_then(run_get_accessibility_tree),
         "visual_diff" => from_value::<runtime::VisualDiffInput>(input).and_then(run_visual_diff),
         // E1: Richer diagnostics via LSP integration
         "get_diagnostics" => from_value::<GetDiagnosticsInput>(input).and_then(run_get_diagnostics),
@@ -349,11 +354,15 @@ pub fn execute_tool_with_custom(
 
 /// Execute a tool and return an optional diff preview for write/edit operations.
 /// This is used by CLI and daemon executors to show/log diffs.
-pub fn execute_tool_with_diff(name: &str, input: &Value) -> Result<(String, Option<DiffPreview>), String> {
+pub fn execute_tool_with_diff(
+    name: &str,
+    input: &Value,
+) -> Result<(String, Option<DiffPreview>), String> {
     match name {
         "write_file" => {
             let parsed: WriteFileInput = from_value(input)?;
-            let (output, preview) = write_file(&parsed.path, &parsed.content).map_err(io_to_string)?;
+            let (output, preview) =
+                write_file(&parsed.path, &parsed.content).map_err(io_to_string)?;
             let json = to_pretty_json(output)?;
             Ok((json, Some(preview)))
         }
@@ -364,7 +373,8 @@ pub fn execute_tool_with_diff(name: &str, input: &Value) -> Result<(String, Opti
                 &parsed.old_string,
                 &parsed.new_string,
                 parsed.replace_all.unwrap_or(false),
-            ).map_err(io_to_string)?;
+            )
+            .map_err(io_to_string)?;
             let json = to_pretty_json(output)?;
             Ok((json, Some(preview)))
         }
@@ -474,7 +484,9 @@ fn run_get_accessibility_tree(input: runtime::AccessibilityTreeInput) -> Result<
 }
 
 fn run_visual_diff(input: runtime::VisualDiffInput) -> Result<String, String> {
-    to_pretty_json(runtime::compare_snapshots(&input.path_a, &input.path_b).map_err(|e| e.to_string())?)
+    to_pretty_json(
+        runtime::compare_snapshots(&input.path_a, &input.path_b).map_err(|e| e.to_string())?,
+    )
 }
 
 // ── E1: Richer diagnostics ──────────────────────────────────────────────────
@@ -503,20 +515,33 @@ fn run_get_diagnostics(input: GetDiagnosticsInput) -> Result<String, String> {
     };
 
     // Detect language by presence of marker files
-    let is_rust   = workspace.join("Cargo.toml").exists() || path.extension().is_some_and(|e| e == "rs");
-    let is_ts     = workspace.join("tsconfig.json").exists() || path.extension().is_some_and(|e| e == "ts" || e == "tsx");
+    let is_rust =
+        workspace.join("Cargo.toml").exists() || path.extension().is_some_and(|e| e == "rs");
+    let is_ts = workspace.join("tsconfig.json").exists()
+        || path.extension().is_some_and(|e| e == "ts" || e == "tsx");
     let is_python = path.extension().is_some_and(|e| e == "py")
-                    || workspace.join("pyproject.toml").exists()
-                    || workspace.join("setup.py").exists();
-    let is_go     = workspace.join("go.mod").exists() || path.extension().is_some_and(|e| e == "go");
+        || workspace.join("pyproject.toml").exists()
+        || workspace.join("setup.py").exists();
+    let is_go = workspace.join("go.mod").exists() || path.extension().is_some_and(|e| e == "go");
 
     let (cmd, args): (&str, Vec<&str>) = if is_rust {
         ("cargo", vec!["check", "--message-format=json", "--quiet"])
     } else if is_ts {
         ("npx", vec!["tsc", "--noEmit", "--pretty", "false"])
     } else if is_python {
-        if std::process::Command::new("mypy").arg("--version").output().is_ok() {
-            ("mypy", vec![input.path.as_str(), "--no-error-summary", "--show-column-numbers"])
+        if std::process::Command::new("mypy")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
+            (
+                "mypy",
+                vec![
+                    input.path.as_str(),
+                    "--no-error-summary",
+                    "--show-column-numbers",
+                ],
+            )
         } else {
             ("python3", vec!["-m", "py_compile", input.path.as_str()])
         }
@@ -554,16 +579,27 @@ fn parse_cargo_diagnostics(output: &str, min_severity: &str) -> Vec<serde_json::
     let mut results = Vec::new();
     for line in output.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if v["reason"].as_str() != Some("compiler-message") { continue; }
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["reason"].as_str() != Some("compiler-message") {
+            continue;
+        }
         let msg = &v["message"];
         let level = msg["level"].as_str().unwrap_or("note");
-        if !severity_passes(level, min_severity) { continue; }
+        if !severity_passes(level, min_severity) {
+            continue;
+        }
         let text = msg["message"].as_str().unwrap_or("").to_string();
         // Primary span
         if let Some(spans) = msg["spans"].as_array() {
-            for span in spans.iter().filter(|s| s["is_primary"].as_bool().unwrap_or(false)) {
+            for span in spans
+                .iter()
+                .filter(|s| s["is_primary"].as_bool().unwrap_or(false))
+            {
                 results.push(serde_json::json!({
                     "file": span["file_name"].as_str().unwrap_or(""),
                     "line": span["line_start"].as_u64().unwrap_or(0),
@@ -579,12 +615,19 @@ fn parse_cargo_diagnostics(output: &str, min_severity: &str) -> Vec<serde_json::
 }
 
 /// Parse plain-text checker output (tsc, mypy, go vet, etc.).
-fn parse_text_diagnostics(output: &str, min_severity: &str, default_file: &str) -> Vec<serde_json::Value> {
+fn parse_text_diagnostics(
+    output: &str,
+    min_severity: &str,
+    default_file: &str,
+) -> Vec<serde_json::Value> {
     let mut results = Vec::new();
     // Common pattern: "file.ext:line:col: error/warning: message"
     let _re_patterns = [
         // TypeScript: src/foo.ts(10,5): error TS2304: ...
-        (r"([^:()]+)\((\d+),(\d+)\):\s*(error|warning|info)\s+\w+:\s*(.*)", true),
+        (
+            r"([^:()]+)\((\d+),(\d+)\):\s*(error|warning|info)\s+\w+:\s*(.*)",
+            true,
+        ),
         // mypy: src/foo.py:10: error: ...
         (r"([^:]+):(\d+):\s*(error|warning|note):\s*(.*)", false),
         // go vet / general: ./pkg/file.go:10:5: message
@@ -593,7 +636,9 @@ fn parse_text_diagnostics(output: &str, min_severity: &str, default_file: &str) 
 
     for line in output.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
 
         // Try each pattern manually (no regex crate — keep deps minimal)
         if let Some(d) = try_parse_diagnostic_line(line, default_file, min_severity) {
@@ -603,12 +648,18 @@ fn parse_text_diagnostics(output: &str, min_severity: &str, default_file: &str) 
     results
 }
 
-fn try_parse_diagnostic_line(line: &str, default_file: &str, min_severity: &str) -> Option<serde_json::Value> {
+fn try_parse_diagnostic_line(
+    line: &str,
+    default_file: &str,
+    min_severity: &str,
+) -> Option<serde_json::Value> {
     // Pattern: <file>:<line>:<col>: <level>: <message>
     // or:      <file>(<line>,<col>): <level> <code>: <message>
     let line = line.replace(['(', ')'], ":");
     let parts: Vec<&str> = line.splitn(6, ':').collect();
-    if parts.len() < 3 { return None; }
+    if parts.len() < 3 {
+        return None;
+    }
 
     let file = parts[0].trim();
     let lineno: u64 = parts[1].trim().parse().unwrap_or(0);
@@ -619,18 +670,29 @@ fn try_parse_diagnostic_line(line: &str, default_file: &str, min_severity: &str)
         (0, 2)
     };
 
-    if parts.len() <= level_idx { return None; }
+    if parts.len() <= level_idx {
+        return None;
+    }
     let level_raw = parts[level_idx].trim().to_lowercase();
-    let level = if level_raw.starts_with("error") { "error" }
-                else if level_raw.starts_with("warn") { "warning" }
-                else if level_raw.starts_with("note") || level_raw.starts_with("info") { "info" }
-                else { return None };
+    let level = if level_raw.starts_with("error") {
+        "error"
+    } else if level_raw.starts_with("warn") {
+        "warning"
+    } else if level_raw.starts_with("note") || level_raw.starts_with("info") {
+        "info"
+    } else {
+        return None;
+    };
 
-    if !severity_passes(level, min_severity) { return None; }
+    if !severity_passes(level, min_severity) {
+        return None;
+    }
 
     let msg_parts = &parts[(level_idx + 1)..];
     let message = msg_parts.join(":").trim().to_string();
-    if message.is_empty() { return None; }
+    if message.is_empty() {
+        return None;
+    }
 
     Some(serde_json::json!({
         "file": if file.is_empty() { default_file } else { file },
@@ -644,11 +706,11 @@ fn try_parse_diagnostic_line(line: &str, default_file: &str, min_severity: &str)
 
 fn severity_passes(level: &str, min: &str) -> bool {
     let rank = |s: &str| match s {
-        "error"   => 0_u8,
+        "error" => 0_u8,
         "warning" | "warn" => 1,
         "info" | "note" => 2,
-        "hint"    => 3,
-        _         => 4,
+        "hint" => 3,
+        _ => 4,
     };
     min == "all" || rank(level) <= rank(min)
 }

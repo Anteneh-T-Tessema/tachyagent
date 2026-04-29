@@ -27,10 +27,8 @@ pub struct VisionAgent;
 
 impl VisionAgent {
     /// Analyze a screenshot from the sandbox.
-    pub fn analyze_snapshot(
-        _image_bytes: &[u8],
-        _prompt: &str,
-    ) -> VisualReport {
+    #[must_use]
+    pub fn analyze_snapshot(_image_bytes: &[u8], _prompt: &str) -> VisualReport {
         // In a real implementation, this would call a vision model (e.g. Llama 3.2 Vision).
         // For now, we provide the infrastructure and a mock result.
         VisualReport {

@@ -6,8 +6,8 @@
 //! - Efficiency (tokens + latency)
 //! - Verifiability (Forensic Logic Layer)
 
-use serde::{Deserialize, Serialize};
 use crate::edit_test_fix::{DiagnosticResult, TestResult};
+use serde::{Deserialize, Serialize};
 
 /// A multi-dimensional breakdown of an agent's performance for a single step or session.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -53,12 +53,14 @@ pub struct RewardEngine {
 }
 
 impl RewardEngine {
-    #[must_use] pub fn new(config: RewardConfig) -> Self {
+    #[must_use]
+    pub fn new(config: RewardConfig) -> Self {
         Self { config }
     }
 
     /// Calculate the reward for a single execution step.
-    #[must_use] pub fn calculate_step_reward(
+    #[must_use]
+    pub fn calculate_step_reward(
         &self,
         test_result: Option<&TestResult>,
         diag_result: Option<&DiagnosticResult>,
@@ -85,20 +87,25 @@ impl RewardEngine {
 
         // 3. Efficiency Penalties
         score.efficiency_penalty += (tokens_used as f32 / 1000.0) * self.config.token_penalty_per_k;
-        score.efficiency_penalty += (duration_ms as f32 / 1000.0) * self.config.latency_penalty_per_sec;
+        score.efficiency_penalty +=
+            (duration_ms as f32 / 1000.0) * self.config.latency_penalty_per_sec;
 
         // 4. Forensic Bonus
         if is_verifiable {
             score.forensic_bonus = self.config.forensic_bonus_weight;
         }
 
-        score.total = score.success + score.quality_penalty + score.efficiency_penalty + score.forensic_bonus;
+        score.total =
+            score.success + score.quality_penalty + score.efficiency_penalty + score.forensic_bonus;
         score
     }
 
     /// Evaluate a full trajectory (session history).
-    #[must_use] pub fn evaluate_trajectory(&self, rewards: &[RewardScore]) -> f32 {
-        if rewards.is_empty() { return 0.0; }
+    #[must_use]
+    pub fn evaluate_trajectory(&self, rewards: &[RewardScore]) -> f32 {
+        if rewards.is_empty() {
+            return 0.0;
+        }
         // For now, return the mean reward
         let total: f32 = rewards.iter().map(|r| r.total).sum();
         total / rewards.len() as f32
@@ -113,10 +120,15 @@ mod tests {
     #[test]
     fn lsp_errors_tank_the_score() {
         let engine = RewardEngine::new(RewardConfig::default());
-        let dr = DiagnosticResult { files_checked: 1, error_count: 2, warning_count: 0, diagnostics: Vec::new() };
-        
+        let dr = DiagnosticResult {
+            files_checked: 1,
+            error_count: 2,
+            warning_count: 0,
+            diagnostics: Vec::new(),
+        };
+
         let score = engine.calculate_step_reward(None, Some(&dr), 100, 100, false);
-        
+
         assert!(score.quality_penalty <= -10.0);
         assert!(score.total < 0.0);
     }
@@ -124,23 +136,38 @@ mod tests {
     #[test]
     fn perfect_execution_gets_high_reward() {
         let engine = RewardEngine::new(RewardConfig::default());
-        let tr = TestResult { exit_code: 0, stdout: String::new(), stderr: String::new() };
-        let dr = DiagnosticResult { files_checked: 1, error_count: 0, warning_count: 0, diagnostics: Vec::new() };
-        
+        let tr = TestResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        let dr = DiagnosticResult {
+            files_checked: 1,
+            error_count: 0,
+            warning_count: 0,
+            diagnostics: Vec::new(),
+        };
+
         let score = engine.calculate_step_reward(Some(&tr), Some(&dr), 500, 1000, true);
-        
+
         assert!(score.success > 9.0);
-        assert_eq!(score.quality_penalty, 0.0);
+        assert!(score.quality_penalty.abs() < f32::EPSILON);
         assert!(score.total > 11.0); // Success (10) + Forensic (2) - slight efficiency penalty
     }
 
     #[test]
     fn evaluate_trajectory_averages_correctly() {
         let engine = RewardEngine::new(RewardConfig::default());
-        let r1 = RewardScore { total: 10.0, ..Default::default() };
-        let r2 = RewardScore { total: 0.0, ..Default::default() };
-        
+        let r1 = RewardScore {
+            total: 10.0,
+            ..Default::default()
+        };
+        let r2 = RewardScore {
+            total: 0.0,
+            ..Default::default()
+        };
+
         let avg = engine.evaluate_trajectory(&[r1, r2]);
-        assert_eq!(avg, 5.0);
+        assert!((avg - 5.0).abs() < f32::EPSILON);
     }
 }

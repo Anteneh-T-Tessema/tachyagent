@@ -14,6 +14,7 @@ pub struct SovereignLogger {
 }
 
 impl SovereignLogger {
+    #[must_use]
     pub fn new(component: &str) -> Self {
         Self {
             component: component.to_string(),
@@ -36,12 +37,12 @@ impl TachyLogger for SovereignLogger {
 }
 
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
+
+type SharedLogger = Arc<Mutex<Option<Box<dyn TachyLogger>>>>;
 
 /// Global logger access point.
-pub static GLOBAL_LOGGER: Lazy<Arc<Mutex<Option<Box<dyn TachyLogger>>>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(None))
-});
+pub static GLOBAL_LOGGER: std::sync::LazyLock<SharedLogger> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(None)));
 
 pub fn set_logger(logger: Box<dyn TachyLogger>) {
     if let Ok(mut l) = GLOBAL_LOGGER.lock() {
@@ -56,5 +57,5 @@ pub fn log_info(msg: &str) {
             return;
         }
     }
-    println!("[BOOTSTRAP] {}", msg);
+    println!("[BOOTSTRAP] {msg}");
 }

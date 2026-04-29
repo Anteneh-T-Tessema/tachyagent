@@ -1,7 +1,7 @@
 //! `tachy pipeline` — YAML-defined multi-step agent pipelines with DAG scheduling.
 
-use crate::DEFAULT_MODEL;
 use crate::agent::run_agent_cmd;
+use crate::DEFAULT_MODEL;
 
 /// A single step in a pipeline.
 #[derive(Debug, serde::Deserialize)]
@@ -24,9 +24,17 @@ struct PipelineDefinition {
     steps: Vec<PipelineStep>,
 }
 
-pub(crate) fn run_pipeline(subcommand: &str, path: &str, dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_pipeline(
+    subcommand: &str,
+    path: &str,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     if subcommand == "init" {
-        let target = if path == "pipeline.yaml" { "tachy-pipeline.yaml" } else { path };
+        let target = if path == "pipeline.yaml" {
+            "tachy-pipeline.yaml"
+        } else {
+            path
+        };
         if std::path::Path::new(target).exists() {
             return Err(format!("{target} already exists — remove it first").into());
         }
@@ -61,14 +69,19 @@ steps:
     let yaml_str = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read pipeline file '{path}': {e}"))?;
 
-    let pipeline: PipelineDefinition = serde_yaml::from_str(&yaml_str)
-        .map_err(|e| format!("invalid pipeline YAML: {e}"))?;
+    let pipeline: PipelineDefinition =
+        serde_yaml::from_str(&yaml_str).map_err(|e| format!("invalid pipeline YAML: {e}"))?;
 
-    let step_names: std::collections::HashSet<&str> = pipeline.steps.iter().map(|s| s.name.as_str()).collect();
+    let step_names: std::collections::HashSet<&str> =
+        pipeline.steps.iter().map(|s| s.name.as_str()).collect();
     for step in &pipeline.steps {
         for dep in &step.depends_on {
             if !step_names.contains(dep.as_str()) {
-                return Err(format!("step '{}' depends_on '{}' which does not exist", step.name, dep).into());
+                return Err(format!(
+                    "step '{}' depends_on '{}' which does not exist",
+                    step.name, dep
+                )
+                .into());
             }
         }
     }
@@ -79,7 +92,11 @@ steps:
     print_pipeline_dag(&pipeline.steps);
 
     if subcommand == "validate" || dry_run {
-        println!("Pipeline '{}' is valid ({} steps).", pipeline.name, pipeline.steps.len());
+        println!(
+            "Pipeline '{}' is valid ({} steps).",
+            pipeline.name,
+            pipeline.steps.len()
+        );
         return Ok(());
     }
 
@@ -93,9 +110,16 @@ steps:
     let default_model = DEFAULT_MODEL.to_string();
 
     for step_name in &order {
-        let step = pipeline.steps.iter().find(|s| &s.name == step_name).unwrap();
+        let step = pipeline
+            .steps
+            .iter()
+            .find(|s| &s.name == step_name)
+            .unwrap();
         let model = step.model.as_deref().unwrap_or(&default_model);
-        println!("  ► Step '{}' — template: {}, model: {}", step.name, step.template, model);
+        println!(
+            "  ► Step '{}' — template: {}, model: {}",
+            step.name, step.template, model
+        );
         if dry_run {
             continue;
         }
@@ -108,24 +132,33 @@ steps:
         }
     }
 
-    println!("Pipeline '{}' completed all {} steps.", pipeline.name, pipeline.steps.len());
+    println!(
+        "Pipeline '{}' completed all {} steps.",
+        pipeline.name,
+        pipeline.steps.len()
+    );
     Ok(())
 }
 
 /// Render an ASCII DAG of pipeline steps showing dependency arrows.
 fn print_pipeline_dag(steps: &[PipelineStep]) {
     println!("Pipeline DAG:");
-    let mut children: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut children: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
     let mut has_parent: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     for step in steps {
         for dep in &step.depends_on {
-            children.entry(dep.as_str()).or_default().push(step.name.as_str());
+            children
+                .entry(dep.as_str())
+                .or_default()
+                .push(step.name.as_str());
             has_parent.insert(step.name.as_str());
         }
     }
 
-    let roots: Vec<&str> = steps.iter()
+    let roots: Vec<&str> = steps
+        .iter()
         .filter(|s| !has_parent.contains(s.name.as_str()))
         .map(|s| s.name.as_str())
         .collect();
@@ -158,11 +191,13 @@ fn print_pipeline_dag(steps: &[PipelineStep]) {
 /// Topological sort of pipeline steps. Returns ordered step names or an error
 /// describing the cycle.
 pub(crate) fn topological_sort(steps: &[PipelineStep]) -> Result<Vec<String>, String> {
-    let mut count: std::collections::HashMap<&str, usize> = steps.iter()
+    let mut count: std::collections::HashMap<&str, usize> = steps
+        .iter()
         .map(|s| (s.name.as_str(), s.depends_on.len()))
         .collect();
 
-    let mut queue: std::collections::VecDeque<&str> = count.iter()
+    let mut queue: std::collections::VecDeque<&str> = count
+        .iter()
         .filter(|(_, &c)| c == 0)
         .map(|(&n, _)| n)
         .collect();

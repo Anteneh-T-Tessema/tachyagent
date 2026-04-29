@@ -46,9 +46,7 @@ pub enum MissionEvent {
         report: intelligence::consensus::ConsensusReport,
     },
     /// A system-level heartbeat to ensure the swarm is healthy.
-    Heartbeat {
-        timestamp: u64,
-    },
+    Heartbeat { timestamp: u64 },
 }
 
 /// The Mission Control bus manager.
@@ -59,7 +57,8 @@ pub struct MissionControl {
 
 impl MissionControl {
     /// Create a new Mission Control bus.
-    #[must_use] pub fn new(capacity: usize) -> Self {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
         Self { tx }
     }
@@ -72,7 +71,8 @@ impl MissionControl {
     }
 
     /// Subscribe to the mission event stream.
-    #[must_use] pub fn subscribe(&self) -> broadcast::Receiver<MissionEvent> {
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<MissionEvent> {
         self.tx.subscribe()
     }
 }
@@ -107,9 +107,9 @@ mod tests {
         } else {
             panic!("Wrong event type");
         }
-        
+
         if let MissionEvent::StatusUpdate { percentage, .. } = e2 {
-            assert_eq!(percentage, 10.0);
+            assert!((percentage - 10.0).abs() < f32::EPSILON);
         } else {
             panic!("Wrong event type");
         }

@@ -51,7 +51,8 @@ pub enum IssueSeverity {
 }
 
 /// Build the verification prompt to send to the model.
-#[must_use] pub fn build_verification_prompt(original_prompt: &str, generated_code: &str) -> String {
+#[must_use]
+pub fn build_verification_prompt(original_prompt: &str, generated_code: &str) -> String {
     format!(
         "You are a code reviewer. The following code was generated in response to this task:\n\n\
          Task: {original_prompt}\n\n\
@@ -70,14 +71,20 @@ pub enum IssueSeverity {
 }
 
 /// Check if a response contains code blocks (indicates the model generated code).
-#[must_use] pub fn contains_code(text: &str) -> bool {
-    text.contains("```") || text.contains("fn ") || text.contains("def ")
-        || text.contains("function ") || text.contains("class ")
-        || text.contains("pub fn ") || text.contains("impl ")
+#[must_use]
+pub fn contains_code(text: &str) -> bool {
+    text.contains("```")
+        || text.contains("fn ")
+        || text.contains("def ")
+        || text.contains("function ")
+        || text.contains("class ")
+        || text.contains("pub fn ")
+        || text.contains("impl ")
 }
 
 /// Extract code blocks from a response.
-#[must_use] pub fn extract_code_blocks(text: &str) -> Vec<String> {
+#[must_use]
+pub fn extract_code_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut in_block = false;
     let mut current = String::new();
@@ -103,7 +110,8 @@ pub enum IssueSeverity {
 }
 
 /// Parse verification response to determine if code passed review.
-#[must_use] pub fn parse_verification_response(response: &str) -> VerificationResult {
+#[must_use]
+pub fn parse_verification_response(response: &str) -> VerificationResult {
     let upper = response.to_uppercase();
 
     if upper.contains("VERIFIED") && !upper.contains("ISSUES") {
@@ -119,7 +127,9 @@ pub enum IssueSeverity {
     let mut issues = Vec::new();
     for line in response.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
         // Look for numbered issues: "1. ...", "- ..."
         let is_issue = trimmed.starts_with(|c: char| c.is_ascii_digit())

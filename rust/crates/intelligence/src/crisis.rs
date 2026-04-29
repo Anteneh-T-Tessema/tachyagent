@@ -22,20 +22,31 @@ pub struct AnomalyDetector;
 
 impl AnomalyDetector {
     /// Detect anomalies in system telemetry.
+    #[must_use]
     pub fn scan_telemetry(telemetry: &str) -> Vec<Anomaly> {
         let mut anomalies = Vec::new();
-        
+
         // Mock detection logic: look for "crash", "hack", "exploit", "drain"
         if telemetry.contains("crash") || telemetry.contains("drain") {
             anomalies.push(Anomaly {
-                id: format!("anom-{}", uuid::Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+                id: format!(
+                    "anom-{}",
+                    uuid::Uuid::new_v4()
+                        .to_string()
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                ),
                 source: "DeFi-Sentinel".to_string(),
                 detail: "High-velocity capital drain detected in primary protocol.".to_string(),
                 severity: CrisisSeverity::RedAlert,
-                ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                ts: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
             });
         }
-        
+
         anomalies
     }
 }
@@ -52,6 +63,7 @@ pub struct PlaybookEngine;
 
 impl PlaybookEngine {
     /// Select the most appropriate recovery playbook for a given anomaly.
+    #[must_use]
     pub fn select_playbook(anomaly: &Anomaly) -> RecoveryPlaybook {
         match anomaly.severity {
             CrisisSeverity::RedAlert => RecoveryPlaybook::EmergencyKillSwitch,

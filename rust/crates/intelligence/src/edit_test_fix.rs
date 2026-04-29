@@ -73,7 +73,8 @@ pub struct DiagnosticResult {
 }
 
 impl DiagnosticResult {
-    #[must_use] pub fn has_errors(&self) -> bool {
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
         self.error_count > 0
     }
 }
@@ -82,7 +83,8 @@ pub struct EditTestFix;
 
 impl EditTestFix {
     /// Detect the project's test command.
-    #[must_use] pub fn detect_test_command(
+    #[must_use]
+    pub fn detect_test_command(
         workspace_root: &Path,
         index: Option<&CodebaseIndex>,
     ) -> Option<String> {
@@ -143,7 +145,8 @@ impl EditTestFix {
     }
 
     /// Build the fix prompt to send to the LLM after test failure.
-    #[must_use] pub fn build_fix_prompt(
+    #[must_use]
+    pub fn build_fix_prompt(
         test_command: &str,
         result: &TestResult,
         edited_files: &[String],
@@ -183,23 +186,23 @@ impl EditTestFix {
                 ));
             }
             if let Some(tree) = &v.accessibility_tree {
-                prompt.push_str(&format!("\nAccessibility Tree (Simplified):\n{}\n", tree));
+                prompt.push_str(&format!("\nAccessibility Tree (Simplified):\n{tree}\n"));
             }
         }
 
-        prompt.push_str("\nPlease fix the code to make the tests (and visual state) pass. \
+        prompt.push_str(
+            "\nPlease fix the code to make the tests (and visual state) pass. \
                          Focus on the specific errors shown above. \
-                         Do NOT change the test files unless the tests themselves are wrong.");
+                         Do NOT change the test files unless the tests themselves are wrong.",
+        );
 
         prompt
     }
 
     /// Run LSP diagnostics on the edited files.
     /// Returns errors/warnings without needing to run the full test suite.
-    #[must_use] pub fn run_diagnostics(
-        workspace_root: &Path,
-        edited_files: &[String],
-    ) -> DiagnosticResult {
+    #[must_use]
+    pub fn run_diagnostics(workspace_root: &Path, edited_files: &[String]) -> DiagnosticResult {
         let lsp = LspManager::new(workspace_root);
         let mut all_diagnostics = Vec::new();
 
@@ -226,7 +229,8 @@ impl EditTestFix {
     }
 
     /// Build a fix prompt from LSP diagnostics (faster than test-based fix prompts).
-    #[must_use] pub fn build_diagnostic_fix_prompt(
+    #[must_use]
+    pub fn build_diagnostic_fix_prompt(
         diag_result: &DiagnosticResult,
         edited_files: &[String],
     ) -> String {
@@ -266,7 +270,7 @@ impl EditTestFix {
         // 1. Capture fresh screenshot
         let input = runtime::ScreenshotInput {
             url: url.to_string(),
-            save_path: None, // Auto-generate in .tachy/vision
+            save_path: None,      // Auto-generate in .tachy/vision
             delay_ms: Some(1000), // Give it time to settle
             capture_full_page: Some(false),
             workspace_root: Some(workspace_root.to_string_lossy().to_string()),
@@ -295,7 +299,8 @@ impl EditTestFix {
 
     /// Combined diagnostic + test cycle. Runs diagnostics first (fast), then tests.
     /// Returns early if diagnostics find errors — no point running tests on broken code.
-    #[must_use] pub fn run_diagnostic_then_test(
+    #[must_use]
+    pub fn run_diagnostic_then_test(
         workspace_root: &Path,
         edited_files: &[String],
         test_command: &str,
@@ -349,10 +354,7 @@ mod tests {
 
     #[test]
     fn targeted_cargo_test_skips_main() {
-        let cmd = EditTestFix::targeted_test_command(
-            "cargo test",
-            &["src/main.rs".to_string()],
-        );
+        let cmd = EditTestFix::targeted_test_command("cargo test", &["src/main.rs".to_string()]);
         assert_eq!(cmd, "cargo test"); // falls back to full suite
     }
 
@@ -373,7 +375,8 @@ mod tests {
             stdout: "x".repeat(5000),
             stderr: "e".repeat(6000),
         };
-        let prompt = EditTestFix::build_fix_prompt("cargo test", &result, &["src/lib.rs".to_string()], None);
+        let prompt =
+            EditTestFix::build_fix_prompt("cargo test", &result, &["src/lib.rs".to_string()], None);
         assert!(prompt.len() < 10000);
         assert!(prompt.contains("cargo test"));
         assert!(prompt.contains("src/lib.rs"));
@@ -404,10 +407,8 @@ mod tests {
                 },
             ],
         };
-        let prompt = EditTestFix::build_diagnostic_fix_prompt(
-            &diag_result,
-            &["src/main.rs".to_string()],
-        );
+        let prompt =
+            EditTestFix::build_diagnostic_fix_prompt(&diag_result, &["src/main.rs".to_string()]);
         assert!(prompt.contains("1 error(s)"));
         assert!(prompt.contains("1 warning(s)"));
         assert!(prompt.contains("cannot find value"));

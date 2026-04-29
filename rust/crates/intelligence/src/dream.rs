@@ -5,20 +5,21 @@
 //! - Plan: Research and strategy (Plan Mode).
 //! - General: Standard multi-step worker.
 
-use serde::{Deserialize, Serialize};
-use crate::harness::{SubagentType, SubagentStatus, SubagentInstance};
+use crate::harness::{SubagentInstance, SubagentStatus, SubagentType};
 use crate::planner::{Blueprint, PlanStep};
+use serde::{Deserialize, Serialize};
 
-use std::sync::Arc;
 use backend::BackendRegistry;
-use runtime::{ApiRequest, ConversationMessage, AssistantEvent, ResponseFormat};
+use runtime::ApiRequest;
 
 pub struct SubagentManager;
 
 impl SubagentManager {
     /// Spawn a new subagent task.
+    #[must_use]
     pub fn spawn(agent_type: SubagentType, _task_desc: &str) -> SubagentInstance {
-        let id = format!("{}-{}", 
+        let id = format!(
+            "{}-{}",
             match agent_type {
                 SubagentType::Explore => "explore",
                 SubagentType::Plan => "plan",
@@ -36,14 +37,18 @@ impl SubagentManager {
     }
 
     /// Optimized logic for 'Explore' subagent (Read-only discovery).
+    #[must_use]
     pub fn explore_codebase(registry: &BackendRegistry, query: &str) -> String {
-        let model = registry.best_fast_model().map(|m| m.name.as_str()).unwrap_or("gemma4:e4b");
+        let model = registry
+            .best_fast_model()
+            .map(|m| m.name.as_str())
+            .unwrap_or("gemma4:e4b");
         let mut client = match registry.create_client(model, false) {
             Ok(c) => c,
             Err(e) => return format!("Inference error: {e}"),
         };
 
-        let prompt = format!("You are the Tachy Explore subagent. Your goal is to find relevant code for this query: '{}'. Respond with a concise summary of the files and logic you identified.", query);
+        let prompt = format!("You are the Tachy Explore subagent. Your goal is to find relevant code for this query: '{query}'. Respond with a concise summary of the files and logic you identified.");
         let req = ApiRequest {
             system_prompt: vec!["You are a helpful assistant.".to_string()],
             messages: vec![runtime::ConversationMessage::user_text(prompt)],
@@ -51,17 +56,27 @@ impl SubagentManager {
         };
 
         match client.stream(req) {
-            Ok(events) => events.iter()
-                .filter_map(|e| if let runtime::AssistantEvent::TextDelta(t) = e { Some(t.clone()) } else { None })
-                .collect::<Vec<_>>()
-                .join(""),
+            Ok(events) => events
+                .iter()
+                .filter_map(|e| {
+                    if let runtime::AssistantEvent::TextDelta(t) = e {
+                        Some(t.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>(),
             Err(e) => format!("Model failure: {e}"),
         }
     }
 
     /// Optimized logic for 'Plan' subagent (Research-only).
+    #[must_use]
     pub fn research_plan(registry: &BackendRegistry, step: &PlanStep) -> String {
-        let model = registry.best_frontier_model().map(|m| m.name.as_str()).unwrap_or("gemma4:31b");
+        let model = registry
+            .best_frontier_model()
+            .map(|m| m.name.as_str())
+            .unwrap_or("gemma4:31b");
         let mut client = match registry.create_client(model, false) {
             Ok(c) => c,
             Err(e) => return format!("Inference error: {e}"),
@@ -75,10 +90,16 @@ impl SubagentManager {
         };
 
         match client.stream(req) {
-            Ok(events) => events.iter()
-                .filter_map(|e| if let runtime::AssistantEvent::TextDelta(t) = e { Some(t.clone()) } else { None })
-                .collect::<Vec<_>>()
-                .join(""),
+            Ok(events) => events
+                .iter()
+                .filter_map(|e| {
+                    if let runtime::AssistantEvent::TextDelta(t) = e {
+                        Some(t.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>(),
             Err(e) => {
                 // FALLBACK: High-fidelity simulation for the operationalization demo
                 if step.description.to_lowercase().contains("refactor") {

@@ -14,9 +14,8 @@ fn write_file_produces_diff_preview() {
     let path = dir.join("hello.txt");
 
     // New file — diff should show all additions
-    let (output, preview) = runtime::write_file(
-        path.to_str().unwrap(), "line1\nline2\nline3\n",
-    ).expect("write should succeed");
+    let (output, preview) = runtime::write_file(path.to_str().unwrap(), "line1\nline2\nline3\n")
+        .expect("write should succeed");
     assert_eq!(output.kind, "create");
     assert!(preview.is_new_file);
     assert_eq!(preview.additions, 3);
@@ -24,9 +23,9 @@ fn write_file_produces_diff_preview() {
     assert!(preview.diff_text.contains("+line1"));
 
     // Update — diff should show changes
-    let (output2, preview2) = runtime::write_file(
-        path.to_str().unwrap(), "line1\nMODIFIED\nline3\n",
-    ).expect("update should succeed");
+    let (output2, preview2) =
+        runtime::write_file(path.to_str().unwrap(), "line1\nMODIFIED\nline3\n")
+            .expect("update should succeed");
     assert_eq!(output2.kind, "update");
     assert!(!preview2.is_new_file);
     assert!(preview2.additions > 0);
@@ -42,15 +41,14 @@ fn edit_file_produces_diff_preview() {
     let path = dir.join("code.rs");
     std::fs::write(&path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
 
-    let (output, preview) = runtime::edit_file(
-        path.to_str().unwrap(), "hello", "world", false,
-    ).expect("edit should succeed");
+    let (output, preview) = runtime::edit_file(path.to_str().unwrap(), "hello", "world", false)
+        .expect("edit should succeed");
 
     assert_eq!(output.new_string, "world");
     assert!(preview.additions > 0);
     assert!(preview.deletions > 0);
-    assert!(preview.diff_text.contains("-"));
-    assert!(preview.diff_text.contains("+"));
+    assert!(preview.diff_text.contains('-'));
+    assert!(preview.diff_text.contains('+'));
     assert!(!preview.summary.is_empty());
 
     cleanup(&dir);
@@ -65,9 +63,8 @@ fn preview_write_does_not_touch_disk() {
     let dir = temp_dir("int-preview-write");
     let path = dir.join("ghost.txt");
 
-    let preview = runtime::preview_write_file(
-        path.to_str().unwrap(), "should not exist on disk",
-    ).expect("preview should succeed");
+    let preview = runtime::preview_write_file(path.to_str().unwrap(), "should not exist on disk")
+        .expect("preview should succeed");
 
     assert!(preview.is_new_file);
     assert!(preview.additions > 0);
@@ -83,9 +80,8 @@ fn preview_edit_does_not_touch_disk() {
     let path = dir.join("original.txt");
     std::fs::write(&path, "alpha beta gamma").unwrap();
 
-    let preview = runtime::preview_edit_file(
-        path.to_str().unwrap(), "beta", "BETA", false,
-    ).expect("preview should succeed");
+    let preview = runtime::preview_edit_file(path.to_str().unwrap(), "beta", "BETA", false)
+        .expect("preview should succeed");
 
     assert!(preview.additions > 0);
     // File should still have original content
@@ -133,7 +129,7 @@ fn policy_engine_blocks_secrets_in_content() {
         audit::PolicyDecision::Reject { reason } => {
             assert!(reason.contains("password"));
         }
-        other => panic!("expected Reject, got {:?}", other),
+        other => panic!("expected Reject, got {other:?}"),
     }
 }
 
@@ -154,7 +150,7 @@ fn policy_engine_requires_approval_for_auth_paths() {
         audit::PolicyDecision::RequiresApproval { reason } => {
             assert!(reason.contains("auth"));
         }
-        other => panic!("expected RequiresApproval, got {:?}", other),
+        other => panic!("expected RequiresApproval, got {other:?}"),
     }
 }
 
@@ -167,18 +163,23 @@ fn file_locks_prevent_concurrent_writes() {
     let mgr = runtime::FileLockManager::new();
 
     // Agent 1 acquires lock
-    mgr.try_acquire("src/main.rs", "agent-1").expect("should acquire");
+    mgr.try_acquire("src/main.rs", "agent-1")
+        .expect("should acquire");
 
     // Agent 2 cannot acquire the same file
-    let err = mgr.try_acquire("src/main.rs", "agent-2").expect_err("should be locked");
+    let err = mgr
+        .try_acquire("src/main.rs", "agent-2")
+        .expect_err("should be locked");
     assert!(err.to_string().contains("agent-1"));
 
     // Agent 2 can lock a different file
-    mgr.try_acquire("src/lib.rs", "agent-2").expect("different file should work");
+    mgr.try_acquire("src/lib.rs", "agent-2")
+        .expect("different file should work");
 
     // Agent 1 releases, agent 2 can now acquire
     mgr.release("src/main.rs", "agent-1");
-    mgr.try_acquire("src/main.rs", "agent-2").expect("should acquire after release");
+    mgr.try_acquire("src/main.rs", "agent-2")
+        .expect("should acquire after release");
 
     // release_all cleans up
     mgr.release_all("agent-2");
@@ -206,18 +207,44 @@ fn orchestrator_respects_task_dependencies() {
         id: "run-dep".into(),
         tasks: vec![
             AgentTask {
-                id: "t1".into(), run_id: "run-dep".into(), template: "chat".into(),
-                prompt: "first".into(), model: None, deps: vec![], priority: 5,
+                id: "t1".into(),
+                run_id: "run-dep".into(),
+                template: "chat".into(),
+                prompt: "first".into(),
+                model: None,
+                deps: vec![],
+                priority: 5,
                 role: TaskRole::General,
-                status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
             },
             AgentTask {
-                id: "t2".into(), run_id: "run-dep".into(), template: "chat".into(),
-                prompt: "second".into(), model: None, deps: vec!["t1".into()], priority: 5,
+                id: "t2".into(),
+                run_id: "run-dep".into(),
+                template: "chat".into(),
+                prompt: "second".into(),
+                model: None,
+                deps: vec!["t1".into()],
+                priority: 5,
                 role: TaskRole::General,
-                status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
             },
         ],
         status: RunStatus::Running,
@@ -236,18 +263,36 @@ fn orchestrator_respects_task_dependencies() {
     assert!(orch.next_task().is_none()); // t2 blocked
 
     // Complete t1 — now t2 should be available
-    orch.complete_task("t1", TaskResult {
-        success: true, summary: "done".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
-    });
+    orch.complete_task(
+        "t1",
+        TaskResult {
+            success: true,
+            summary: "done".into(),
+            iterations: 1,
+            tool_invocations: 0,
+            audit_hash: "h".into(),
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+        },
+    );
     let task2 = orch.next_task().unwrap();
     assert_eq!(task2.id, "t2");
 
     // Complete t2 — run should be completed
-    orch.complete_task("t2", TaskResult {
-        success: true, summary: "done".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
-    });
+    orch.complete_task(
+        "t2",
+        TaskResult {
+            success: true,
+            summary: "done".into(),
+            iterations: 1,
+            tool_invocations: 0,
+            audit_hash: "h".into(),
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+        },
+    );
     let run = orch.get_run("run-dep").unwrap();
     assert_eq!(run.status, RunStatus::Completed);
 }
@@ -261,18 +306,44 @@ fn orchestrator_partial_failure() {
         id: "run-fail".into(),
         tasks: vec![
             AgentTask {
-                id: "ok".into(), run_id: "run-fail".into(), template: "chat".into(),
-                prompt: "a".into(), model: None, deps: vec![], priority: 5,
+                id: "ok".into(),
+                run_id: "run-fail".into(),
+                template: "chat".into(),
+                prompt: "a".into(),
+                model: None,
+                deps: vec![],
+                priority: 5,
                 role: TaskRole::General,
-                status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
             },
             AgentTask {
-                id: "bad".into(), run_id: "run-fail".into(), template: "chat".into(),
-                prompt: "b".into(), model: None, deps: vec![], priority: 5,
+                id: "bad".into(),
+                run_id: "run-fail".into(),
+                template: "chat".into(),
+                prompt: "b".into(),
+                model: None,
+                deps: vec![],
+                priority: 5,
                 role: TaskRole::General,
-                status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
+                status: TaskStatus::Pending,
+                result: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+                work_dir: None,
+                team_id: None,
+                conditions: TaskConditions::default(),
+                approval_required: false,
+                approved: false,
             },
         ],
         status: RunStatus::Running,
@@ -287,14 +358,32 @@ fn orchestrator_partial_failure() {
 
     let t1 = orch.next_task().unwrap();
     let t2 = orch.next_task().unwrap();
-    orch.complete_task(&t1.id, TaskResult {
-        success: true, summary: "ok".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
-    });
-    orch.complete_task(&t2.id, TaskResult {
-        success: false, summary: "failed".into(), iterations: 1,
-        tool_invocations: 0, audit_hash: "h".into(), tokens_in: 0, tokens_out: 0, cost_usd: 0.0,
-    });
+    orch.complete_task(
+        &t1.id,
+        TaskResult {
+            success: true,
+            summary: "ok".into(),
+            iterations: 1,
+            tool_invocations: 0,
+            audit_hash: "h".into(),
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+        },
+    );
+    orch.complete_task(
+        &t2.id,
+        TaskResult {
+            success: false,
+            summary: "failed".into(),
+            iterations: 1,
+            tool_invocations: 0,
+            audit_hash: "h".into(),
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+        },
+    );
 
     let run = orch.get_run("run-fail").unwrap();
     assert_eq!(run.status, RunStatus::PartiallyCompleted);
@@ -307,7 +396,7 @@ fn orchestrator_partial_failure() {
 #[test]
 fn sso_full_lifecycle() {
     use audit::sso::*;
-    use audit::{UserStore, Role};
+    use audit::{Role, UserStore};
     use std::collections::BTreeMap;
 
     let config = SsoConfig {
@@ -402,7 +491,9 @@ fn daemon_state_patch_queue_lifecycle() {
 
     // Approve — should write to disk
     let file_path = state.approve_patch(&patch_id).expect("approve");
-    assert!(std::fs::read_to_string(&file_path).unwrap().contains("patched"));
+    assert!(std::fs::read_to_string(&file_path)
+        .unwrap()
+        .contains("patched"));
     assert_eq!(state.pending_patches.len(), 0);
 
     // Queue another and reject
@@ -445,7 +536,7 @@ fn cleanup(dir: &PathBuf) {
 /// Simple base64 encoder for test SAML payloads.
 fn base64_encode_test(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
@@ -453,8 +544,16 @@ fn base64_encode_test(data: &[u8]) -> String {
         let triple = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
         out.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 { CHARS[((triple >> 6) & 0x3F) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(triple & 0x3F) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            CHARS[((triple >> 6) & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[(triple & 0x3F) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }

@@ -91,7 +91,8 @@ impl HealthReport {
 }
 
 /// Query Ollama for locally installed models.
-#[must_use] pub fn discover_local_models(base_url: &str) -> Vec<LocalModel> {
+#[must_use]
+pub fn discover_local_models(base_url: &str) -> Vec<LocalModel> {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -123,7 +124,8 @@ impl HealthReport {
 }
 
 /// Check if Ollama is running and get its version.
-#[must_use] pub fn check_ollama(base_url: &str) -> (bool, Option<String>) {
+#[must_use]
+pub fn check_ollama(base_url: &str) -> (bool, Option<String>) {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -148,7 +150,11 @@ impl HealthReport {
 pub fn detect_gpu() -> Option<String> {
     // macOS: check for Apple Silicon or Intel
     if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("sysctl").arg("-n").arg("machdep.cpu.brand_string").output() {
+        if let Ok(output) = Command::new("sysctl")
+            .arg("-n")
+            .arg("machdep.cpu.brand_string")
+            .output()
+        {
             let brand = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !brand.is_empty() {
                 let mem = Command::new("sysctl")
@@ -156,7 +162,12 @@ pub fn detect_gpu() -> Option<String> {
                     .arg("hw.memsize")
                     .output()
                     .ok()
-                    .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+                    .and_then(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .trim()
+                            .parse::<u64>()
+                            .ok()
+                    })
                     .map(|bytes| format!(" ({} GB unified)", bytes / 1_073_741_824))
                     .unwrap_or_default();
                 return Some(format!("{brand}{mem}"));
@@ -231,13 +242,43 @@ pub fn recommend_model(models: &[LocalModel], _gpu_info: &Option<String>) -> Opt
     // Rule of thumb: model needs ~1.2x its file size in RAM
     let preferred_order: Vec<&str> = if ram_gb >= 32 {
         // 32GB+: can run 26-30B models
-        vec!["gemma4:", "qwen3-coder", "qwen3:", "qwen2.5-coder", "llama3.1:", "mistral:", "codestral:", "llama3:", "codellama:"]
+        vec![
+            "gemma4:",
+            "qwen3-coder",
+            "qwen3:",
+            "qwen2.5-coder",
+            "llama3.1:",
+            "mistral:",
+            "codestral:",
+            "llama3:",
+            "codellama:",
+        ]
     } else if ram_gb >= 16 {
         // 16GB: stick to 7-8B models, maybe small MoE
-        vec!["qwen3:8b", "qwen3:", "llama3.1:8b", "llama3.1:", "mistral:", "gemma4:e4b", "gemma4:", "codestral:", "llama3:", "codellama:"]
+        vec![
+            "qwen3:8b",
+            "qwen3:",
+            "llama3.1:8b",
+            "llama3.1:",
+            "mistral:",
+            "gemma4:e4b",
+            "gemma4:",
+            "codestral:",
+            "llama3:",
+            "codellama:",
+        ]
     } else {
         // 8GB or less: only small models
-        vec!["gemma4:e4b", "gemma4:e2b", "llama3.2:3b", "qwen3:8b", "mistral:7b", "llama3.1:8b", "llama3:", "codellama:"]
+        vec![
+            "gemma4:e4b",
+            "gemma4:e2b",
+            "llama3.2:3b",
+            "qwen3:8b",
+            "mistral:7b",
+            "llama3.1:8b",
+            "llama3:",
+            "codellama:",
+        ]
     };
 
     for prefix in &preferred_order {
@@ -251,7 +292,8 @@ pub fn recommend_model(models: &[LocalModel], _gpu_info: &Option<String>) -> Opt
 }
 
 /// Public wrapper for system RAM detection.
-#[must_use] pub fn detect_system_ram_gb_public() -> u64 {
+#[must_use]
+pub fn detect_system_ram_gb_public() -> u64 {
     detect_system_ram_gb()
 }
 
@@ -260,7 +302,10 @@ fn detect_system_ram_gb() -> u64 {
     // macOS
     if cfg!(target_os = "macos") {
         if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
-            if let Ok(bytes) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+            if let Ok(bytes) = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u64>()
+            {
                 return bytes / 1_073_741_824;
             }
         }
@@ -296,7 +341,8 @@ fn detect_system_ram_gb() -> u64 {
 }
 
 /// Run a full health check.
-#[must_use] pub fn run_health_check(base_url: &str) -> HealthReport {
+#[must_use]
+pub fn run_health_check(base_url: &str) -> HealthReport {
     let (ollama_running, ollama_version) = check_ollama(base_url);
     let local_models = if ollama_running {
         discover_local_models(base_url)
@@ -331,7 +377,9 @@ pub fn pull_model(model_name: &str) -> Result<(), String> {
         println!("  Run: tachy --model {model_name}");
         Ok(())
     } else {
-        Err(format!("ollama pull {model_name} failed with exit code {status}"))
+        Err(format!(
+            "ollama pull {model_name} failed with exit code {status}"
+        ))
     }
 }
 

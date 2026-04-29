@@ -117,10 +117,16 @@ impl TaskScheduler {
                 t.enabled
                     && matches!(
                         (&t.schedule, t.status),
-                        (ScheduleRule::Once | ScheduleRule::OnFileChange { .. } |
-ScheduleRule::OnWebhook { .. } | ScheduleRule::OnGitEvent { .. },
-TaskStatus::Pending) |
-(ScheduleRule::Interval { .. }, TaskStatus::Pending | TaskStatus::Completed)
+                        (
+                            ScheduleRule::Once
+                                | ScheduleRule::OnFileChange { .. }
+                                | ScheduleRule::OnWebhook { .. }
+                                | ScheduleRule::OnGitEvent { .. },
+                            TaskStatus::Pending
+                        ) | (
+                            ScheduleRule::Interval { .. },
+                            TaskStatus::Pending | TaskStatus::Completed
+                        )
                     )
             })
             .collect()
@@ -150,7 +156,7 @@ mod tests {
             template: AgentTemplate::test_runner(),
             session_id: "s1".to_string(),
             working_directory: "/tmp".to_string(),
-            environment: Default::default(),
+            environment: std::collections::BTreeMap::default(),
             team_id: None,
         }
     }

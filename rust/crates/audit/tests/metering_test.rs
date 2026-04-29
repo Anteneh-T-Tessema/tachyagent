@@ -1,12 +1,12 @@
 //! Metering property tests.
 //!
 //! Feature: product-hardening-v3
-//! Properties 1–3: MeteringService correctness.
+//! Properties 1–3: `MeteringService` correctness.
 //! Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.6
 
-use proptest::prelude::*;
-use audit::{AuditLogger, MeteringService, UsageEvent, UsageEventType, MeteringError};
 use audit::cost_model::CostModelRegistry;
+use audit::{AuditLogger, MeteringError, MeteringService, UsageEvent, UsageEventType};
+use proptest::prelude::*;
 use std::sync::Arc;
 
 fn make_agent_run_event(user_id: &str, input: u64, output: u64, tools: u32, ts: u64) -> UsageEvent {

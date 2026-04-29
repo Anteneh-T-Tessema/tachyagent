@@ -23,7 +23,8 @@ pub struct EditTransaction {
 }
 
 impl EditTransaction {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             edits: Vec::new(),
             applied: Vec::new(),
@@ -34,7 +35,11 @@ impl EditTransaction {
     pub fn stage_write(&mut self, path: impl Into<PathBuf>, new_content: String) {
         let path = path.into();
         let original = fs::read_to_string(&path).ok();
-        self.edits.push(PendingEdit { path, new_content, original_content: original });
+        self.edits.push(PendingEdit {
+            path,
+            new_content,
+            original_content: original,
+        });
     }
 
     /// Stage a file edit (replace `old_string` with `new_string`). Does NOT write to disk yet.
@@ -49,7 +54,10 @@ impl EditTransaction {
         let original = fs::read_to_string(&path)?;
 
         if !original.contains(old_string) {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "old_string not found"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "old_string not found",
+            ));
         }
         let new_content = if replace_all {
             original.replace(old_string, new_string)
@@ -65,17 +73,20 @@ impl EditTransaction {
     }
 
     /// Number of staged edits.
-    #[must_use] pub fn len(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.edits.len()
     }
 
     /// Whether the transaction is empty.
-    #[must_use] pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
     /// List the files that will be modified.
-    #[must_use] pub fn files(&self) -> Vec<&Path> {
+    #[must_use]
+    pub fn files(&self) -> Vec<&Path> {
         self.edits.iter().map(|e| e.path.as_path()).collect()
     }
 
@@ -121,8 +132,12 @@ impl EditTransaction {
         for path in &self.applied {
             if let Some(edit) = self.edits.iter().find(|e| e.path == *path) {
                 match &edit.original_content {
-                    Some(original) => { let _ = fs::write(path, original); }
-                    None => { let _ = fs::remove_file(path); } // was a new file
+                    Some(original) => {
+                        let _ = fs::write(path, original);
+                    }
+                    None => {
+                        let _ = fs::remove_file(path);
+                    } // was a new file
                 }
             }
         }
@@ -149,9 +164,18 @@ pub enum TransactionError {
 impl std::fmt::Display for TransactionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::WriteFailed { path, error, rolled_back } => {
-                write!(f, "transaction failed writing {}: {} ({} files rolled back)",
-                    path.display(), error, rolled_back)
+            Self::WriteFailed {
+                path,
+                error,
+                rolled_back,
+            } => {
+                write!(
+                    f,
+                    "transaction failed writing {}: {} ({} files rolled back)",
+                    path.display(),
+                    error,
+                    rolled_back
+                )
             }
         }
     }

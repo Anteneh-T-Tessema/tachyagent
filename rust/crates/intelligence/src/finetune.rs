@@ -37,7 +37,12 @@ pub struct FinetuneDataset {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum TrainingStatus { Queued, Running, Completed, Failed }
+pub enum TrainingStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainingJob {
@@ -50,11 +55,17 @@ pub struct TrainingJob {
 }
 
 impl FinetuneDataset {
-    /// Extract training pairs from all `.json` session files in `sessions_dir`, 
+    /// Extract training pairs from all `.json` session files in `sessions_dir`,
     /// isolating by `team_id` if provided.
     ///
     /// If `role_filter` is provided, only sessions using that agent template name are included.
-    #[must_use] pub fn from_sessions_isolated(sessions_dir: &Path, gold_standard_only: bool, team_id: Option<&str>, role_filter: Option<&str>) -> Self {
+    #[must_use]
+    pub fn from_sessions_isolated(
+        sessions_dir: &Path,
+        gold_standard_only: bool,
+        team_id: Option<&str>,
+        role_filter: Option<&str>,
+    ) -> Self {
         let mut dataset = FinetuneDataset::default();
         let Ok(entries) = std::fs::read_dir(sessions_dir) else {
             return dataset;
@@ -71,7 +82,7 @@ impl FinetuneDataset {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
                 continue;
             };
-            
+
             // Check Team ID isolation if provided
             if let Some(tid) = team_id {
                 let session_team = json["team_id"].as_str();
@@ -87,7 +98,7 @@ impl FinetuneDataset {
                     continue;
                 }
             }
-            
+
             // Check Gold Standard criteria if requested
             if gold_standard_only {
                 let success = json["success"].as_bool().unwrap_or(false);
@@ -133,7 +144,8 @@ impl FinetuneDataset {
     }
 
     /// Serialize the dataset to newline-delimited JSON (JSONL).
-    #[must_use] pub fn to_jsonl(&self) -> String {
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
         self.entries
             .iter()
             .filter_map(|e| serde_json::to_string(e).ok())
@@ -147,7 +159,8 @@ impl FinetuneDataset {
     }
 
     /// Check if enough "Gold Standard" sessions exist to justify a fine-tuning run.
-    #[must_use] pub fn should_trigger(sessions_dir: &Path, threshold: usize) -> bool {
+    #[must_use]
+    pub fn should_trigger(sessions_dir: &Path, threshold: usize) -> bool {
         let Ok(entries) = std::fs::read_dir(sessions_dir) else {
             return false;
         };
@@ -176,10 +189,17 @@ impl FinetuneDataset {
     }
 
     /// Prepare a complete training bundle (JSONL, Modelfile, train.sh) in the target directory.
-    pub fn prepare_training_bundle(sessions_dir: &Path, output_dir: &Path, base_model: &str) -> std::io::Result<String> {
+    pub fn prepare_training_bundle(
+        sessions_dir: &Path,
+        output_dir: &Path,
+        base_model: &str,
+    ) -> std::io::Result<String> {
         let dataset = Self::from_sessions_isolated(sessions_dir, true, None, None);
         if dataset.entries.is_empty() {
-            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "No Gold Standard sessions found"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No Gold Standard sessions found",
+            ));
         }
 
         std::fs::create_dir_all(output_dir)?;
@@ -187,7 +207,11 @@ impl FinetuneDataset {
         let jsonl_path = output_dir.join("dataset.jsonl");
         dataset.save_jsonl(&jsonl_path)?;
 
-        let mf_content = generate_modelfile(base_model, "./adapter.gguf", "You are Tachy, a fast local AI coding agent optimized for this codebase.");
+        let mf_content = generate_modelfile(
+            base_model,
+            "./adapter.gguf",
+            "You are Tachy, a fast local AI coding agent optimized for this codebase.",
+        );
         std::fs::write(output_dir.join("Modelfile"), mf_content)?;
 
         let script_content = generate_training_script(base_model, "dataset.jsonl", ".");
@@ -208,7 +232,8 @@ impl FinetuneDataset {
 /// * `base_model`    - e.g. `"mistral:7b"` or `"gemma:7b"`
 /// * `adapter_path`  - path to the `.gguf` `LoRA` adapter produced by training
 /// * `system_prompt` - custom system prompt baked into the model
-#[must_use] pub fn generate_modelfile(base_model: &str, adapter_path: &str, system_prompt: &str) -> String {
+#[must_use]
+pub fn generate_modelfile(base_model: &str, adapter_path: &str, system_prompt: &str) -> String {
     format!(
         r#"FROM {base_model}
 
@@ -235,7 +260,8 @@ PARAMETER stop "<|assistant|>"
 ///
 /// This is informational output only — no training is performed by Tachy.
 /// The script is written to disk so the user can inspect, modify, and run it.
-#[must_use] pub fn generate_training_script(model_id: &str, dataset_path: &str, output_dir: &str) -> String {
+#[must_use]
+pub fn generate_training_script(model_id: &str, dataset_path: &str, output_dir: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
 # Tachy-generated LoRA fine-tuning script
@@ -326,11 +352,7 @@ fn extract_text_from_message(msg: &serde_json::Value) -> String {
     if let Some(blocks) = msg["blocks"].as_array() {
         let parts: Vec<&str> = blocks
             .iter()
-            .filter_map(|b| {
-                b["Text"]["text"]
-                    .as_str()
-                    .or_else(|| b["text"].as_str())
-            })
+            .filter_map(|b| b["Text"]["text"].as_str().or_else(|| b["text"].as_str()))
             .collect();
         if !parts.is_empty() {
             return parts.join("\n");
@@ -537,8 +559,12 @@ impl QualityScorer {
     #[must_use]
     pub fn score(session: &serde_json::Value) -> f32 {
         // Hard gates
-        if !session["success"].as_bool().unwrap_or(false) { return 0.0; }
-        if session["human_override"].as_bool().unwrap_or(false) { return 0.0; }
+        if !session["success"].as_bool().unwrap_or(false) {
+            return 0.0;
+        }
+        if session["human_override"].as_bool().unwrap_or(false) {
+            return 0.0;
+        }
 
         let messages = match session["messages"].as_array() {
             Some(m) if !m.is_empty() => m,
@@ -547,7 +573,7 @@ impl QualityScorer {
 
         // Soft signals
         let turn_count = messages.len();
-        let turn_score: f32 = if turn_count >= 2 && turn_count <= 30 {
+        let turn_score: f32 = if (2..=30).contains(&turn_count) {
             1.0 - ((turn_count as f32 - 10.0).abs() / 20.0).min(1.0) * 0.3
         } else {
             0.4
@@ -555,9 +581,10 @@ impl QualityScorer {
 
         // Reward non-empty assistant responses
         let avg_len: f32 = {
-            let assistant_texts: Vec<usize> = messages.iter()
+            let assistant_texts: Vec<usize> = messages
+                .iter()
                 .filter(|m| matches!(m["role"].as_str(), Some("assistant" | "Assistant")))
-                .filter_map(|m| m["content"].as_str().map(|s| s.len()))
+                .filter_map(|m| m["content"].as_str().map(str::len))
                 .collect();
             if assistant_texts.is_empty() {
                 return 0.0;
@@ -609,24 +636,31 @@ impl GoldStandardStore {
     /// Score `session` and, if it qualifies as Gold Standard, extract and
     /// append its (instruction, output) pairs to the JSONL file.
     /// Returns the number of pairs appended (0 if session did not qualify).
+    #[must_use]
     pub fn append_session(&self, session: &serde_json::Value) -> usize {
         if !QualityScorer::is_gold_standard(session) {
             return 0;
         }
-        let Some(messages) = session["messages"].as_array() else { return 0; };
+        let Some(messages) = session["messages"].as_array() else {
+            return 0;
+        };
 
         let mut appended = 0;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path);
-        let Ok(mut file) = file else { return 0; };
+        let Ok(mut file) = file else {
+            return 0;
+        };
 
         let mut last_user: Option<&str> = None;
         for msg in messages {
             let role = msg["role"].as_str().unwrap_or("");
             let text = msg["content"].as_str().unwrap_or("").trim();
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
             match role {
                 "user" | "User" => last_user = Some(text),
                 "assistant" | "Assistant" => {
@@ -679,9 +713,12 @@ pub struct FlashDistiller;
 impl FlashDistiller {
     /// Condensed a full session into a set of 'Expert Traces' for the semantic cache.
     /// Focuses only on successful tool sequences and their reasoning.
+    #[must_use]
     pub fn distill_session(session_json: &serde_json::Value) -> Option<String> {
         let success = session_json["success"].as_bool().unwrap_or(false);
-        if !success { return None; }
+        if !success {
+            return None;
+        }
 
         let messages = session_json["messages"].as_array()?;
         let mut trace = String::new();
@@ -695,14 +732,14 @@ impl FlashDistiller {
                     if let Some(reasoning) = content.split("```").next() {
                         let trimmed = reasoning.trim();
                         if !trimmed.is_empty() {
-                            trace.push_str(&format!("  [Reasoning] {}\n", trimmed));
+                            trace.push_str(&format!("  [Reasoning] {trimmed}\n"));
                         }
                     }
                 }
                 if let Some(tools) = msg["tool_calls"].as_array() {
                     for tool in tools {
                         let name = tool["function"]["name"].as_str().unwrap_or("unknown");
-                        trace.push_str(&format!("  [Tool] {}\n", name));
+                        trace.push_str(&format!("  [Tool] {name}\n"));
                     }
                 }
             }
@@ -728,15 +765,23 @@ pub enum CompactionLevel {
 }
 
 impl FlashCompactor {
-    pub fn distill_to_level(session_json: &serde_json::Value, level: CompactionLevel) -> Option<String> {
+    #[must_use]
+    pub fn distill_to_level(
+        session_json: &serde_json::Value,
+        level: CompactionLevel,
+    ) -> Option<String> {
         let success = session_json["success"].as_bool().unwrap_or(false);
-        if !success { return None; }
+        if !success {
+            return None;
+        }
 
         match level {
-            CompactionLevel::Raw => Some(serde_json::to_string_pretty(&session_json["messages"]).ok()?),
-            CompactionLevel::Summary => {
-                session_json["messages"][0]["content"].as_str().map(|s| format!("Task Intent: {}", s))
+            CompactionLevel::Raw => {
+                Some(serde_json::to_string_pretty(&session_json["messages"]).ok()?)
             }
+            CompactionLevel::Summary => session_json["messages"][0]["content"]
+                .as_str()
+                .map(|s| format!("Task Intent: {s}")),
             CompactionLevel::Sequence => {
                 let messages = session_json["messages"].as_array()?;
                 let mut sequence = Vec::new();
@@ -747,7 +792,11 @@ impl FlashCompactor {
                         }
                     }
                 }
-                if sequence.is_empty() { None } else { Some(sequence.join("\n-> ")) }
+                if sequence.is_empty() {
+                    None
+                } else {
+                    Some(sequence.join("\n-> "))
+                }
             }
             CompactionLevel::Logic => {
                 let messages = session_json["messages"].as_array()?;
@@ -757,18 +806,24 @@ impl FlashCompactor {
                         if let Some(content) = msg["content"].as_str() {
                             let reasoning = content.split("```").next().unwrap_or("").trim();
                             if !reasoning.is_empty() {
-                                logic.push_str(&format!("- {}\n", reasoning));
+                                logic.push_str(&format!("- {reasoning}\n"));
                             }
                         }
                     }
                 }
-                if logic.is_empty() { None } else { Some(logic) }
+                if logic.is_empty() {
+                    None
+                } else {
+                    Some(logic)
+                }
             }
             CompactionLevel::Flash => {
                 let messages = session_json["messages"].as_array()?;
                 for msg in messages {
                     if msg["role"] == "Assistant" || msg["role"] == "assistant" {
-                        return msg["content"].as_str().map(|s| s.to_string());
+                        return msg["content"]
+                            .as_str()
+                            .map(std::string::ToString::to_string);
                     }
                 }
                 None

@@ -26,7 +26,8 @@ pub enum ValidationErrorKind {
 }
 
 /// Validate generated code for basic correctness.
-#[must_use] pub fn validate_code(code: &str, language: &str) -> ValidationResult {
+#[must_use]
+pub fn validate_code(code: &str, language: &str) -> ValidationResult {
     let mut errors = Vec::new();
 
     // Check for empty output
@@ -36,7 +37,10 @@ pub enum ValidationErrorKind {
             message: "generated code is empty".to_string(),
             line: None,
         });
-        return ValidationResult { valid: false, errors };
+        return ValidationResult {
+            valid: false,
+            errors,
+        };
     }
 
     // Check balanced brackets
@@ -152,7 +156,8 @@ fn check_incomplete_code(code: &str, language: &str) -> Option<ValidationError> 
             if fn_count > 0 && open_braces > close_braces + 1 {
                 return Some(ValidationError {
                     kind: ValidationErrorKind::IncompleteCode,
-                    message: "function body appears incomplete (more opening than closing braces)".to_string(),
+                    message: "function body appears incomplete (more opening than closing braces)"
+                        .to_string(),
                     line: None,
                 });
             }
@@ -178,7 +183,10 @@ fn check_suspicious_patterns(code: &str) -> Vec<ValidationError> {
 
     // Model artifacts — common with local models
     let artifacts = [
-        ("```", "code block markers in output — model may have included markdown"),
+        (
+            "```",
+            "code block markers in output — model may have included markdown",
+        ),
         ("<|im_end|>", "model control token leaked into output"),
         ("<|endoftext|>", "model control token leaked into output"),
         ("[INST]", "model instruction token leaked into output"),
@@ -199,7 +207,8 @@ fn check_suspicious_patterns(code: &str) -> Vec<ValidationError> {
 }
 
 /// Clean model artifacts from generated code.
-#[must_use] pub fn clean_code_output(code: &str) -> String {
+#[must_use]
+pub fn clean_code_output(code: &str) -> String {
     let mut cleaned = code.to_string();
 
     // Remove markdown code block markers
@@ -214,7 +223,14 @@ fn check_suspicious_patterns(code: &str) -> Vec<ValidationError> {
     }
 
     // Remove model control tokens
-    for token in ["<|im_end|>", "<|endoftext|>", "[INST]", "[/INST]", "<<SYS>>", "<</SYS>>"] {
+    for token in [
+        "<|im_end|>",
+        "<|endoftext|>",
+        "[INST]",
+        "[/INST]",
+        "<<SYS>>",
+        "<</SYS>>",
+    ] {
         cleaned = cleaned.replace(token, "");
     }
 
@@ -232,14 +248,20 @@ mod tests {
 
         let result = validate_code("fn main() { println!(\"hi\"); ", "rust");
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| e.kind == ValidationErrorKind::UnbalancedBrackets));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::UnbalancedBrackets));
     }
 
     #[test]
     fn detects_empty_output() {
         let result = validate_code("", "rust");
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| e.kind == ValidationErrorKind::EmptyOutput));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::EmptyOutput));
     }
 
     #[test]
@@ -252,7 +274,10 @@ mod tests {
     fn detects_model_artifacts() {
         let result = validate_code("fn main() {}\n<|im_end|>", "rust");
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| e.kind == ValidationErrorKind::SuspiciousPattern));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::SuspiciousPattern));
     }
 
     #[test]

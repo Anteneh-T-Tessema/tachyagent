@@ -31,7 +31,9 @@ pub struct GetMissionFeedInput {
     pub limit: usize,
 }
 
-fn default_limit() -> usize { 10 }
+fn default_limit() -> usize {
+    10
+}
 
 /// A single event from the mission feed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +52,8 @@ pub struct GetMissionFeedResult {
 }
 
 /// Specification for the collaboration tools.
-#[must_use] pub fn collaboration_tool_specs() -> Vec<serde_json::Value> {
+#[must_use]
+pub fn collaboration_tool_specs() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({
             "name": "broadcast_mission_status",

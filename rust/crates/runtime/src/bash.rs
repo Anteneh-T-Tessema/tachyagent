@@ -119,32 +119,30 @@ async fn execute_bash_async(input: BashCommandInput) -> io::Result<BashCommandOu
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(30)
         .saturating_mul(1_000);
-    let effective_timeout = input.timeout
-        .unwrap_or(default_ms)
-        .max(5_000)          // floor: never less than 5s
-        .min(300_000);       // ceiling: never more than 5min
+    let effective_timeout = input.timeout.unwrap_or(default_ms).clamp(5_000, 300_000);
 
-    let output_result = match timeout(Duration::from_millis(effective_timeout), command.output()).await {
-        Ok(result) => (result?, false),
-        Err(_) => {
-            return Ok(BashCommandOutput {
-                stdout: String::new(),
-                stderr: format!("Command exceeded timeout of {effective_timeout} ms"),
-                raw_output_path: None,
-                interrupted: true,
-                is_image: None,
-                background_task_id: None,
-                backgrounded_by_user: None,
-                assistant_auto_backgrounded: None,
-                dangerously_disable_sandbox: input.dangerously_disable_sandbox,
-                return_code_interpretation: Some(String::from("timeout")),
-                no_output_expected: Some(true),
-                structured_content: None,
-                persisted_output_path: None,
-                persisted_output_size: None,
-            });
-        }
-    };
+    let output_result =
+        match timeout(Duration::from_millis(effective_timeout), command.output()).await {
+            Ok(result) => (result?, false),
+            Err(_) => {
+                return Ok(BashCommandOutput {
+                    stdout: String::new(),
+                    stderr: format!("Command exceeded timeout of {effective_timeout} ms"),
+                    raw_output_path: None,
+                    interrupted: true,
+                    is_image: None,
+                    background_task_id: None,
+                    backgrounded_by_user: None,
+                    assistant_auto_backgrounded: None,
+                    dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                    return_code_interpretation: Some(String::from("timeout")),
+                    no_output_expected: Some(true),
+                    structured_content: None,
+                    persisted_output_path: None,
+                    persisted_output_size: None,
+                });
+            }
+        };
 
     let (output, interrupted) = output_result;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -222,7 +220,10 @@ mod tests {
         })
         .expect("should return a timeout result");
         assert!(output.interrupted, "sleep 10 should be interrupted");
-        assert!(output.stderr.contains("timeout") || output.stderr.contains("exceeded"),
-            "stderr should mention timeout: {}", output.stderr);
+        assert!(
+            output.stderr.contains("timeout") || output.stderr.contains("exceeded"),
+            "stderr should mention timeout: {}",
+            output.stderr
+        );
     }
 }

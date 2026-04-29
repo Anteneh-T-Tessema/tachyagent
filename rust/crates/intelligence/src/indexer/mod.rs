@@ -6,23 +6,23 @@
 //!   search  — keyword scoring, semantic embeddings, content hashing
 
 mod lang;
-mod summary;
 mod search;
+mod summary;
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
 use crate::rag::VectorStore;
+use serde::{Deserialize, Serialize};
 
 // Re-export the functions that external callers reference as `crate::indexer::*`
 pub use lang::{detect_language, detect_test_command};
 pub use search::{embed_summaries, semantic_score};
 
-use lang::{detect_build_system, is_ignored_dir, is_binary_extension};
-use summary::extract_summary;
+use lang::{detect_build_system, is_binary_extension, is_ignored_dir};
 use search::{search_score, simple_hash};
+use summary::extract_summary;
 
 /// Configuration for the codebase indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,7 +137,10 @@ pub struct CodebaseIndexer;
 
 impl CodebaseIndexer {
     /// Build a full index of the workspace.
-    pub fn build_index(workspace_root: &Path, config: &IndexerConfig) -> Result<CodebaseIndex, IndexError> {
+    pub fn build_index(
+        workspace_root: &Path,
+        config: &IndexerConfig,
+    ) -> Result<CodebaseIndex, IndexError> {
         if !workspace_root.exists() {
             return Err(IndexError::WorkspaceNotFound(
                 workspace_root.to_string_lossy().to_string(),
@@ -148,7 +151,14 @@ impl CodebaseIndexer {
         let mut total_lines = 0usize;
         let mut lang_counts: BTreeMap<String, usize> = BTreeMap::new();
 
-        Self::walk_directory(workspace_root, workspace_root, config, &mut files, &mut total_lines, &mut lang_counts)?;
+        Self::walk_directory(
+            workspace_root,
+            workspace_root,
+            config,
+            &mut files,
+            &mut total_lines,
+            &mut lang_counts,
+        )?;
 
         let primary_language = lang_counts
             .into_iter()
@@ -231,7 +241,8 @@ impl CodebaseIndexer {
                     .to_string();
 
                 let language = detect_language(&relative).to_string();
-                if language == "unknown" && !matches!(ext, "toml" | "json" | "yaml" | "yml" | "md") {
+                if language == "unknown" && !matches!(ext, "toml" | "json" | "yaml" | "yml" | "md")
+                {
                     continue; // skip truly unknown files
                 }
 
@@ -354,23 +365,31 @@ impl CodebaseIndexer {
             let new_hash = search::simple_hash(&content);
 
             // Skip if content unchanged
-            if existing.files.get(*rel_path).map(|e| e.content_hash.as_str()) == Some(&new_hash) {
+            if existing
+                .files
+                .get(*rel_path)
+                .map(|e| e.content_hash.as_str())
+                == Some(&new_hash)
+            {
                 continue;
             }
 
             let language = lang::detect_language(rel_path).to_string();
             let (exports, summary) = summary::extract_summary(rel_path, &content, &language);
 
-            updated.files.insert(rel_path.to_string(), FileEntry {
-                path: rel_path.to_string(),
-                language,
-                size: metadata.len(),
-                lines: content.lines().count(),
-                exports,
-                summary,
-                content_hash: new_hash,
-                embedding: None, // embeddings refreshed lazily on next search
-            });
+            updated.files.insert(
+                (*rel_path).to_string(),
+                FileEntry {
+                    path: (*rel_path).to_string(),
+                    language,
+                    size: metadata.len(),
+                    lines: content.lines().count(),
+                    exports,
+                    summary,
+                    content_hash: new_hash,
+                    embedding: None, // embeddings refreshed lazily on next search
+                },
+            );
             reindexed += 1;
         }
 
@@ -413,7 +432,7 @@ impl CodebaseIndexer {
 
             // Prefix every path with the repo name for cross-repo citation.
             for (path, mut entry) in files {
-                entry.path = format!("{}/{}", repo_name, path);
+                entry.path = format!("{repo_name}/{path}");
                 merged_files.insert(entry.path.clone(), entry);
             }
         }
@@ -447,7 +466,8 @@ impl CodebaseIndexer {
     }
 
     /// Search the index for files matching a query.
-    #[must_use] pub fn search<'a>(
+    #[must_use]
+    pub fn search<'a>(
         index: &'a CodebaseIndex,
         query: &str,
         max_results: usize,
@@ -473,10 +493,10 @@ impl CodebaseIndexer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::lang::{is_ignored_dir, is_binary_extension};
+    use super::lang::{is_binary_extension, is_ignored_dir};
     use super::search::simple_hash;
     use super::summary::extract_summary;
+    use super::*;
 
     #[test]
     fn detect_language_covers_common_extensions() {
@@ -577,7 +597,11 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/main.rs"), "pub fn main() {}\npub struct App {}").unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "pub fn main() {}\npub struct App {}",
+        )
+        .unwrap();
         std::fs::write(dir.join("src/lib.rs"), "pub mod utils;\npub fn init() {}").unwrap();
         std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
 

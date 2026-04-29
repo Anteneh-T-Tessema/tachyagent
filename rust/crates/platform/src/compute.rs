@@ -33,6 +33,7 @@ pub struct ResourceOrchestrator {
 }
 
 impl ResourceOrchestrator {
+    #[must_use]
     pub fn new(max_burn_rate: f64) -> Self {
         Self { max_burn_rate }
     }
@@ -41,18 +42,32 @@ impl ResourceOrchestrator {
     pub fn provision_node(&self, requirements: &NodeSpecs) -> Result<ComputeNode, String> {
         // Mock decentralized provisioning logic
         let cost = 0.45; // $0.45/hr for a mid-range node
-        
+
         if cost > self.max_burn_rate {
-            return Err(format!("Provisioning rejected: Node cost (${:.2}/hr) exceeds max burn rate (${:.2}/hr)", cost, self.max_burn_rate));
+            return Err(format!(
+                "Provisioning rejected: Node cost (${:.2}/hr) exceeds max burn rate (${:.2}/hr)",
+                cost, self.max_burn_rate
+            ));
         }
 
         Ok(ComputeNode {
-            id: format!("node-{}", uuid::Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+            id: format!(
+                "node-{}",
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect::<String>()
+            ),
             provider: "Akash".to_string(),
             specs: requirements.clone(),
             status: NodeStatus::Provisioning,
             cost_per_hour: cost,
-            expires_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600,
+            expires_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 3600,
         })
     }
 }
@@ -60,6 +75,7 @@ impl ResourceOrchestrator {
 pub struct CostEstimator;
 
 impl CostEstimator {
+    #[must_use]
     pub fn estimate_mission_cost(priority: f32, complexity: f32) -> f64 {
         // Simple heuristic for compute requirements
         f64::from((priority * 0.5) + (complexity * 2.0))

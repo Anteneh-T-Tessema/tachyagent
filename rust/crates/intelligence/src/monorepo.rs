@@ -62,7 +62,8 @@ pub struct MonorepoManifest {
 impl MonorepoManifest {
     /// Detect the workspace layout for `root`, trying each toolchain in
     /// priority order and returning the first match.
-    #[must_use] pub fn detect(root: &Path) -> Self {
+    #[must_use]
+    pub fn detect(root: &Path) -> Self {
         if let Some(m) = detect_cargo(root) {
             return m;
         }
@@ -301,7 +302,9 @@ fn find_go_mod(root: &Path, dir: &Path, mods: &mut Vec<PathBuf>, depth: u8) {
     if depth > 4 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && entry.file_name() == "go.mod" {
@@ -353,7 +356,9 @@ fn find_pyproject(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, depth: u8) {
     if depth > 4 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && entry.file_name() == "pyproject.toml" {
@@ -447,8 +452,16 @@ mod tests {
         let dir = make_test_dir("go-multi");
         fs::create_dir_all(dir.join("svc-a")).unwrap();
         fs::create_dir_all(dir.join("svc-b")).unwrap();
-        fs::write(dir.join("svc-a/go.mod"), "module github.com/org/a\ngo 1.21\n").unwrap();
-        fs::write(dir.join("svc-b/go.mod"), "module github.com/org/b\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.join("svc-a/go.mod"),
+            "module github.com/org/a\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("svc-b/go.mod"),
+            "module github.com/org/b\ngo 1.21\n",
+        )
+        .unwrap();
         let m = MonorepoManifest::detect(&dir);
         assert_eq!(m.kind, MonorepoKind::GoModules);
         assert!(m.is_monorepo);
@@ -461,8 +474,16 @@ mod tests {
         let dir = make_test_dir("py-multi");
         fs::create_dir_all(dir.join("pkg-a")).unwrap();
         fs::create_dir_all(dir.join("pkg-b")).unwrap();
-        fs::write(dir.join("pkg-a/pyproject.toml"), "[project]\nname = \"pkg-a\"\n").unwrap();
-        fs::write(dir.join("pkg-b/pyproject.toml"), "[project]\nname = \"pkg-b\"\n").unwrap();
+        fs::write(
+            dir.join("pkg-a/pyproject.toml"),
+            "[project]\nname = \"pkg-a\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("pkg-b/pyproject.toml"),
+            "[project]\nname = \"pkg-b\"\n",
+        )
+        .unwrap();
         let m = MonorepoManifest::detect(&dir);
         assert_eq!(m.kind, MonorepoKind::Python);
         assert!(m.is_monorepo);
@@ -480,9 +501,7 @@ mod tests {
 
     #[test]
     fn cargo_glob_members_are_stripped() {
-        let members = parse_cargo_workspace_members(
-            "[workspace]\nmembers = [\"crates/*\"]\n",
-        );
+        let members = parse_cargo_workspace_members("[workspace]\nmembers = [\"crates/*\"]\n");
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].path, "crates");
         assert_eq!(members[0].name, "crates");

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::indexer::{semantic_score, CodebaseIndex, FileEntry};
 use backend::EmbeddingClient;
-use crate::indexer::{CodebaseIndex, FileEntry, semantic_score};
 
 /// Configuration for context selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,8 +76,8 @@ impl ContextSelector {
 
         // Attempt to embed the prompt for semantic retrieval.
         // If Ollama is not running, query_embedding is None and we fall back to keywords.
-        let query_embedding: Option<Vec<f32>> = EmbeddingClient::try_new()
-            .and_then(|client| client.embed(prompt).ok());
+        let query_embedding: Option<Vec<f32>> =
+            EmbeddingClient::try_new().and_then(|client| client.embed(prompt).ok());
 
         // Score and rank files using semantic + structural signals
         let mut scored: Vec<(&FileEntry, f32)> = index
@@ -107,7 +107,15 @@ impl ContextSelector {
         // Estimate tokens for summaries
         let summary_text = summaries
             .iter()
-            .map(|s| format!("- {} [{}] — {} exports: {}", s.path, s.language, s.summary, s.exports.join(", ")))
+            .map(|s| {
+                format!(
+                    "- {} [{}] — {} exports: {}",
+                    s.path,
+                    s.language,
+                    s.summary,
+                    s.exports.join(", ")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let summary_tokens = Self::estimate_tokens(&summary_text);
@@ -156,7 +164,8 @@ impl ContextSelector {
     }
 
     /// Render the injection as a system prompt section.
-    #[must_use] pub fn render_injection(injection: &ContextInjection, index: &CodebaseIndex) -> String {
+    #[must_use]
+    pub fn render_injection(injection: &ContextInjection, index: &CodebaseIndex) -> String {
         let mut sections = vec!["# Codebase Context\n".to_string()];
 
         // Project info
@@ -179,14 +188,20 @@ impl ContextSelector {
                 } else {
                     format!(" exports: {}", s.exports.join(", "))
                 };
-                sections.push(format!("- {} [{}] — {}{}", s.path, s.language, s.summary, exports));
+                sections.push(format!(
+                    "- {} [{}] — {}{}",
+                    s.path, s.language, s.summary, exports
+                ));
             }
         }
 
         // File contents
         for fc in &injection.file_contents {
             let truncated = if fc.truncated { " (truncated)" } else { "" };
-            sections.push(format!("\n### {}{}\n```\n{}\n```", fc.path, truncated, fc.content));
+            sections.push(format!(
+                "\n### {}{}\n```\n{}\n```",
+                fc.path, truncated, fc.content
+            ));
         }
 
         sections.join("\n")
@@ -195,7 +210,8 @@ impl ContextSelector {
     fn extract_keywords(prompt: &str) -> Vec<String> {
         let mut keywords = Vec::new();
 
-        for word in prompt.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/') {
+        for word in prompt.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/')
+        {
             let w = word.trim();
             if w.len() >= 3 && !is_stop_word(w) {
                 keywords.push(w.to_lowercase());
@@ -206,7 +222,6 @@ impl ContextSelector {
         keywords
     }
 
-
     fn estimate_tokens(text: &str) -> usize {
         text.len() / 4
     }
@@ -215,41 +230,71 @@ impl ContextSelector {
 fn is_stop_word(word: &str) -> bool {
     matches!(
         word.to_lowercase().as_str(),
-        "the" | "and" | "for" | "are" | "but" | "not" | "you" | "all"
-            | "can" | "had" | "her" | "was" | "one" | "our" | "out"
-            | "has" | "have" | "from" | "this" | "that" | "with" | "what"
-            | "how" | "use" | "file" | "code" | "please" | "help"
+        "the"
+            | "and"
+            | "for"
+            | "are"
+            | "but"
+            | "not"
+            | "you"
+            | "all"
+            | "can"
+            | "had"
+            | "her"
+            | "was"
+            | "one"
+            | "our"
+            | "out"
+            | "has"
+            | "have"
+            | "from"
+            | "this"
+            | "that"
+            | "with"
+            | "what"
+            | "how"
+            | "use"
+            | "file"
+            | "code"
+            | "please"
+            | "help"
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::indexer::ProjectMeta;
+    use std::collections::BTreeMap;
 
     fn test_index() -> CodebaseIndex {
         let mut files = BTreeMap::new();
-        files.insert("src/auth.rs".to_string(), FileEntry {
-            path: "src/auth.rs".to_string(),
-            language: "rust".to_string(),
-            size: 2048,
-            lines: 85,
-            exports: vec!["authenticate".to_string(), "verify_token".to_string()],
-            summary: "Authentication module with JWT handling".to_string(),
-            content_hash: "abc123".to_string(),
-            embedding: None,
-        });
-        files.insert("src/db.rs".to_string(), FileEntry {
-            path: "src/db.rs".to_string(),
-            language: "rust".to_string(),
-            size: 3000,
-            lines: 120,
-            exports: vec!["Pool".to_string(), "query".to_string()],
-            summary: "Database connection pool".to_string(),
-            content_hash: "def456".to_string(),
-            embedding: None,
-        });
+        files.insert(
+            "src/auth.rs".to_string(),
+            FileEntry {
+                path: "src/auth.rs".to_string(),
+                language: "rust".to_string(),
+                size: 2048,
+                lines: 85,
+                exports: vec!["authenticate".to_string(), "verify_token".to_string()],
+                summary: "Authentication module with JWT handling".to_string(),
+                content_hash: "abc123".to_string(),
+                embedding: None,
+            },
+        );
+        files.insert(
+            "src/db.rs".to_string(),
+            FileEntry {
+                path: "src/db.rs".to_string(),
+                language: "rust".to_string(),
+                size: 3000,
+                lines: 120,
+                exports: vec!["Pool".to_string(), "query".to_string()],
+                summary: "Database connection pool".to_string(),
+                content_hash: "def456".to_string(),
+                embedding: None,
+            },
+        );
         CodebaseIndex {
             version: 1,
             workspace_root: "/tmp/test".to_string(),
@@ -274,13 +319,9 @@ mod tests {
             ..ContextConfig::default()
         };
         let index = test_index();
-        let injection = ContextSelector::select_context(
-            "auth",
-            &index,
-            Path::new("/tmp/test"),
-            8192,
-            &config,
-        ).unwrap();
+        let injection =
+            ContextSelector::select_context("auth", &index, Path::new("/tmp/test"), 8192, &config)
+                .unwrap();
         assert!(injection.summaries.len() <= 1);
         assert!(injection.file_contents.len() <= 1);
     }
@@ -289,13 +330,9 @@ mod tests {
     fn context_respects_token_budget() {
         let config = ContextConfig::default();
         let index = test_index();
-        let injection = ContextSelector::select_context(
-            "auth",
-            &index,
-            Path::new("/tmp/test"),
-            8192,
-            &config,
-        ).unwrap();
+        let injection =
+            ContextSelector::select_context("auth", &index, Path::new("/tmp/test"), 8192, &config)
+                .unwrap();
         let budget = (8192.0 * config.max_context_percentage) as usize;
         assert!(injection.estimated_tokens <= budget);
     }

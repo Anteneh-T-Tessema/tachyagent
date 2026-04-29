@@ -24,8 +24,10 @@ pub struct TraceExtractor;
 
 impl TraceExtractor {
     /// Extract "Gold Standard" traces (reward > 0.9) from session logs.
+    #[must_use]
     pub fn extract_gold_traces(all_traces: Vec<TrainingTrace>) -> Vec<TrainingTrace> {
-        all_traces.into_iter()
+        all_traces
+            .into_iter()
             .filter(|t| t.reward_score > 0.9)
             .collect()
     }
@@ -35,6 +37,7 @@ pub struct DatasetGenerator;
 
 impl DatasetGenerator {
     /// Convert traces into a fine-tuning dataset (JSONL format).
+    #[must_use]
     pub fn generate_jsonl(traces: &[TrainingTrace]) -> String {
         let mut dataset = String::new();
         for trace in traces {
@@ -56,9 +59,16 @@ pub struct TrainerOrchestrator;
 
 impl TrainerOrchestrator {
     /// Trigger a remote fine-tuning job on a high-compute node.
-    pub fn start_tuning_job(&self, dataset: &str, expert_name: &str) -> Result<String, String> {
+    pub fn start_tuning_job(&self, _dataset: &str, _expert_name: &str) -> Result<String, String> {
         // Mock training orchestration logic
-        Ok(format!("job-{}", uuid::Uuid::new_v4().to_string().chars().take(8).collect::<String>()))
+        Ok(format!(
+            "job-{}",
+            uuid::Uuid::new_v4()
+                .to_string()
+                .chars()
+                .take(8)
+                .collect::<String>()
+        ))
     }
 }
 
@@ -70,7 +80,7 @@ pub struct ExpertAdapter {
     /// Performance lift over the base model measured by A/B evaluation (0.0 = unknown).
     pub lift_score: f32,
     pub status: AdapterStatus,
-    /// Path to the GGUF / LoRA adapter file on disk (empty = remote/pending).
+    /// Path to the GGUF / `LoRA` adapter file on disk (empty = remote/pending).
     #[serde(default)]
     pub adapter_path: String,
     /// Timestamp when this adapter was registered (Unix seconds).
@@ -126,7 +136,11 @@ impl AdapterRegistry {
 
     /// Register a new adapter. Returns its assigned `id`.
     pub fn register(&mut self, base_model: &str, domain: &str, adapter_path: &str) -> String {
-        let id = format!("adapter-{}-{}", domain.to_lowercase().replace(' ', "-"), now_epoch());
+        let id = format!(
+            "adapter-{}-{}",
+            domain.to_lowercase().replace(' ', "-"),
+            now_epoch()
+        );
         self.adapters.push(ExpertAdapter {
             id: id.clone(),
             base_model: base_model.to_string(),
@@ -143,7 +157,9 @@ impl AdapterRegistry {
     /// Activate an adapter by id. Demotes any existing Active adapter in the
     /// same domain to `Ready`. Returns `Err` if id is not found.
     pub fn activate(&mut self, id: &str) -> Result<(), String> {
-        let domain = self.adapters.iter()
+        let domain = self
+            .adapters
+            .iter()
             .find(|a| a.id == id)
             .map(|a| a.domain.clone())
             .ok_or_else(|| format!("adapter not found: {id}"))?;
@@ -156,7 +172,8 @@ impl AdapterRegistry {
         }
 
         // Activate the target
-        self.adapters.iter_mut()
+        self.adapters
+            .iter_mut()
             .find(|a| a.id == id)
             .ok_or_else(|| format!("adapter not found: {id}"))?
             .status = AdapterStatus::Active;
@@ -166,7 +183,8 @@ impl AdapterRegistry {
 
     /// Update the lift score for an adapter after an A/B evaluation.
     pub fn update_lift_score(&mut self, id: &str, lift: f32) -> Result<(), String> {
-        self.adapters.iter_mut()
+        self.adapters
+            .iter_mut()
             .find(|a| a.id == id)
             .ok_or_else(|| format!("adapter not found: {id}"))?
             .lift_score = lift;
@@ -175,25 +193,34 @@ impl AdapterRegistry {
 
     /// Mark a training-in-progress adapter as Ready.
     pub fn mark_ready(&mut self, id: &str) -> Result<(), String> {
-        let a = self.adapters.iter_mut()
+        let a = self
+            .adapters
+            .iter_mut()
             .find(|a| a.id == id)
             .ok_or_else(|| format!("adapter not found: {id}"))?;
         a.status = AdapterStatus::Ready;
         self.save()
     }
 
-    #[must_use] pub fn list(&self) -> &[ExpertAdapter] { &self.adapters }
+    #[must_use]
+    pub fn list(&self) -> &[ExpertAdapter] {
+        &self.adapters
+    }
 
-    #[must_use] pub fn get(&self, id: &str) -> Option<&ExpertAdapter> {
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&ExpertAdapter> {
         self.adapters.iter().find(|a| a.id == id)
     }
 
     /// Return the currently Active adapter for a given domain, if any.
-    #[must_use] pub fn active_for_domain(&self, domain: &str) -> Option<&ExpertAdapter> {
-        self.adapters.iter().find(|a| a.domain == domain && a.status == AdapterStatus::Active)
+    #[must_use]
+    pub fn active_for_domain(&self, domain: &str) -> Option<&ExpertAdapter> {
+        self.adapters
+            .iter()
+            .find(|a| a.domain == domain && a.status == AdapterStatus::Active)
     }
 
-    /// Sync external adapters into the registry (used by DaemonState migration).
+    /// Sync external adapters into the registry (used by `DaemonState` migration).
     pub fn sync_from_vec(&mut self, adapters: &[ExpertAdapter]) {
         for a in adapters {
             if !self.adapters.iter().any(|r| r.id == a.id) {
@@ -225,7 +252,7 @@ pub struct ABTestResult {
 // Fine-tuning Bridge — closed-loop training orchestration
 // ---------------------------------------------------------------------------
 
-/// Bridges the Gold Standard dataset to the LoRA fine-tuning pipeline.
+/// Bridges the Gold Standard dataset to the `LoRA` fine-tuning pipeline.
 ///
 /// In production, `trigger_from_dataset` would submit to a remote training
 /// cluster.  Here it is mock-wired so the daemon can track jobs without
@@ -236,7 +263,11 @@ impl FineTuningBridge {
     /// Trigger a training job from the gold standard dataset at `dataset_path`.
     /// Returns the new `TrainingJob` on success or an error string if the
     /// dataset is missing/empty.
-    pub fn trigger_from_dataset(dataset_path: &Path, base_model: &str, adapter_name: &str) -> Result<TrainingJob, String> {
+    pub fn trigger_from_dataset(
+        dataset_path: &Path,
+        base_model: &str,
+        adapter_name: &str,
+    ) -> Result<TrainingJob, String> {
         if !dataset_path.exists() {
             return Err(format!("dataset not found: {}", dataset_path.display()));
         }
@@ -270,10 +301,8 @@ impl FineTuningBridge {
     /// Since no actual LLM is called here, we generate mock scores based on
     /// the adapter's registered `lift_score`.  Real implementations would call
     /// the model backend and run a judge.
-    pub fn ab_test(
-        adapter_a: &ExpertAdapter,
-        adapter_b: &ExpertAdapter,
-    ) -> ABTestResult {
+    #[must_use]
+    pub fn ab_test(adapter_a: &ExpertAdapter, adapter_b: &ExpertAdapter) -> ABTestResult {
         // Proxy scores: lift_score contribution + baseline noise
         let score_a = (0.5 + adapter_a.lift_score * 0.5).min(1.0);
         let score_b = (0.5 + adapter_b.lift_score * 0.5).min(1.0);

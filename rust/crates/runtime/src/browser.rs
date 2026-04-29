@@ -3,9 +3,9 @@
 //! Provides headless-browser capabilities to capture the visual state
 //! and structural accessibility tree of applications.
 
-use std::path::Path;
-use serde::{Deserialize, Serialize};
 use headless_chrome::{Browser, LaunchOptions};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotInput {
@@ -43,12 +43,12 @@ pub struct VisualDiffInput {
 }
 
 /// Operationalize the browser to capture a real visual snapshot.
-pub fn capture_screenshot(input: ScreenshotInput) -> Result<ScreenshotOutput, Box<dyn std::error::Error>> {
+pub fn capture_screenshot(
+    input: ScreenshotInput,
+) -> Result<ScreenshotOutput, Box<dyn std::error::Error>> {
     println!("[VISION] Launching headless observer for: {}", input.url);
 
-    let options = LaunchOptions::default_builder()
-        .headless(true)
-        .build()?;
+    let options = LaunchOptions::default_builder().headless(true).build()?;
 
     let browser = Browser::new(options)?;
     let tab = browser.new_tab()?;
@@ -59,7 +59,7 @@ pub fn capture_screenshot(input: ScreenshotInput) -> Result<ScreenshotOutput, Bo
 
     // Optional: Wait for selector
     if let Some(selector) = &input.wait_for_selector {
-        println!("[VISION] Waiting for selector: {}", selector);
+        println!("[VISION] Waiting for selector: {selector}");
         let _ = tab.wait_for_element(selector)?;
     }
 
@@ -88,18 +88,23 @@ pub fn capture_screenshot(input: ScreenshotInput) -> Result<ScreenshotOutput, Bo
     // Resolve path: prefer workspace-relative .tachy/vision/
     let base = input.workspace_root.as_deref().unwrap_or(".");
     let vision_dir = Path::new(base).join(".tachy").join("vision");
-    
+
     let path_str = input.save_path.unwrap_or_else(|| {
-        format!("snap_{}.png", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        format!(
+            "snap_{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        )
     });
-    
+
     let path = if Path::new(&path_str).is_absolute() {
         Path::new(&path_str).to_path_buf()
     } else {
         vision_dir.join(&path_str)
     };
-    
+
     let final_path_str = path.to_string_lossy().to_string();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -107,12 +112,13 @@ pub fn capture_screenshot(input: ScreenshotInput) -> Result<ScreenshotOutput, Bo
     std::fs::write(&path, png_data)?;
 
     // Extract a simplified DOM/Accessibility summary for the LLM
-    let dom_summary = tab.evaluate("document.body.innerText.substring(0, 1000)", false)?
+    let dom_summary = tab
+        .evaluate("document.body.innerText.substring(0, 1000)", false)?
         .value
         .map(|v| v.to_string());
 
-    println!("[VISION] Snapshot captured at {}", final_path_str);
-    
+    println!("[VISION] Snapshot captured at {final_path_str}");
+
     // Explicitly close tab to ensure clean shutdown
     tab.close(true)?;
 
@@ -125,7 +131,9 @@ pub fn capture_screenshot(input: ScreenshotInput) -> Result<ScreenshotOutput, Bo
 }
 
 /// Specialized extraction of the Accessibility tree for structural reasoning.
-pub fn get_accessibility_tree(input: AccessibilityTreeInput) -> Result<String, Box<dyn std::error::Error>> {
+pub fn get_accessibility_tree(
+    input: AccessibilityTreeInput,
+) -> Result<String, Box<dyn std::error::Error>> {
     let options = LaunchOptions::default_builder().headless(true).build()?;
     let browser = Browser::new(options)?;
     let tab = browser.new_tab()?;
@@ -137,7 +145,7 @@ pub fn get_accessibility_tree(input: AccessibilityTreeInput) -> Result<String, B
     }
 
     // Capture interactive elements with more metadata
-    let script = r#"
+    let script = r"
         (() => {
             const elements = document.querySelectorAll('button, a, input, select, textarea, [role], [aria-label], [aria-expanded], [aria-selected]');
             return Array.from(elements).map(el => ({
@@ -155,9 +163,10 @@ pub fn get_accessibility_tree(input: AccessibilityTreeInput) -> Result<String, B
                 }
             })).slice(0, 100);
         })()
-    "#;
+    ";
 
-    let result = tab.evaluate(script, false)?
+    let result = tab
+        .evaluate(script, false)?
         .value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "[]".to_string());
@@ -180,15 +189,27 @@ pub fn compare_snapshots(path_a: &str, path_b: &str) -> Result<String, Box<dyn s
     let diff = (bytes_a.len() as i64 - bytes_b.len() as i64).abs();
     let pct = (diff as f64 / bytes_a.len() as f64) * 100.0;
 
-    let mut report = format!("Visual Regression Report:\n");
-    report.push_str(&format!("  - Asset A: {} ({} bytes)\n", path_a, bytes_a.len()));
-    report.push_str(&format!("  - Asset B: {} ({} bytes)\n", path_b, bytes_b.len()));
-    report.push_str(&format!("  - Delta: {} bytes ({:.4}%)\n", diff, pct));
+    let mut report = "Visual Regression Report:\n".to_string();
+    report.push_str(&format!(
+        "  - Asset A: {} ({} bytes)\n",
+        path_a,
+        bytes_a.len()
+    ));
+    report.push_str(&format!(
+        "  - Asset B: {} ({} bytes)\n",
+        path_b,
+        bytes_b.len()
+    ));
+    report.push_str(&format!("  - Delta: {diff} bytes ({pct:.4}%)\n"));
 
     if pct < 0.05 {
-        report.push_str("Status: VERIFIED. Minor noise detected, but visual structure appears stable.");
+        report.push_str(
+            "Status: VERIFIED. Minor noise detected, but visual structure appears stable.",
+        );
     } else if pct < 0.5 {
-        report.push_str("Status: WARNING. Subtle layout or rendering shift detected. Review suggested.");
+        report.push_str(
+            "Status: WARNING. Subtle layout or rendering shift detected. Review suggested.",
+        );
     } else {
         report.push_str("Status: FAILURE. Significant visual divergence. Check for regression.");
     }
@@ -198,10 +219,12 @@ pub fn compare_snapshots(path_a: &str, path_b: &str) -> Result<String, Box<dyn s
 
 /// Background utility to clean up old snapshots to prevent disk bloat.
 pub fn clean_old_snapshots(vision_dir: &Path, max_age_secs: u64) -> std::io::Result<usize> {
-    if !vision_dir.exists() { return Ok(0); }
+    if !vision_dir.exists() {
+        return Ok(0);
+    }
     let mut count = 0;
     let now = std::time::SystemTime::now();
-    
+
     for entry in std::fs::read_dir(vision_dir)? {
         let entry = entry?;
         let path = entry.path();

@@ -109,7 +109,10 @@ impl Session {
             version: 1,
             messages: Vec::new(),
             branches: Vec::new(),
-            current_branch: String::new(), success: false, human_override: false, team_id: None,
+            current_branch: String::new(),
+            success: false,
+            human_override: false,
+            team_id: None,
         }
     }
 
@@ -119,9 +122,13 @@ impl Session {
         let branch = SessionBranch {
             name: name.to_string(),
             message_count: self.messages.len(),
-            created_at: format!("{}s", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default().as_secs()),
+            created_at: format!(
+                "{}s",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ),
             messages_snapshot: self.messages.clone(),
         };
         self.branches.push(branch);
@@ -130,7 +137,9 @@ impl Session {
 
     /// Switch to a previously saved branch, restoring its message state.
     pub fn switch_branch(&mut self, name: &str) -> Result<(), String> {
-        let branch = self.branches.iter()
+        let branch = self
+            .branches
+            .iter()
             .find(|b| b.name == name)
             .ok_or_else(|| format!("branch '{name}' not found"))?
             .clone();
@@ -140,7 +149,8 @@ impl Session {
     }
 
     /// List all branches.
-    #[must_use] pub fn list_branches(&self) -> Vec<&SessionBranch> {
+    #[must_use]
+    pub fn list_branches(&self) -> Vec<&SessionBranch> {
         self.branches.iter().collect()
     }
 
@@ -171,7 +181,10 @@ impl Session {
             ),
         );
         object.insert("success".to_string(), JsonValue::Bool(self.success));
-        object.insert("human_override".to_string(), JsonValue::Bool(self.human_override));
+        object.insert(
+            "human_override".to_string(),
+            JsonValue::Bool(self.human_override),
+        );
         JsonValue::Object(object)
     }
 
@@ -192,10 +205,27 @@ impl Session {
             .iter()
             .map(ConversationMessage::from_json)
             .collect::<Result<Vec<_>, _>>()?;
-        let success = object.get("success").and_then(JsonValue::as_bool).unwrap_or(false);
-        let human_override = object.get("human_override").and_then(JsonValue::as_bool).unwrap_or(false);
-        let team_id = object.get("team_id").and_then(JsonValue::as_str).map(String::from);
-        Ok(Self { version, messages, branches: Vec::new(), current_branch: String::new(), success, human_override, team_id })
+        let success = object
+            .get("success")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let human_override = object
+            .get("human_override")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let team_id = object
+            .get("team_id")
+            .and_then(JsonValue::as_str)
+            .map(String::from);
+        Ok(Self {
+            version,
+            messages,
+            branches: Vec::new(),
+            current_branch: String::new(),
+            success,
+            human_override,
+            team_id,
+        })
     }
 }
 

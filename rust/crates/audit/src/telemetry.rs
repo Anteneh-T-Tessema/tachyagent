@@ -21,7 +21,9 @@ pub struct TelemetryConfig {
 impl Default for TelemetryConfig {
     fn default() -> Self {
         Self {
-            enabled: std::env::var("TACHY_TELEMETRY").map(|v| v == "1").unwrap_or(false),
+            enabled: std::env::var("TACHY_TELEMETRY")
+                .map(|v| v == "1")
+                .unwrap_or(false),
             machine_id: String::new(),
         }
     }
@@ -47,7 +49,8 @@ pub struct TelemetryCollector {
 }
 
 impl TelemetryCollector {
-    #[must_use] pub fn new(config: TelemetryConfig, tachy_dir: &Path) -> Self {
+    #[must_use]
+    pub fn new(config: TelemetryConfig, tachy_dir: &Path) -> Self {
         Self {
             config,
             events: Vec::new(),
@@ -55,7 +58,8 @@ impl TelemetryCollector {
         }
     }
 
-    #[must_use] pub fn is_enabled(&self) -> bool {
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
@@ -112,7 +116,8 @@ impl TelemetryCollector {
     }
 
     /// Get a summary of collected telemetry.
-    #[must_use] pub fn summary(&self) -> TelemetrySummary {
+    #[must_use]
+    pub fn summary(&self) -> TelemetrySummary {
         let total = self.events.len();
         let successes = self.events.iter().filter(|e| e.success).count();
         let mut by_model: BTreeMap<String, usize> = BTreeMap::new();
@@ -121,7 +126,11 @@ impl TelemetryCollector {
         }
         TelemetrySummary {
             total_events: total,
-            success_rate: if total > 0 { successes as f64 / total as f64 } else { 0.0 },
+            success_rate: if total > 0 {
+                successes as f64 / total as f64
+            } else {
+                0.0
+            },
             by_model,
         }
     }
@@ -162,7 +171,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tachy-tel-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let config = TelemetryConfig { enabled: true, machine_id: "test".to_string() };
+        let config = TelemetryConfig {
+            enabled: true,
+            machine_id: "test".to_string(),
+        };
         let mut collector = TelemetryCollector::new(config, &dir);
 
         collector.record_agent_run("gemma4:26b", 3, 5, true, 1200);
@@ -170,7 +182,7 @@ mod tests {
 
         let summary = collector.summary();
         assert_eq!(summary.total_events, 2);
-        assert_eq!(summary.success_rate, 0.5);
+        assert!((summary.success_rate - 0.5).abs() < f64::EPSILON);
         assert_eq!(summary.by_model.get("gemma4:26b"), Some(&1));
 
         collector.flush();

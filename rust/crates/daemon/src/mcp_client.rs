@@ -43,7 +43,8 @@ pub struct McpTool {
 
 impl McpTool {
     /// The qualified name used in the agent's tool list: mcp__<server>__<tool>
-    #[must_use] pub fn qualified_name(&self) -> String {
+    #[must_use]
+    pub fn qualified_name(&self) -> String {
         format!("mcp__{}_{}", self.server_name, self.tool_name)
     }
 }
@@ -69,7 +70,8 @@ impl McpConnection {
             cmd.env(k, v);
         }
 
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .map_err(|e| format!("failed to start MCP server '{}': {e}", config.name))?;
 
         let mut conn = Self {
@@ -80,11 +82,14 @@ impl McpConnection {
         };
 
         // Initialize
-        conn.send_request("initialize", json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "tachy-agent", "version": "0.2.0"},
-        }))?;
+        conn.send_request(
+            "initialize",
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "tachy-agent", "version": "0.2.0"},
+            }),
+        )?;
 
         // Notify initialized
         conn.send_notification("notifications/initialized", json!({}))?;
@@ -93,8 +98,16 @@ impl McpConnection {
         let tools_result = conn.send_request("tools/list", json!({}))?;
         if let Some(tools_array) = tools_result.get("tools").and_then(|v| v.as_array()) {
             for tool in tools_array {
-                let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let desc = tool.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let name = tool
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let desc = tool
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let schema = tool.get("inputSchema").cloned().unwrap_or(json!({}));
                 conn.tools.push(McpTool {
                     server_name: config.name.clone(),
@@ -110,14 +123,18 @@ impl McpConnection {
 
     /// Call a tool on this MCP server.
     pub fn call_tool(&mut self, tool_name: &str, arguments: &Value) -> Result<String, String> {
-        let result = self.send_request("tools/call", json!({
-            "name": tool_name,
-            "arguments": arguments,
-        }))?;
+        let result = self.send_request(
+            "tools/call",
+            json!({
+                "name": tool_name,
+                "arguments": arguments,
+            }),
+        )?;
 
         // Extract text content from the response
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
-            let texts: Vec<&str> = content.iter()
+            let texts: Vec<&str> = content
+                .iter()
                 .filter_map(|c| c.get("text").and_then(|v| v.as_str()))
                 .collect();
             Ok(texts.join("\n"))
@@ -135,18 +152,29 @@ impl McpConnection {
             "params": params,
         });
 
-        let stdin = self.child.stdin.as_mut()
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
             .ok_or("MCP server stdin not available")?;
-        writeln!(stdin, "{}", serde_json::to_string(&request).unwrap_or_default())
-            .map_err(|e| format!("failed to write to MCP server: {e}"))?;
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::to_string(&request).unwrap_or_default()
+        )
+        .map_err(|e| format!("failed to write to MCP server: {e}"))?;
         stdin.flush().map_err(|e| format!("flush failed: {e}"))?;
 
         // Read response
-        let stdout = self.child.stdout.as_mut()
+        let stdout = self
+            .child
+            .stdout
+            .as_mut()
             .ok_or("MCP server stdout not available")?;
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
-        reader.read_line(&mut line)
+        reader
+            .read_line(&mut line)
             .map_err(|e| format!("failed to read from MCP server: {e}"))?;
 
         let response: Value = serde_json::from_str(line.trim())
@@ -166,10 +194,17 @@ impl McpConnection {
             "params": params,
         });
 
-        let stdin = self.child.stdin.as_mut()
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
             .ok_or("MCP server stdin not available")?;
-        writeln!(stdin, "{}", serde_json::to_string(&notification).unwrap_or_default())
-            .map_err(|e| format!("failed to write notification: {e}"))?;
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::to_string(&notification).unwrap_or_default()
+        )
+        .map_err(|e| format!("failed to write notification: {e}"))?;
         stdin.flush().map_err(|e| format!("flush failed: {e}"))?;
         Ok(())
     }
@@ -193,12 +228,16 @@ impl Default for McpClientManager {
 }
 
 impl McpClientManager {
-    #[must_use] pub fn new() -> Self {
-        Self { connections: BTreeMap::new() }
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            connections: BTreeMap::new(),
+        }
     }
 
     /// Connect to all configured MCP servers.
-    #[must_use] pub fn connect_all(configs: &[McpServerConfig]) -> Self {
+    #[must_use]
+    pub fn connect_all(configs: &[McpServerConfig]) -> Self {
         let mut mgr = Self::new();
         for config in configs {
             if config.enabled == Some(false) {
@@ -206,7 +245,11 @@ impl McpClientManager {
             }
             match McpConnection::connect(config) {
                 Ok(conn) => {
-                    eprintln!("MCP: connected to '{}' ({} tools)", config.name, conn.tools.len());
+                    eprintln!(
+                        "MCP: connected to '{}' ({} tools)",
+                        config.name,
+                        conn.tools.len()
+                    );
                     mgr.connections.insert(config.name.clone(), conn);
                 }
                 Err(e) => {
@@ -218,8 +261,10 @@ impl McpClientManager {
     }
 
     /// Get all discovered tools across all servers.
-    #[must_use] pub fn all_tools(&self) -> Vec<&McpTool> {
-        self.connections.values()
+    #[must_use]
+    pub fn all_tools(&self) -> Vec<&McpTool> {
+        self.connections
+            .values()
             .flat_map(|c| c.tools.iter())
             .collect()
     }
@@ -229,19 +274,24 @@ impl McpClientManager {
         // Parse mcp__<server>__<tool> → (server, tool)
         let parts: Vec<&str> = qualified_name.splitn(3, "__").collect();
         if parts.len() < 3 || parts[0] != "mcp" {
-            return Err(format!("invalid MCP tool name: {qualified_name} (expected mcp__<server>__<tool>)"));
+            return Err(format!(
+                "invalid MCP tool name: {qualified_name} (expected mcp__<server>__<tool>)"
+            ));
         }
         let server_name = parts[1];
         let tool_name = parts[2];
 
-        let conn = self.connections.get_mut(server_name)
+        let conn = self
+            .connections
+            .get_mut(server_name)
             .ok_or_else(|| format!("MCP server '{server_name}' not connected"))?;
 
         conn.call_tool(tool_name, arguments)
     }
 
     /// Check if a qualified name is an MCP tool.
-    #[must_use] pub fn is_mcp_tool(&self, name: &str) -> bool {
+    #[must_use]
+    pub fn is_mcp_tool(&self, name: &str) -> bool {
         name.starts_with("mcp__")
     }
 }

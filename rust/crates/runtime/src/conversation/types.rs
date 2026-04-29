@@ -1,7 +1,7 @@
 //! Protocol types, traits, and errors shared across the conversation subsystem.
 
-use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 use crate::session::ConversationMessage;
 use crate::usage::TokenUsage;
@@ -48,10 +48,21 @@ pub enum AssistantEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
     TextDelta(String),
-    ToolUse { id: String, name: String, input: String },
-    ToolResult { tool_name: String, output: String, is_error: bool },
+    ToolUse {
+        id: String,
+        name: String,
+        input: String,
+    },
+    ToolResult {
+        tool_name: String,
+        output: String,
+        is_error: bool,
+    },
     Usage(TokenUsage),
-    SessionCompacted { removed_count: usize, summary: String },
+    SessionCompacted {
+        removed_count: usize,
+        summary: String,
+    },
     Finished(TurnSummary),
 }
 

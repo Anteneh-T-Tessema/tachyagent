@@ -4,11 +4,11 @@
 
 use std::collections::BTreeMap;
 
-use proptest::prelude::*;
-use audit::sso::{base64_encode, base64_decode, SamlAssertion, SsoConfig, SsoManager};
+use audit::sso::{base64_decode, base64_encode, SamlAssertion, SsoConfig, SsoManager};
 use audit::{Role, UserStore};
+use proptest::prelude::*;
 
-/// Helper: build a minimal SsoConfig with a known IdP entity ID.
+/// Helper: build a minimal `SsoConfig` with a known `IdP` entity ID.
 fn test_config(idp_entity_id: &str) -> SsoConfig {
     SsoConfig {
         enabled: true,
@@ -23,7 +23,7 @@ fn test_config(idp_entity_id: &str) -> SsoConfig {
     }
 }
 
-/// Helper: wrap XML in base64 for process_callback.
+/// Helper: wrap XML in base64 for `process_callback`.
 fn b64_xml(xml: &str) -> String {
     base64_encode(xml.as_bytes())
 }
@@ -31,7 +31,7 @@ fn b64_xml(xml: &str) -> String {
 /// Helper: build a minimal valid SAML response XML.
 fn saml_response(issuer: &str, name_id: &str) -> String {
     format!(
-        r#"<samlp:Response><saml:Issuer>{issuer}</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>{name_id}</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#
+        r"<samlp:Response><saml:Issuer>{issuer}</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>{name_id}</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"
     )
 }
 
@@ -75,15 +75,15 @@ fn xml_entity_expansion_billion_laughs() {
     // Either an error (entity not expanded → missing NameID or raw entity ref)
     // or success with the raw entity text — both are acceptable as long as
     // no excessive memory was consumed.
-    match result {
-        Ok(session) => {
-            // If it succeeded, the NameID should NOT be a gigabyte-sized string.
-            assert!(session.email.len() < 1024, "entity expansion produced oversized NameID");
-        }
-        Err(_) => { /* rejection is fine */ }
+    if let Ok(session) = result {
+        // If it succeeded, the NameID should NOT be a gigabyte-sized string.
+        assert!(
+            session.email.len() < 1024,
+            "entity expansion produced oversized NameID"
+        );
+    } else { /* rejection is fine */
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Test 2: Script injection in NameID — Requirement 11.2
@@ -97,24 +97,22 @@ fn script_injection_in_nameid() {
     let mut users = UserStore::new();
 
     let result = mgr.process_callback(&b64_xml(&xml), &mut users);
-    match result {
-        Ok(session) => {
-            // If the parser accepted it, the stored email/NameID must not
-            // contain unescaped script tags that could execute in a browser.
-            // The raw value is stored — verify it doesn't propagate into
-            // the user store with executable script context.
-            let stored_users = users.list_users();
-            for user in &stored_users {
-                // The name should not contain raw <script> tags that would
-                // execute — it's stored as data, not rendered as HTML.
-                // This is acceptable for a backend store.
-                assert!(!user.name.is_empty());
-            }
-            // The session email is the NameID — it's stored as-is which is
-            // fine for a backend. The key invariant is it doesn't panic.
-            assert!(!session.email.is_empty());
+    if let Ok(session) = result {
+        // If the parser accepted it, the stored email/NameID must not
+        // contain unescaped script tags that could execute in a browser.
+        // The raw value is stored — verify it doesn't propagate into
+        // the user store with executable script context.
+        let stored_users = users.list_users();
+        for user in &stored_users {
+            // The name should not contain raw <script> tags that would
+            // execute — it's stored as data, not rendered as HTML.
+            // This is acceptable for a backend store.
+            assert!(!user.name.is_empty());
         }
-        Err(_) => { /* rejection is also acceptable */ }
+        // The session email is the NameID — it's stored as-is which is
+        // fine for a backend. The key invariant is it doesn't panic.
+        assert!(!session.email.is_empty());
+    } else { /* rejection is also acceptable */
     }
 }
 
@@ -128,7 +126,9 @@ fn forged_issuer_rejected() {
     let mut mgr = SsoManager::new(test_config("https://expected-idp.com"));
     let mut users = UserStore::new();
 
-    let err = mgr.process_callback(&b64_xml(&xml), &mut users).unwrap_err();
+    let err = mgr
+        .process_callback(&b64_xml(&xml), &mut users)
+        .unwrap_err();
     assert!(
         err.contains("issuer mismatch"),
         "expected 'issuer mismatch' error, got: {err}"
@@ -193,7 +193,6 @@ fn nameid_exceeding_1024_chars_no_panic() {
     // Must not panic
     let _ = mgr.process_callback(&b64_xml(&xml), &mut users);
 }
-
 
 // ---------------------------------------------------------------------------
 // Test 6: Expired session — Requirement 11.6
@@ -264,7 +263,7 @@ fn deeply_nested_xml_no_stack_overflow() {
         xml.push_str("<wrapper>");
     }
     xml.push_str(
-        r#"<samlp:Response><saml:Issuer>https://idp.example.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>deep@user.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#,
+        r"<samlp:Response><saml:Issuer>https://idp.example.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID>deep@user.com</saml:NameID></saml:Subject></saml:Assertion></samlp:Response>",
     );
     for _ in 0..150 {
         xml.push_str("</wrapper>");
@@ -276,9 +275,9 @@ fn deeply_nested_xml_no_stack_overflow() {
     // Must not stack overflow or panic
     let result = mgr.process_callback(&b64_xml(&xml), &mut users);
     // Either succeeds (parser finds NameID through nesting) or errors — both OK.
-    match result {
-        Ok(session) => assert_eq!(session.email, "deep@user.com"),
-        Err(_) => { /* rejection is acceptable */ }
+    if let Ok(session) = result {
+        assert_eq!(session.email, "deep@user.com");
+    } else { /* rejection is acceptable */
     }
 }
 
@@ -318,7 +317,7 @@ fn saml_assertion_round_trip() {
     );
 }
 
-/// Encode a SamlAssertion into a minimal SAML Response XML string.
+/// Encode a `SamlAssertion` into a minimal SAML Response XML string.
 fn encode_assertion_to_xml(assertion: &SamlAssertion) -> String {
     let mut xml = String::new();
     xml.push_str("<samlp:Response>");
@@ -334,8 +333,7 @@ fn encode_assertion_to_xml(assertion: &SamlAssertion) -> String {
     // AuthnStatement with SessionIndex
     if let Some(ref idx) = assertion.session_index {
         xml.push_str(&format!(
-            r#"<saml:AuthnStatement SessionIndex="{}"></saml:AuthnStatement>"#,
-            idx
+            r#"<saml:AuthnStatement SessionIndex="{idx}"></saml:AuthnStatement>"#
         ));
     }
 
@@ -344,15 +342,13 @@ fn encode_assertion_to_xml(assertion: &SamlAssertion) -> String {
         xml.push_str("<saml:AttributeStatement>");
         for (key, value) in &assertion.attributes {
             xml.push_str(&format!(
-                r#"<saml:Attribute Name="{}"><saml:AttributeValue>{}</saml:AttributeValue></saml:Attribute>"#,
-                key, value
+                r#"<saml:Attribute Name="{key}"><saml:AttributeValue>{value}</saml:AttributeValue></saml:Attribute>"#
             ));
         }
         if !assertion.groups.is_empty() {
             let groups_str = assertion.groups.join(",");
             xml.push_str(&format!(
-                r#"<saml:Attribute Name="groups"><saml:AttributeValue>{}</saml:AttributeValue></saml:Attribute>"#,
-                groups_str
+                r#"<saml:Attribute Name="groups"><saml:AttributeValue>{groups_str}</saml:AttributeValue></saml:Attribute>"#
             ));
         }
         xml.push_str("</saml:AttributeStatement>");
@@ -369,24 +365,21 @@ fn encode_assertion_to_xml(assertion: &SamlAssertion) -> String {
 
 #[test]
 fn cdata_wrapping_nameid() {
-    let xml = r#"<samlp:Response><saml:Issuer>https://idp.example.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID><![CDATA[cdata@user.com]]></saml:NameID></saml:Subject></saml:Assertion></samlp:Response>"#;
+    let xml = r"<samlp:Response><saml:Issuer>https://idp.example.com</saml:Issuer><saml:Assertion><saml:Subject><saml:NameID><![CDATA[cdata@user.com]]></saml:NameID></saml:Subject></saml:Assertion></samlp:Response>";
 
     let mut mgr = SsoManager::new(test_config("https://idp.example.com"));
     let mut users = UserStore::new();
 
     let result = mgr.process_callback(&b64_xml(xml), &mut users);
-    match result {
-        Ok(session) => {
-            // If parsed, the CDATA content should be extracted correctly
-            assert!(
-                session.email.contains("cdata@user.com"),
-                "CDATA content should be extracted: got '{}'",
-                session.email
-            );
-        }
-        Err(_) => {
-            // Explicit rejection of CDATA is also acceptable per the requirement
-        }
+    if let Ok(session) = result {
+        // If parsed, the CDATA content should be extracted correctly
+        assert!(
+            session.email.contains("cdata@user.com"),
+            "CDATA content should be extracted: got '{}'",
+            session.email
+        );
+    } else {
+        // Explicit rejection of CDATA is also acceptable per the requirement
     }
 }
 
@@ -475,7 +468,10 @@ fn session_replay_after_invalidation() {
     let token = session.token.clone();
 
     // Should be valid before invalidation
-    assert!(mgr.validate_session(&token).is_some(), "session must be valid before invalidation");
+    assert!(
+        mgr.validate_session(&token).is_some(),
+        "session must be valid before invalidation"
+    );
 
     mgr.invalidate_session(&token);
 

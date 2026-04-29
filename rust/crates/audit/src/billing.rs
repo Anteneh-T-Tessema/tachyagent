@@ -132,13 +132,15 @@ impl StripeBillingConnector {
     }
 
     /// Override the billing period (seconds).
-    #[must_use] pub fn with_billing_period(mut self, secs: u64) -> Self {
+    #[must_use]
+    pub fn with_billing_period(mut self, secs: u64) -> Self {
         self.billing_period_secs = secs;
         self
     }
 
     /// Override the max retry count.
-    #[must_use] pub fn with_max_retries(mut self, retries: u32) -> Self {
+    #[must_use]
+    pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
     }
@@ -173,7 +175,9 @@ impl StripeBillingConnector {
         };
 
         for agg in &aggregates {
-            let sub_item_id = if let Some(id) = self.user_subscription_map.get(&agg.user_id) { id.clone() } else {
+            let sub_item_id = if let Some(id) = self.user_subscription_map.get(&agg.user_id) {
+                id.clone()
+            } else {
                 let msg = format!("no subscription mapping for user: {}", agg.user_id);
                 Self::log_billing_error(metering.audit_logger(), &msg);
                 report.errors.push(msg);
@@ -359,10 +363,7 @@ mod tests {
         ) -> Result<SubscriptionInfo, BillingError> {
             self.calls.lock().unwrap().push(MockCall {
                 method: "create_subscription".into(),
-                args: vec![
-                    customer_id.to_string(),
-                    price_ids.join(","),
-                ],
+                args: vec![customer_id.to_string(), price_ids.join(",")],
             });
             Ok(SubscriptionInfo {
                 subscription_id: format!("sub_{customer_id}"),
@@ -379,7 +380,10 @@ mod tests {
         let mut logger = AuditLogger::new();
         logger.add_sink(sink.clone());
         (
-            MeteringService::new(Arc::new(logger), crate::cost_model::CostModelRegistry::default()),
+            MeteringService::new(
+                Arc::new(logger),
+                crate::cost_model::CostModelRegistry::default(),
+            ),
             sink,
         )
     }
@@ -404,8 +408,12 @@ mod tests {
     #[test]
     fn successful_flush_reports_all_dimensions() {
         let (mut metering, _sink) = make_metering();
-        metering.record_event(agent_run("user-1", 100, 50, 3, 1000)).unwrap();
-        metering.record_event(agent_run("user-2", 200, 80, 1, 1100)).unwrap();
+        metering
+            .record_event(agent_run("user-1", 100, 50, 3, 1000))
+            .unwrap();
+        metering
+            .record_event(agent_run("user-2", 200, 80, 1, 1100))
+            .unwrap();
 
         let mock = MockBillingBackend::new();
         let calls_ref = mock.calls.clone();
@@ -418,7 +426,7 @@ mod tests {
 
         assert_eq!(report.users_reported, 2);
         assert_eq!(report.total_tokens, 430); // 100+50 + 200+80
-        assert_eq!(report.total_tools, 4);    // 3 + 1
+        assert_eq!(report.total_tools, 4); // 3 + 1
         assert_eq!(report.total_runs, 2);
         assert!(report.errors.is_empty());
 
@@ -436,7 +444,9 @@ mod tests {
     #[test]
     fn flush_retries_on_failure_then_succeeds() {
         let (mut metering, _sink) = make_metering();
-        metering.record_event(agent_run("user-1", 100, 0, 0, 1000)).unwrap();
+        metering
+            .record_event(agent_run("user-1", 100, 0, 0, 1000))
+            .unwrap();
 
         // Fail twice, then succeed (within 3 retries)
         let mock = MockBillingBackend::new().with_fail_count(2);
@@ -453,13 +463,18 @@ mod tests {
         // tokens_consumed (100) succeeds after 2 retries → 1 recorded call
         // agent_runs (1) succeeds immediately (fail_count exhausted) → 1 recorded call
         let calls = calls_ref.lock().unwrap();
-        assert_eq!(calls.iter().filter(|c| c.method == "report_usage").count(), 2);
+        assert_eq!(
+            calls.iter().filter(|c| c.method == "report_usage").count(),
+            2
+        );
     }
 
     #[test]
     fn flush_logs_error_after_max_retries_exhausted() {
         let (mut metering, sink) = make_metering();
-        metering.record_event(agent_run("user-1", 100, 0, 0, 1000)).unwrap();
+        metering
+            .record_event(agent_run("user-1", 100, 0, 0, 1000))
+            .unwrap();
 
         // Fail more times than max_retries (3)
         let mock = MockBillingBackend::new().with_fail_count(5);
@@ -486,8 +501,12 @@ mod tests {
     #[test]
     fn flush_skips_unmapped_users() {
         let (mut metering, sink) = make_metering();
-        metering.record_event(agent_run("user-1", 100, 0, 0, 1000)).unwrap();
-        metering.record_event(agent_run("user-2", 200, 0, 0, 1100)).unwrap();
+        metering
+            .record_event(agent_run("user-1", 100, 0, 0, 1000))
+            .unwrap();
+        metering
+            .record_event(agent_run("user-2", 200, 0, 0, 1100))
+            .unwrap();
 
         let mock = MockBillingBackend::new();
         let mut connector = StripeBillingConnector::new(Box::new(mock));
@@ -502,7 +521,9 @@ mod tests {
 
         // Audit trail has warning for unmapped user
         let events = sink.events();
-        assert!(events.iter().any(|e| e.detail.contains("no subscription mapping")));
+        assert!(events
+            .iter()
+            .any(|e| e.detail.contains("no subscription mapping")));
     }
 
     #[test]
@@ -511,7 +532,9 @@ mod tests {
         let calls_ref = mock.calls.clone();
 
         let mut connector = StripeBillingConnector::new(Box::new(mock));
-        connector.provision_user("user-1", "alice@example.com").unwrap();
+        connector
+            .provision_user("user-1", "alice@example.com")
+            .unwrap();
 
         let calls = calls_ref.lock().unwrap();
         assert_eq!(calls.len(), 2);

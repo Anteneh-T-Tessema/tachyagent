@@ -38,7 +38,8 @@ pub enum DiffLine {
 
 impl UnifiedDiff {
     /// Compute a unified diff between two strings.
-    #[must_use] pub fn compute(file_path: &str, old: &str, new: &str) -> Self {
+    #[must_use]
+    pub fn compute(file_path: &str, old: &str, new: &str) -> Self {
         let old_lines: Vec<&str> = old.lines().collect();
         let new_lines: Vec<&str> = new.lines().collect();
 
@@ -59,7 +60,9 @@ impl UnifiedDiff {
             match edit {
                 Edit::Equal => {
                     if let Some(hunk) = current_hunk.as_mut() {
-                        hunk.lines.push(DiffLine::Context((*old_lines.get(old_idx).unwrap_or(&"")).to_string()));
+                        hunk.lines.push(DiffLine::Context(
+                            (*old_lines.get(old_idx).unwrap_or(&"")).to_string(),
+                        ));
                         hunk.old_count += 1;
                         hunk.new_count += 1;
                     }
@@ -88,7 +91,9 @@ impl UnifiedDiff {
                         current_hunk = Some(hunk);
                     }
                     let hunk = current_hunk.as_mut().unwrap();
-                    hunk.lines.push(DiffLine::Deletion((*old_lines.get(old_idx).unwrap_or(&"")).to_string()));
+                    hunk.lines.push(DiffLine::Deletion(
+                        (*old_lines.get(old_idx).unwrap_or(&"")).to_string(),
+                    ));
                     hunk.old_count += 1;
                     deletions += 1;
                     old_idx += 1;
@@ -114,7 +119,9 @@ impl UnifiedDiff {
                         current_hunk = Some(hunk);
                     }
                     let hunk = current_hunk.as_mut().unwrap();
-                    hunk.lines.push(DiffLine::Addition((*new_lines.get(new_idx).unwrap_or(&"")).to_string()));
+                    hunk.lines.push(DiffLine::Addition(
+                        (*new_lines.get(new_idx).unwrap_or(&"")).to_string(),
+                    ));
                     hunk.new_count += 1;
                     additions += 1;
                     new_idx += 1;
@@ -126,23 +133,38 @@ impl UnifiedDiff {
             hunks.push(hunk);
         }
 
-        Self { file_path: file_path.to_string(), hunks, additions, deletions }
+        Self {
+            file_path: file_path.to_string(),
+            hunks,
+            additions,
+            deletions,
+        }
     }
 
     /// Render as unified diff text (compatible with `git apply`).
-    #[must_use] pub fn render(&self) -> String {
+    #[must_use]
+    pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "--- a/{}", self.file_path);
         let _ = writeln!(out, "+++ b/{}", self.file_path);
 
         for hunk in &self.hunks {
-            let _ = writeln!(out, "@@ -{},{} +{},{} @@",
-                hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count);
+            let _ = writeln!(
+                out,
+                "@@ -{},{} +{},{} @@",
+                hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+            );
             for line in &hunk.lines {
                 match line {
-                    DiffLine::Context(s) => { let _ = writeln!(out, " {s}"); }
-                    DiffLine::Addition(s) => { let _ = writeln!(out, "+{s}"); }
-                    DiffLine::Deletion(s) => { let _ = writeln!(out, "-{s}"); }
+                    DiffLine::Context(s) => {
+                        let _ = writeln!(out, " {s}");
+                    }
+                    DiffLine::Addition(s) => {
+                        let _ = writeln!(out, "+{s}");
+                    }
+                    DiffLine::Deletion(s) => {
+                        let _ = writeln!(out, "-{s}");
+                    }
                 }
             }
         }
@@ -150,34 +172,52 @@ impl UnifiedDiff {
     }
 
     /// Render as colored terminal output.
-    #[must_use] pub fn render_colored(&self) -> String {
+    #[must_use]
+    pub fn render_colored(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "\x1b[1m--- a/{}\x1b[0m", self.file_path);
         let _ = writeln!(out, "\x1b[1m+++ b/{}\x1b[0m", self.file_path);
 
         for hunk in &self.hunks {
-            let _ = writeln!(out, "\x1b[36m@@ -{},{} +{},{} @@\x1b[0m",
-                hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count);
+            let _ = writeln!(
+                out,
+                "\x1b[36m@@ -{},{} +{},{} @@\x1b[0m",
+                hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+            );
             for line in &hunk.lines {
                 match line {
-                    DiffLine::Context(s) => { let _ = writeln!(out, " {s}"); }
-                    DiffLine::Addition(s) => { let _ = writeln!(out, "\x1b[32m+{s}\x1b[0m"); }
-                    DiffLine::Deletion(s) => { let _ = writeln!(out, "\x1b[31m-{s}\x1b[0m"); }
+                    DiffLine::Context(s) => {
+                        let _ = writeln!(out, " {s}");
+                    }
+                    DiffLine::Addition(s) => {
+                        let _ = writeln!(out, "\x1b[32m+{s}\x1b[0m");
+                    }
+                    DiffLine::Deletion(s) => {
+                        let _ = writeln!(out, "\x1b[31m-{s}\x1b[0m");
+                    }
                 }
             }
         }
 
-        let _ = writeln!(out, "\x1b[32m+{}\x1b[0m / \x1b[31m-{}\x1b[0m lines",
-            self.additions, self.deletions);
+        let _ = writeln!(
+            out,
+            "\x1b[32m+{}\x1b[0m / \x1b[31m-{}\x1b[0m lines",
+            self.additions, self.deletions
+        );
         out
     }
 
     /// Summary string.
-    #[must_use] pub fn summary(&self) -> String {
-        format!("{}: +{} -{}", self.file_path, self.additions, self.deletions)
+    #[must_use]
+    pub fn summary(&self) -> String {
+        format!(
+            "{}: +{} -{}",
+            self.file_path, self.additions, self.deletions
+        )
     }
 
-    #[must_use] pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.hunks.is_empty()
     }
 }

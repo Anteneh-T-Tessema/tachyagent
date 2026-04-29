@@ -76,7 +76,10 @@ pub struct MeteringService {
 impl MeteringService {
     /// Create a new metering service backed by the given audit logger.
     #[must_use]
-    pub fn new(audit_logger: Arc<AuditLogger>, cost_model: crate::cost_model::CostModelRegistry) -> Self {
+    pub fn new(
+        audit_logger: Arc<AuditLogger>,
+        cost_model: crate::cost_model::CostModelRegistry,
+    ) -> Self {
         Self {
             counters: BTreeMap::new(),
             audit_logger,
@@ -89,7 +92,9 @@ impl MeteringService {
     pub fn record_event(&mut self, event: UsageEvent) -> Result<(), MeteringError> {
         // Validate
         if event.user_id.is_empty() {
-            return Err(MeteringError::InvalidEvent("user_id must not be empty".into()));
+            return Err(MeteringError::InvalidEvent(
+                "user_id must not be empty".into(),
+            ));
         }
 
         // Build audit event
@@ -130,11 +135,13 @@ impl MeteringService {
         let cost = self.cost_model.calculate_cost(
             event.model_name.as_deref().unwrap_or("unknown"),
             event.input_tokens,
-            event.output_tokens
+            event.output_tokens,
         );
 
-        let agg = self.counters.entry(event.user_id.clone()).or_insert_with(|| {
-            UsageAggregate {
+        let agg = self
+            .counters
+            .entry(event.user_id.clone())
+            .or_insert_with(|| UsageAggregate {
                 user_id: event.user_id.clone(),
                 team_id: event.team_id.clone(),
                 total_input_tokens: 0,
@@ -144,8 +151,7 @@ impl MeteringService {
                 total_cost_usd: 0.0,
                 period_start: event.timestamp,
                 period_end: event.timestamp,
-            }
-        });
+            });
 
         agg.total_input_tokens += event.input_tokens;
         agg.total_output_tokens += event.output_tokens;
@@ -252,7 +258,8 @@ impl MeteringService {
     /// Get usage for all users within a time range.
     #[must_use]
     pub fn get_all_usage(&self, from: u64, to: u64) -> Vec<UsageAggregate> {
-        self.counters.values()
+        self.counters
+            .values()
             .filter(|agg| agg.period_end >= from && agg.period_start <= to)
             .cloned()
             .collect()
@@ -292,7 +299,10 @@ mod tests {
         let mut logger = AuditLogger::new();
         logger.add_sink(sink.clone());
         (
-            MeteringService::new(Arc::new(logger), crate::cost_model::CostModelRegistry::default()),
+            MeteringService::new(
+                Arc::new(logger),
+                crate::cost_model::CostModelRegistry::default(),
+            ),
             sink,
         )
     }
@@ -369,7 +379,10 @@ mod tests {
         let result = svc.record_event(event);
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), MeteringError::InvalidEvent(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            MeteringError::InvalidEvent(_)
+        ));
 
         // No counters updated
         assert!(svc.counters().is_empty());
@@ -381,9 +394,12 @@ mod tests {
     fn counter_arithmetic_multiple_events() {
         let (mut svc, _) = make_service();
 
-        svc.record_event(agent_run_event("user-1", 100, 50, 2, 1000)).unwrap();
-        svc.record_event(agent_run_event("user-1", 200, 80, 1, 1100)).unwrap();
-        svc.record_event(tool_event("user-1", "bash", 1050)).unwrap();
+        svc.record_event(agent_run_event("user-1", 100, 50, 2, 1000))
+            .unwrap();
+        svc.record_event(agent_run_event("user-1", 200, 80, 1, 1100))
+            .unwrap();
+        svc.record_event(tool_event("user-1", "bash", 1050))
+            .unwrap();
 
         let agg = svc.get_usage("user-1", 0, 2000).unwrap();
         assert_eq!(agg.total_input_tokens, 300);
@@ -396,8 +412,10 @@ mod tests {
     fn drain_period_returns_and_clears() {
         let (mut svc, _) = make_service();
 
-        svc.record_event(agent_run_event("user-1", 100, 50, 0, 1000)).unwrap();
-        svc.record_event(agent_run_event("user-2", 200, 80, 0, 1100)).unwrap();
+        svc.record_event(agent_run_event("user-1", 100, 50, 0, 1000))
+            .unwrap();
+        svc.record_event(agent_run_event("user-2", 200, 80, 0, 1100))
+            .unwrap();
 
         let drained = svc.drain_period(2000);
         assert_eq!(drained.len(), 2);
@@ -412,7 +430,8 @@ mod tests {
     #[test]
     fn get_usage_respects_time_range() {
         let (mut svc, _) = make_service();
-        svc.record_event(agent_run_event("user-1", 100, 50, 0, 1000)).unwrap();
+        svc.record_event(agent_run_event("user-1", 100, 50, 0, 1000))
+            .unwrap();
 
         // Within range
         assert!(svc.get_usage("user-1", 500, 1500).is_some());

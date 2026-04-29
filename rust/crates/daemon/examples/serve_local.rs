@@ -4,8 +4,12 @@ use std::sync::{Arc, Mutex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let addr = args.first().cloned().unwrap_or_else(|| "127.0.0.1:7777".to_string());
-    let workspace = args.get(1)
+    let addr = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1:7777".to_string());
+    let workspace = args
+        .get(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().unwrap_or_default());
 

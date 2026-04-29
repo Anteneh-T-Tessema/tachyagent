@@ -113,7 +113,8 @@ struct TenantUsage {
 
 impl SaaSPlatform {
     /// Create a new `SaaS` platform with the given JWT secret.
-    #[must_use] pub fn new(jwt_secret: &str) -> Self {
+    #[must_use]
+    pub fn new(jwt_secret: &str) -> Self {
         Self {
             tenants: BTreeMap::new(),
             users: BTreeMap::new(),
@@ -124,7 +125,8 @@ impl SaaSPlatform {
     }
 
     /// Create a new `SaaS` platform with a custom JWT expiry.
-    #[must_use] pub fn with_expiry(jwt_secret: &str, jwt_expiry_secs: u64) -> Self {
+    #[must_use]
+    pub fn with_expiry(jwt_secret: &str, jwt_expiry_secs: u64) -> Self {
         Self {
             tenants: BTreeMap::new(),
             users: BTreeMap::new(),
@@ -185,11 +187,7 @@ impl SaaSPlatform {
     }
 
     /// Authenticate a user by email and password hash. Returns a JWT.
-    pub fn authenticate(
-        &self,
-        email: &str,
-        password_hash: &str,
-    ) -> Result<String, SaaSError> {
+    pub fn authenticate(&self, email: &str, password_hash: &str) -> Result<String, SaaSError> {
         let user = self
             .users
             .get(email)
@@ -238,11 +236,7 @@ impl SaaSPlatform {
     }
 
     /// Check if a tenant's current usage is within resource limits.
-    pub fn check_limits(
-        &self,
-        tenant_id: &str,
-        action: &str,
-    ) -> Result<(), SaaSError> {
+    pub fn check_limits(&self, tenant_id: &str, action: &str) -> Result<(), SaaSError> {
         let tenant = self
             .tenants
             .get(tenant_id)
@@ -273,10 +267,7 @@ impl SaaSPlatform {
     }
 
     /// Return a dashboard summary for a tenant.
-    pub fn dashboard(
-        &self,
-        tenant_id: &str,
-    ) -> Result<DashboardSummary, SaaSError> {
+    pub fn dashboard(&self, tenant_id: &str) -> Result<DashboardSummary, SaaSError> {
         if !self.tenants.contains_key(tenant_id) {
             return Err(SaaSError::TenantNotFound);
         }
@@ -323,12 +314,7 @@ impl SaaSPlatform {
 
     // --- Internal JWT helpers ---
 
-    fn generate_jwt(
-        &self,
-        tenant_id: &str,
-        email: &str,
-        now: u64,
-    ) -> Result<String, SaaSError> {
+    fn generate_jwt(&self, tenant_id: &str, email: &str, now: u64) -> Result<String, SaaSError> {
         let claims = TenantClaims {
             tenant_id: tenant_id.to_string(),
             email: email.to_string(),
@@ -415,8 +401,16 @@ fn base64_encode(input: &str) -> String {
 
     for chunk in bytes.chunks(3) {
         let b0 = u32::from(chunk[0]);
-        let b1 = if chunk.len() > 1 { u32::from(chunk[1]) } else { 0 };
-        let b2 = if chunk.len() > 2 { u32::from(chunk[2]) } else { 0 };
+        let b1 = if chunk.len() > 1 {
+            u32::from(chunk[1])
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            u32::from(chunk[2])
+        } else {
+            0
+        };
 
         let triple = (b0 << 16) | (b1 << 8) | b2;
 
@@ -510,18 +504,12 @@ mod tests {
     #[test]
     fn signup_creates_tenant_with_required_fields() {
         let mut platform = make_platform();
-        let (tenant, token) = platform
-            .signup("alice@example.com", "hashed_pw")
-            .unwrap();
+        let (tenant, token) = platform.signup("alice@example.com", "hashed_pw").unwrap();
 
         assert!(!tenant.id.is_empty());
         assert!(tenant.id.starts_with("tenant-"));
         assert!(!tenant.workspace_dir.as_os_str().is_empty());
-        assert!(tenant
-            .workspace_dir
-            .to_str()
-            .unwrap()
-            .contains(&tenant.id));
+        assert!(tenant.workspace_dir.to_str().unwrap().contains(&tenant.id));
         assert!(!tenant.ollama_endpoint.is_empty());
         assert!(tenant.created_at > 0);
         assert_eq!(tenant.resource_limits.max_concurrent_agents, 4);
@@ -542,7 +530,9 @@ mod tests {
     fn authenticate_valid_credentials() {
         let mut platform = make_platform();
         platform.signup("carol@example.com", "secret").unwrap();
-        let token = platform.authenticate("carol@example.com", "secret").unwrap();
+        let token = platform
+            .authenticate("carol@example.com", "secret")
+            .unwrap();
         assert!(!token.is_empty());
         assert_eq!(token.split('.').count(), 3);
     }
@@ -602,9 +592,7 @@ mod tests {
         // Tamper with the signature.
         let tampered = format!("{}.tampered", &token[..token.rfind('.').unwrap()]);
         let result = platform.validate_jwt(&tampered);
-        assert!(
-            matches!(result, Err(SaaSError::InvalidJwt(ref msg)) if msg.contains("signature"))
-        );
+        assert!(matches!(result, Err(SaaSError::InvalidJwt(ref msg)) if msg.contains("signature")));
     }
 
     #[test]
@@ -645,9 +633,7 @@ mod tests {
         let (tenant, _) = platform.signup("judy@example.com", "pw").unwrap();
 
         // Exceed token limit.
-        platform
-            .record_usage(&tenant.id, 1_000_001, false)
-            .unwrap();
+        platform.record_usage(&tenant.id, 1_000_001, false).unwrap();
 
         let result = platform.check_limits(&tenant.id, "query");
         assert!(matches!(

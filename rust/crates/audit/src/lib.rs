@@ -18,22 +18,26 @@ pub use billing::{
     BillingBackend, BillingError, BillingReport, BillingStatus, StripeBillingConnector,
     SubscriptionInfo,
 };
-pub use event::{AuditEvent, AuditEventKind, AuditSeverity, verify_audit_chain, AsymmetricSigner};
+pub use event::{verify_audit_chain, AsymmetricSigner, AuditEvent, AuditEventKind, AuditSeverity};
 pub use license::{LicenseData, LicenseFile, LicenseStatus, LicenseTier};
-pub use logger::{AuditLogger, AuditSink, FileAuditSink, HttpAuditSink, MemoryAuditSink, S3AuditSink};
+pub use logger::{
+    AuditLogger, AuditSink, FileAuditSink, HttpAuditSink, MemoryAuditSink, S3AuditSink,
+};
 pub use metering::{MeteringError, MeteringService, UsageAggregate, UsageEvent, UsageEventType};
+pub use oauth::{OAuthClientConfig, OAuthManager, OAuthProvider, OAuthSession};
 pub use policy::{GovernancePolicy, GovernanceViolation, ToolGovernanceRule};
-pub use policy_engine::{PolicyEngine, PolicyDecision, PolicyRule, PolicyRuleType, PolicyAction, FilePatch};
+pub use policy_engine::{
+    FilePatch, PolicyAction, PolicyDecision, PolicyEngine, PolicyRule, PolicyRuleType,
+};
 pub use policy_file::PolicyFile;
 pub use rbac::{
-    check_permission, check_team_permission, default_quota_for_role,
-    Action, AccessResult, QuotaResult, QuotaStore, Role, RoleQuota, User, UserStore, UserUsage,
+    check_permission, check_team_permission, default_quota_for_role, AccessResult, Action,
+    QuotaResult, QuotaStore, Role, RoleQuota, User, UserStore, UserUsage,
 };
 pub use security::{
-    hash_api_key, hash_text, verify_api_key, is_safe_path, redact_sensitive, sanitize_prompt,
+    hash_api_key, hash_text, is_safe_path, redact_sensitive, sanitize_prompt, verify_api_key,
     RateDecision, RateLimiter, RateTier, TieredRateLimiter,
 };
-pub use oauth::{OAuthClientConfig, OAuthManager, OAuthProvider, OAuthSession};
-pub use sso::{SsoConfig, SsoManager, SsoSession, SamlAssertion};
-pub use sentinel::{ComplianceSentinel, ViolationAction, SecurityRule, SecurityViolation};
+pub use sentinel::{ComplianceSentinel, SecurityRule, SecurityViolation, ViolationAction};
+pub use sso::{SamlAssertion, SsoConfig, SsoManager, SsoSession};
 pub use telemetry::{TelemetryCollector, TelemetryConfig, TelemetryEvent, TelemetrySummary};

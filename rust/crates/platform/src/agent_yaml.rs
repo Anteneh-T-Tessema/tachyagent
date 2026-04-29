@@ -23,8 +23,8 @@
 //!     interval_seconds: 300
 //! ```
 
-use std::path::Path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::agent::AgentTemplate;
 
@@ -63,13 +63,20 @@ pub struct TriggerDef {
     pub channel: Option<String>,
 }
 
-fn default_model() -> String { "gemma4:26b".to_string() }
-fn default_max_iter() -> usize { 16 }
-fn default_true() -> bool { true }
+fn default_model() -> String {
+    "gemma4:26b".to_string()
+}
+fn default_max_iter() -> usize {
+    16
+}
+fn default_true() -> bool {
+    true
+}
 
 impl AgentDefinition {
     /// Convert to an `AgentTemplate` for execution.
-    #[must_use] pub fn to_template(&self) -> AgentTemplate {
+    #[must_use]
+    pub fn to_template(&self) -> AgentTemplate {
         AgentTemplate {
             name: self.name.clone(),
             description: if self.description.is_empty() {
@@ -90,7 +97,8 @@ impl AgentDefinition {
 }
 
 /// Load all agent definitions from `.tachy/agents/`.
-#[must_use] pub fn load_agent_definitions(tachy_dir: &Path) -> Vec<AgentDefinition> {
+#[must_use]
+pub fn load_agent_definitions(tachy_dir: &Path) -> Vec<AgentDefinition> {
     let agents_dir = tachy_dir.join("agents");
     if !agents_dir.exists() {
         return Vec::new();
@@ -136,7 +144,9 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
-            if in_system_prompt { system_prompt_lines.push(""); }
+            if in_system_prompt {
+                system_prompt_lines.push("");
+            }
             continue;
         }
 
@@ -145,8 +155,10 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
         // End multi-line system_prompt when we hit a non-indented key
         if in_system_prompt && indent == 0 && trimmed.contains(':') {
             in_system_prompt = false;
-            map.insert("system_prompt".to_string(),
-                serde_json::json!(system_prompt_lines.join("\n").trim()));
+            map.insert(
+                "system_prompt".to_string(),
+                serde_json::json!(system_prompt_lines.join("\n").trim()),
+            );
             system_prompt_lines.clear();
         }
 
@@ -177,11 +189,17 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
         if in_triggers {
             if trimmed.starts_with("- type:") {
                 if let Some(t) = current_trigger.take() {
-                    if let Ok(td) = serde_json::from_value::<TriggerDef>(serde_json::Value::Object(t.into_iter().collect())) {
+                    if let Ok(td) = serde_json::from_value::<TriggerDef>(serde_json::Value::Object(
+                        t.into_iter().collect(),
+                    )) {
                         triggers.push(td);
                     }
                 }
-                let val = trimmed.strip_prefix("- type:").unwrap().trim().trim_matches('"');
+                let val = trimmed
+                    .strip_prefix("- type:")
+                    .unwrap()
+                    .trim()
+                    .trim_matches('"');
                 let mut t = std::collections::BTreeMap::new();
                 t.insert("type".to_string(), serde_json::json!(val));
                 current_trigger = Some(t);
@@ -199,7 +217,9 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
                 }
                 continue;
             }
-            if indent == 0 { in_triggers = false; }
+            if indent == 0 {
+                in_triggers = false;
+            }
         }
 
         // Regular key: value
@@ -208,35 +228,47 @@ fn parse_agent_yaml(content: &str) -> Result<AgentDefinition, String> {
             let val = val.trim();
 
             // Check for multi-line indicator
-            if (val == "|" || val == ">")
-                && key == "system_prompt" {
-                    in_system_prompt = true;
-                    continue;
-                }
+            if (val == "|" || val == ">") && key == "system_prompt" {
+                in_system_prompt = true;
+                continue;
+            }
 
             let val = val.trim_matches('"').trim_matches('\'');
             if !key.is_empty() && !val.is_empty() {
-                if val == "true" { map.insert(key.to_string(), serde_json::json!(true)); }
-                else if val == "false" { map.insert(key.to_string(), serde_json::json!(false)); }
-                else if let Ok(n) = val.parse::<u64>() { map.insert(key.to_string(), serde_json::json!(n)); }
-                else { map.insert(key.to_string(), serde_json::json!(val)); }
+                if val == "true" {
+                    map.insert(key.to_string(), serde_json::json!(true));
+                } else if val == "false" {
+                    map.insert(key.to_string(), serde_json::json!(false));
+                } else if let Ok(n) = val.parse::<u64>() {
+                    map.insert(key.to_string(), serde_json::json!(n));
+                } else {
+                    map.insert(key.to_string(), serde_json::json!(val));
+                }
             }
         }
     }
 
     // Finalize
     if in_system_prompt {
-        map.insert("system_prompt".to_string(),
-            serde_json::json!(system_prompt_lines.join("\n").trim()));
+        map.insert(
+            "system_prompt".to_string(),
+            serde_json::json!(system_prompt_lines.join("\n").trim()),
+        );
     }
     if let Some(t) = current_trigger.take() {
-        if let Ok(td) = serde_json::from_value::<TriggerDef>(serde_json::Value::Object(t.into_iter().collect())) {
+        if let Ok(td) =
+            serde_json::from_value::<TriggerDef>(serde_json::Value::Object(t.into_iter().collect()))
+        {
             triggers.push(td);
         }
     }
 
-    if !tools.is_empty() { map.insert("tools".to_string(), serde_json::json!(tools)); }
-    if !triggers.is_empty() { map.insert("triggers".to_string(), serde_json::json!(triggers)); }
+    if !tools.is_empty() {
+        map.insert("tools".to_string(), serde_json::json!(tools));
+    }
+    if !triggers.is_empty() {
+        map.insert("triggers".to_string(), serde_json::json!(triggers));
+    }
 
     serde_json::from_value::<AgentDefinition>(serde_json::Value::Object(map.into_iter().collect()))
         .map_err(|e| format!("parse error: {e}"))

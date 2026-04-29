@@ -8,8 +8,8 @@
 //!
 //! This file is automatically injected into every agent's system prompt.
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectDna {
@@ -24,6 +24,7 @@ pub struct ProjectDnaManager {
 }
 
 impl ProjectDnaManager {
+    #[must_use]
     pub fn new(workspace_root: &Path) -> Self {
         Self {
             path: workspace_root.join(".tachy").join("TACHY.md"),
@@ -31,6 +32,7 @@ impl ProjectDnaManager {
     }
 
     /// Load the project DNA from disk. Creates a default one if missing.
+    #[must_use]
     pub fn load(&self) -> String {
         if self.path.exists() {
             std::fs::read_to_string(&self.path).unwrap_or_default()
@@ -62,20 +64,25 @@ impl ProjectDnaManager {
     }
 
     /// Formats the DNA for system prompt injection.
+    #[must_use]
     pub fn as_system_context(&self) -> String {
         let content = self.load();
         format!(
-            "\n## PROJECT DNA (TACHY.md)\n\n{}\n\nUse the above context to ensure architectural consistency.",
-            content
+            "\n## PROJECT DNA (TACHY.md)\n\n{content}\n\nUse the above context to ensure architectural consistency."
         )
     }
 }
 
-/// Execute the "update_project_md" tool.
-pub fn execute_update_project_md(input: &serde_json::Value, workspace_root: &Path) -> Result<String, String> {
-    let content = input.get("content").and_then(|v| v.as_str())
+/// Execute the "`update_project_md`" tool.
+pub fn execute_update_project_md(
+    input: &serde_json::Value,
+    workspace_root: &Path,
+) -> Result<String, String> {
+    let content = input
+        .get("content")
+        .and_then(|v| v.as_str())
         .ok_or("'content' parameter required")?;
-    
+
     let manager = ProjectDnaManager::new(workspace_root);
     manager.update(content)?;
     Ok("TACHY.md updated successfully.".to_string())

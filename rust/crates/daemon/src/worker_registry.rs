@@ -12,8 +12,8 @@
 //!   │  `dispatch()`   │──────►│ POST /api/tasks/assign   │
 //!   └──────────────┘        └─────────────────────────┘
 
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A registered remote worker daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,12 +37,14 @@ pub struct WorkerNode {
 
 impl WorkerNode {
     /// True if the worker has been silent for more than `timeout_secs`.
-    #[must_use] pub fn is_stale(&self, timeout_secs: u64) -> bool {
+    #[must_use]
+    pub fn is_stale(&self, timeout_secs: u64) -> bool {
         now_epoch().saturating_sub(self.last_seen) > timeout_secs
     }
 
     /// Available capacity (`max_concurrency` - `active_tasks`).
-    #[must_use] pub fn available_slots(&self) -> usize {
+    #[must_use]
+    pub fn available_slots(&self) -> usize {
         self.max_concurrency.saturating_sub(self.active_tasks)
     }
 }
@@ -56,7 +58,8 @@ pub struct WorkerRegistry {
 }
 
 impl WorkerRegistry {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             workers: BTreeMap::new(),
             heartbeat_timeout_secs: 30,
@@ -67,7 +70,10 @@ impl WorkerRegistry {
     pub fn register(&mut self, mut worker: WorkerNode) -> String {
         worker.last_seen = now_epoch();
         let id = worker.id.clone();
-        eprintln!("[registry] worker registered: {id} @ {} ({} slots)", worker.url, worker.max_concurrency);
+        eprintln!(
+            "[registry] worker registered: {id} @ {} ({} slots)",
+            worker.url, worker.max_concurrency
+        );
         self.workers.insert(id.clone(), worker);
         id
     }
@@ -101,15 +107,18 @@ impl WorkerRegistry {
     }
 
     /// Pick the least-loaded available worker.
-    #[must_use] pub fn pick_worker(&self) -> Option<&WorkerNode> {
-        self.workers.values()
+    #[must_use]
+    pub fn pick_worker(&self) -> Option<&WorkerNode> {
+        self.workers
+            .values()
             .filter(|w| !w.is_stale(self.heartbeat_timeout_secs) && w.available_slots() > 0)
             .max_by_key(|w| w.available_slots())
     }
 
     /// Dispatch a task to the least-loaded worker via HTTP.
     /// Falls back to `None` if no workers are available (caller uses local execution).
-    #[must_use] pub fn dispatch_task(&self, task_json: &str) -> Option<String> {
+    #[must_use]
+    pub fn dispatch_task(&self, task_json: &str) -> Option<String> {
         let worker = self.pick_worker()?;
         let url = format!("{}/api/tasks/assign", worker.url);
 
@@ -125,25 +134,36 @@ impl WorkerRegistry {
 
         if resp.status().is_success() {
             let body: serde_json::Value = resp.json().ok()?;
-            eprintln!("[registry] task dispatched to worker {}: {}", worker.id, body);
+            eprintln!(
+                "[registry] task dispatched to worker {}: {}",
+                worker.id, body
+            );
             Some(worker.id.clone())
         } else {
-            eprintln!("[registry] dispatch to {} failed: {}", worker.id, resp.status());
+            eprintln!(
+                "[registry] dispatch to {} failed: {}",
+                worker.id,
+                resp.status()
+            );
             None
         }
     }
 
-    #[must_use] pub fn list_workers(&self) -> Vec<&WorkerNode> {
+    #[must_use]
+    pub fn list_workers(&self) -> Vec<&WorkerNode> {
         self.workers.values().collect()
     }
 
-    #[must_use] pub fn worker_count(&self) -> usize {
+    #[must_use]
+    pub fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
-    #[must_use] pub fn available_worker_count(&self) -> usize {
+    #[must_use]
+    pub fn available_worker_count(&self) -> usize {
         let timeout = self.heartbeat_timeout_secs;
-        self.workers.values()
+        self.workers
+            .values()
             .filter(|w| !w.is_stale(timeout) && w.available_slots() > 0)
             .count()
     }

@@ -3,10 +3,10 @@
 //! This module provides the high-level "Search Codebase" tool that agents use
 //! to navigate large-scale repositories with pinpoint semantic accuracy.
 
-use std::path::Path;
-use serde::{Deserialize, Serialize};
-use backend::EmbeddingClient;
 use crate::indexer::CodebaseIndexer;
+use backend::EmbeddingClient;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Input for the `search_codebase` tool.
 #[derive(Debug, Deserialize, Serialize)]
@@ -30,9 +30,9 @@ pub struct SearchResultEntry {
     pub score: f32,
 }
 
-
 /// Returns the tool specifications for RAG tools.
-#[must_use] pub fn rag_tool_specs() -> Vec<tools::ToolSpec> {
+#[must_use]
+pub fn rag_tool_specs() -> Vec<tools::ToolSpec> {
     vec![
         tools::ToolSpec {
             name: "search_codebase",
@@ -66,8 +66,8 @@ pub struct SearchResultEntry {
 }
 
 /// Execute a semantic search across the entire codebase.
-/// 
-/// This tool generates an embedding for the user's query and performs a 
+///
+/// This tool generates an embedding for the user's query and performs a
 /// top-k similarity search across all indexed code chunks.
 pub fn execute_search_codebase(
     input: &SearchCodebaseInput,
@@ -82,15 +82,17 @@ pub fn execute_search_codebase(
     // 2. Generate embedding for query
     let client = EmbeddingClient::try_new()
         .ok_or("embedding model not found — run: ollama pull nomic-embed-text")?;
-    
-    let query_emb = client.embed(&input.query)
+
+    let query_emb = client
+        .embed(&input.query)
         .map_err(|e| format!("failed to embed query: {e}"))?;
 
     // 3. Perform semantic search
     let scored_chunks = index.vector_store.search(&query_emb, limit);
 
     // 4. Format results
-    let results = scored_chunks.into_iter()
+    let results = scored_chunks
+        .into_iter()
         .map(|(chunk, score)| SearchResultEntry {
             path: chunk.path.clone(),
             start_line: chunk.start_line,
@@ -100,8 +102,7 @@ pub fn execute_search_codebase(
         })
         .collect();
 
-    serde_json::to_string_pretty(&SearchCodebaseResult { results })
-        .map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&SearchCodebaseResult { results }).map_err(|e| e.to_string())
 }
 
 /// Input for the `expand_context` tool.
@@ -119,14 +120,14 @@ pub fn execute_expand_context(
     workspace_root: &Path,
 ) -> Result<String, String> {
     let context = input.context_lines.unwrap_or(200);
-    
+
     // Read the file content
     let full_path = workspace_root.join(&input.path);
-    let content = std::fs::read_to_string(&full_path)
-        .map_err(|e| format!("failed to read file: {e}"))?;
+    let content =
+        std::fs::read_to_string(&full_path).map_err(|e| format!("failed to read file: {e}"))?;
 
     let lines: Vec<&str> = content.lines().collect();
-    
+
     // Calculate new range with context
     let start = input.start_line.saturating_sub(context).max(1);
     let end = (input.end_line + context).min(lines.len());

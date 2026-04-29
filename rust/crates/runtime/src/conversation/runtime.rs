@@ -7,7 +7,9 @@ use super::types::{
     ApiClient, ApiRequest, AssistantEvent, ResponseFormat, RuntimeError, RuntimeEvent, ToolError,
     ToolExecutor, TurnSummary,
 };
-use crate::compact::{compact_session, estimate_session_tokens, CompactionConfig, CompactionResult};
+use crate::compact::{
+    compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
+};
 use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
@@ -103,8 +105,9 @@ where
         let preserve_count = 4;
         let keep_from = self.session.messages.len().saturating_sub(preserve_count);
         let preserved = self.session.messages[keep_from..].to_vec();
-        
-        let continuation = crate::compact::get_compact_continuation_message(&summary, true, !preserved.is_empty());
+
+        let continuation =
+            crate::compact::get_compact_continuation_message(&summary, true, !preserved.is_empty());
 
         let mut compacted_messages = vec![ConversationMessage {
             role: crate::session::MessageRole::System,
@@ -112,13 +115,13 @@ where
             usage: None,
         }];
         compacted_messages.extend(preserved);
-        
+
         self.session.messages = compacted_messages;
-        
+
         if let Some(ref tx) = self.event_tx {
-            let _ = tx.send(RuntimeEvent::SessionCompacted { 
+            let _ = tx.send(RuntimeEvent::SessionCompacted {
                 removed_count: keep_from,
-                summary: summary.clone() 
+                summary: summary.clone(),
             });
         }
     }
@@ -164,14 +167,17 @@ where
                 // 1. Exact Match Lookup
                 if let Some(cached) = cache.lookup(&prompt_str, &system_prompt_str) {
                     if let Some(tx) = &self.event_tx {
-                        let _ = tx.send(RuntimeEvent::TextDelta(format!("[Exact Cache Hit] {}", cached.output)));
+                        let _ = tx.send(RuntimeEvent::TextDelta(format!(
+                            "[Exact Cache Hit] {}",
+                            cached.output
+                        )));
                     }
                     events_cached = Some(vec![
                         AssistantEvent::TextDelta(cached.output.clone()),
                         AssistantEvent::MessageStop,
                     ]);
                     is_cache_hit = true;
-                } 
+                }
                 // 2. Semantic Match Lookup (if exact fails and embedder is present)
                 else if let Some(embedder) = &self.embedder {
                     if let Ok(emb) = embedder.embed(&prompt_str) {
@@ -179,15 +185,19 @@ where
                         if let Some(cached) = cache.lookup_semantic(&emb, 0.95) {
                             if let Some(trace) = &cached.expert_trace {
                                 if let Some(tx) = &self.event_tx {
-                                    let _ = tx.send(RuntimeEvent::TextDelta(format!("\n[Flash Guidance Active] Injecting expert trace from similar task...")));
+                                    let _ = tx.send(RuntimeEvent::TextDelta("\n[Flash Guidance Active] Injecting expert trace from similar task...".to_string()));
                                 }
                                 // Inject expert trace as guidance in the system prompt
-                                let guidance = format!("\n\n### EXPERT GUIDANCE\nSimilar task succeeded with this pattern:\n{}\nUse this as a guide for your execution.", trace);
-                                self.system_prompt.push(guidance); self.current_reward_score = Some(cached.reward_score);
+                                let guidance = format!("\n\n### EXPERT GUIDANCE\nSimilar task succeeded with this pattern:\n{trace}\nUse this as a guide for your execution.");
+                                self.system_prompt.push(guidance);
+                                self.current_reward_score = Some(cached.reward_score);
                             } else {
                                 // Default semantic hit: return output
                                 if let Some(tx) = &self.event_tx {
-                                    let _ = tx.send(RuntimeEvent::TextDelta(format!("[Semantic Cache Hit] {}", cached.output)));
+                                    let _ = tx.send(RuntimeEvent::TextDelta(format!(
+                                        "[Semantic Cache Hit] {}",
+                                        cached.output
+                                    )));
                                 }
                                 events_cached = Some(vec![
                                     AssistantEvent::TextDelta(cached.output.clone()),
@@ -200,7 +210,9 @@ where
                 }
             }
 
-            let events = if let Some(e) = events_cached { e } else {
+            let events = if let Some(e) = events_cached {
+                e
+            } else {
                 // API call with error recovery
                 match self.api_client.stream(ApiRequest {
                     system_prompt: self.system_prompt.clone(),
@@ -243,11 +255,19 @@ where
                     if !is_cache_hit {
                         if let Some(cache) = &self.semantic_cache {
                             let text = assistant_message_to_text(&result.0);
-                            cache.store(&prompt_str, &system_prompt_str, &text, "frontier", prompt_embedding, None, 1.0);
+                            cache.store(
+                                &prompt_str,
+                                &system_prompt_str,
+                                &text,
+                                "frontier",
+                                prompt_embedding,
+                                None,
+                                1.0,
+                            );
                         }
                     }
                     result
-                },
+                }
                 Err(error) => {
                     consecutive_errors += 1;
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -291,11 +311,18 @@ where
             if pending_tool_uses.is_empty() {
                 if tool_results.is_empty() {
                     if let Some(path) = self.required_write_file_path.clone() {
-                        let synthesized = self.synthesize_required_write_file(&assistant_messages, &path)?;
+                        let synthesized =
+                            self.synthesize_required_write_file(&assistant_messages, &path)?;
                         if let Some(result_message) = synthesized {
                             self.session.messages.push(result_message.clone());
                             if let Some(tx) = &self.event_tx {
-                                if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = &result_message.blocks[0] {
+                                if let ContentBlock::ToolResult {
+                                    tool_name,
+                                    output,
+                                    is_error,
+                                    ..
+                                } = &result_message.blocks[0]
+                                {
                                     let _ = tx.send(RuntimeEvent::ToolResult {
                                         tool_name: tool_name.clone(),
                                         output: output.clone(),
@@ -312,10 +339,19 @@ where
 
             for (tool_use_id, tool_name, input) in pending_tool_uses {
                 let permission_outcome = if let Some(prompt) = prompter.as_mut() {
-                    self.permission_policy
-                        .authorize(&tool_name, &input, Some(*prompt), self.current_reward_score)
+                    self.permission_policy.authorize(
+                        &tool_name,
+                        &input,
+                        Some(*prompt),
+                        self.current_reward_score,
+                    )
                 } else {
-                    self.permission_policy.authorize(&tool_name, &input, None, self.current_reward_score)
+                    self.permission_policy.authorize(
+                        &tool_name,
+                        &input,
+                        None,
+                        self.current_reward_score,
+                    )
                 };
 
                 let result_message = match permission_outcome {
@@ -336,22 +372,40 @@ where
                                 // Smart recovery for edit_file: if old_string not found,
                                 // read the file and include its content so the model can
                                 // see what the file actually contains and retry correctly.
-                                let recovery = if tool_name == "edit_file" && err_msg.contains("not found") {
-                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&input) {
-                                        if let Some(path) = parsed.get("path").and_then(|v| v.as_str()) {
+                                let recovery = if tool_name == "edit_file"
+                                    && err_msg.contains("not found")
+                                {
+                                    if let Ok(parsed) =
+                                        serde_json::from_str::<serde_json::Value>(&input)
+                                    {
+                                        if let Some(path) =
+                                            parsed.get("path").and_then(|v| v.as_str())
+                                        {
                                             if let Ok(content) = std::fs::read_to_string(path) {
                                                 let preview = if content.len() > 4000 {
-                                                    format!("{}…\n[truncated, {} total chars]", &content[..4000], content.len())
+                                                    format!(
+                                                        "{}…\n[truncated, {} total chars]",
+                                                        &content[..4000],
+                                                        content.len()
+                                                    )
                                                 } else {
                                                     content
                                                 };
                                                 Some(format!(
                                                     "{err_msg}\n\nHere is the actual file content of {path}:\n```\n{preview}\n```\nPlease retry with the correct old_string that matches the file exactly."
                                                 ))
-                                            } else { None }
-                                        } else { None }
-                                    } else { None }
-                                } else { None };
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
 
                                 ConversationMessage::tool_result(
                                     tool_use_id,
@@ -377,7 +431,13 @@ where
                 }
 
                 if let Some(tx) = &self.event_tx {
-                    if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = &result_message.blocks[0] {
+                    if let ContentBlock::ToolResult {
+                        tool_name,
+                        output,
+                        is_error,
+                        ..
+                    } = &result_message.blocks[0]
+                    {
                         let _ = tx.send(RuntimeEvent::ToolResult {
                             tool_name: tool_name.clone(),
                             output: output.clone(),
@@ -469,7 +529,12 @@ where
         })
         .to_string();
 
-        match self.permission_policy.authorize("write_file", &input, None, self.current_reward_score) {
+        match self.permission_policy.authorize(
+            "write_file",
+            &input,
+            None,
+            self.current_reward_score,
+        ) {
             PermissionOutcome::Allow => match self.tool_executor.execute("write_file", &input) {
                 Ok(output) => Ok(Some(ConversationMessage::tool_result(
                     "required-artifact",
@@ -477,9 +542,13 @@ where
                     truncate_output(&output, 16_000),
                     false,
                 ))),
-                Err(error) => Err(RuntimeError::new(format!("required write_file failed: {error}"))),
+                Err(error) => Err(RuntimeError::new(format!(
+                    "required write_file failed: {error}"
+                ))),
             },
-            PermissionOutcome::Deny { reason } => Err(RuntimeError::new(format!("required write_file denied: {reason}"))),
+            PermissionOutcome::Deny { reason } => Err(RuntimeError::new(format!(
+                "required write_file denied: {reason}"
+            ))),
         }
     }
 }
@@ -533,7 +602,8 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
 }
 
 fn assistant_message_to_text(msg: &ConversationMessage) -> String {
-    msg.blocks.iter()
+    msg.blocks
+        .iter()
         .filter_map(|block| match block {
             ContentBlock::Text { text } => Some(text.as_str()),
             _ => None,

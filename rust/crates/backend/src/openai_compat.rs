@@ -1,6 +1,5 @@
 use runtime::{
-    ApiClient, ApiRequest, AssistantEvent, ContentBlock, MessageRole,
-    RuntimeError, TokenUsage,
+    ApiClient, ApiRequest, AssistantEvent, ContentBlock, MessageRole, RuntimeError, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 use tools::mvp_tool_specs;
@@ -80,15 +79,18 @@ impl ApiClient for OpenAiCompatBackend {
                 .map_err(|_| RuntimeError::new("openai-compat request thread panicked"))?
             })
         } else {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| RuntimeError::new(e.to_string()))?;
+            let rt =
+                tokio::runtime::Runtime::new().map_err(|e| RuntimeError::new(e.to_string()))?;
             rt.block_on(future)
         }
     }
 }
 
 impl OpenAiCompatBackend {
-    async fn send_request(&self, body: OpenAiChatRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+    async fn send_request(
+        &self,
+        body: OpenAiChatRequest,
+    ) -> Result<Vec<AssistantEvent>, RuntimeError> {
         let response = self
             .client
             .post(format!("{}/chat/completions", self.base_url))

@@ -33,8 +33,12 @@ impl OAuthProvider {
         }
     }
 
-    #[must_use] pub fn name(&self) -> &'static str {
-        match self { Self::Google => "google", Self::GitHub => "github" }
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::GitHub => "github",
+        }
     }
 
     fn auth_url(&self) -> &'static str {
@@ -81,15 +85,20 @@ impl OAuthClientConfig {
     ///
     /// Google: `TACHY_GOOGLE_CLIENT_ID`, `TACHY_GOOGLE_CLIENT_SECRET`, `TACHY_GOOGLE_REDIRECT_URI`
     /// GitHub: `TACHY_GITHUB_CLIENT_ID`, `TACHY_GITHUB_CLIENT_SECRET`, `TACHY_GITHUB_REDIRECT_URI`
-    #[must_use] pub fn from_env(provider: &OAuthProvider) -> Option<Self> {
+    #[must_use]
+    pub fn from_env(provider: &OAuthProvider) -> Option<Self> {
         let prefix = match provider {
             OAuthProvider::Google => "TACHY_GOOGLE",
             OAuthProvider::GitHub => "TACHY_GITHUB",
         };
         let client_id = std::env::var(format!("{prefix}_CLIENT_ID")).ok()?;
         let client_secret = std::env::var(format!("{prefix}_CLIENT_SECRET")).ok()?;
-        let redirect_uri = std::env::var(format!("{prefix}_REDIRECT_URI"))
-            .unwrap_or_else(|_| format!("http://localhost:7777/api/auth/oauth/{}/callback", provider.name()));
+        let redirect_uri = std::env::var(format!("{prefix}_REDIRECT_URI")).unwrap_or_else(|_| {
+            format!(
+                "http://localhost:7777/api/auth/oauth/{}/callback",
+                provider.name()
+            )
+        });
         Some(Self {
             provider: provider.clone(),
             client_id,
@@ -114,7 +123,8 @@ pub struct OAuthSession {
 }
 
 impl OAuthSession {
-    #[must_use] pub fn is_expired(&self) -> bool {
+    #[must_use]
+    pub fn is_expired(&self) -> bool {
         now_epoch() >= self.expires_at
     }
 }
@@ -130,13 +140,17 @@ pub struct OAuthManager {
 }
 
 impl OAuthManager {
-    #[must_use] pub fn new() -> Self { Self::default() }
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Generate the authorization URL for a provider.
     /// Returns `(url, state_token)` — state must be stored and validated in callback.
     pub fn authorization_url(&mut self, config: &OAuthClientConfig) -> (String, String) {
         let state = random_token(32);
-        self.pending.insert(state.clone(), config.provider.name().to_string());
+        self.pending
+            .insert(state.clone(), config.provider.name().to_string());
 
         let provider = &config.provider;
         let url = match provider {
@@ -170,10 +184,16 @@ impl OAuthManager {
         state: &str,
     ) -> Result<OAuthSession, String> {
         // Validate CSRF state
-        let expected_provider = self.pending.remove(state)
+        let expected_provider = self
+            .pending
+            .remove(state)
             .ok_or_else(|| "invalid or expired OAuth state token".to_string())?;
         if expected_provider != config.provider.name() {
-            return Err(format!("state mismatch: expected '{}' got '{}'", expected_provider, config.provider.name()));
+            return Err(format!(
+                "state mismatch: expected '{}' got '{}'",
+                expected_provider,
+                config.provider.name()
+            ));
         }
 
         // Exchange code for access token
@@ -215,7 +235,8 @@ impl OAuthManager {
         self.pending.retain(|_, _| true); // they expire implicitly after ~10 min
     }
 
-    #[must_use] pub fn active_session_count(&self) -> usize {
+    #[must_use]
+    pub fn active_session_count(&self) -> usize {
         self.sessions.values().filter(|s| !s.is_expired()).count()
     }
 }
@@ -261,14 +282,20 @@ fn exchange_code(config: &OAuthClientConfig, code: &str) -> Result<String, Strin
         .send()
         .map_err(|e| format!("token exchange failed: {e}"))?;
 
-    let json: serde_json::Value = resp.json()
+    let json: serde_json::Value = resp
+        .json()
         .map_err(|e| format!("token response parse error: {e}"))?;
 
     if let Some(err) = json["error"].as_str() {
-        return Err(format!("OAuth error: {} — {}", err, json["error_description"].as_str().unwrap_or("")));
+        return Err(format!(
+            "OAuth error: {} — {}",
+            err,
+            json["error_description"].as_str().unwrap_or("")
+        ));
     }
 
-    json["access_token"].as_str()
+    json["access_token"]
+        .as_str()
         .map(str::to_string)
         .ok_or_else(|| "no access_token in response".to_string())
 }
@@ -286,7 +313,8 @@ fn fetch_profile(provider: &OAuthProvider, access_token: &str) -> Result<UserPro
         .send()
         .map_err(|e| format!("profile fetch failed: {e}"))?;
 
-    let json: serde_json::Value = resp.json()
+    let json: serde_json::Value = resp
+        .json()
         .map_err(|e| format!("profile parse error: {e}"))?;
 
     let (id, email, name, avatar_url) = match provider {
@@ -299,9 +327,11 @@ fn fetch_profile(provider: &OAuthProvider, access_token: &str) -> Result<UserPro
         OAuthProvider::GitHub => (
             json["id"].to_string(),
             json["email"].as_str().unwrap_or("").to_string(),
-            json["name"].as_str()
+            json["name"]
+                .as_str()
                 .or_else(|| json["login"].as_str())
-                .unwrap_or("").to_string(),
+                .unwrap_or("")
+                .to_string(),
             json["avatar_url"].as_str().map(str::to_string),
         ),
     };
@@ -310,7 +340,12 @@ fn fetch_profile(provider: &OAuthProvider, access_token: &str) -> Result<UserPro
         return Err("could not extract user ID from profile".to_string());
     }
 
-    Ok(UserProfile { id, email, name, avatar_url })
+    Ok(UserProfile {
+        id,
+        email,
+        name,
+        avatar_url,
+    })
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -320,7 +355,10 @@ fn random_token(bytes: usize) -> String {
     // Deterministic-but-unique: combine PID + timestamp + counter
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let pid = std::process::id();
     // SHA256-like mixing via format + simple hash
     let raw = format!("{ts}:{pid}:{n}:{bytes}");
@@ -338,10 +376,12 @@ fn random_token(bytes: usize) -> String {
 }
 
 fn url_encode(s: &str) -> String {
-    s.chars().map(|c| match c {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-        _ => format!("%{:02X}", c as u8),
-    }).collect()
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
 }
 
 fn now_epoch() -> u64 {
@@ -359,8 +399,14 @@ mod tests {
 
     #[test]
     fn provider_from_str() {
-        assert_eq!(OAuthProvider::from_str("google"), Some(OAuthProvider::Google));
-        assert_eq!(OAuthProvider::from_str("GITHUB"), Some(OAuthProvider::GitHub));
+        assert_eq!(
+            OAuthProvider::from_str("google"),
+            Some(OAuthProvider::Google)
+        );
+        assert_eq!(
+            OAuthProvider::from_str("GITHUB"),
+            Some(OAuthProvider::GitHub)
+        );
         assert!(OAuthProvider::from_str("unknown").is_none());
     }
 

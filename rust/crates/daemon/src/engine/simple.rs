@@ -3,16 +3,15 @@
 use std::path::Path;
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, AuditSeverity, GovernancePolicy};
-use backend::{DynBackend};
+use backend::DynBackend;
 use intelligence::{
-    CodebaseIndex, CodebaseIndexer,
-    clean_code_output, contains_code, validate_code, IndexerConfig,
+    clean_code_output, contains_code, validate_code, CodebaseIndex, CodebaseIndexer, IndexerConfig,
 };
 use runtime::ConversationRuntime;
 
 use platform::AgentConfig;
 
-use super::{AgentRunResult, executor::IntelligentToolExecutor};
+use super::{executor::IntelligentToolExecutor, AgentRunResult};
 
 /// Simple execution — single `run_turn` with output validation.
 pub(super) fn run_simple(
@@ -27,7 +26,13 @@ pub(super) fn run_simple(
     match runtime.run_turn(prompt, None) {
         Ok(summary) => {
             let tool_count = summary.tool_results.len() as u32;
-            check_governance(governance, tool_count, &config.session_id, agent_id, audit_logger);
+            check_governance(
+                governance,
+                tool_count,
+                &config.session_id,
+                agent_id,
+                audit_logger,
+            );
             let mut result_summary = extract_text_summary(&summary.assistant_messages);
 
             // --- Output validation: clean model artifacts ---
@@ -38,7 +43,9 @@ pub(super) fn run_simple(
                 let lang = detect_language_from_content(&result_summary);
                 let validation = validate_code(&result_summary, &lang);
                 if !validation.valid {
-                    let issues: Vec<String> = validation.errors.iter()
+                    let issues: Vec<String> = validation
+                        .errors
+                        .iter()
                         .map(|e| e.message.clone())
                         .collect();
                     audit_logger.log(
@@ -56,12 +63,15 @@ pub(super) fn run_simple(
                 &AuditEvent::new(
                     &config.session_id,
                     AuditEventKind::SessionEnd,
-                    format!("agent {agent_id} completed: iterations={} tools={}", summary.iterations, tool_count),
+                    format!(
+                        "agent {agent_id} completed: iterations={} tools={}",
+                        summary.iterations, tool_count
+                    ),
                 )
                 .with_agent(agent_id)
                 .with_model(model),
             );
-            
+
             runtime.session_mut().success = true;
             runtime.session_mut().human_override = false;
 
@@ -75,11 +85,14 @@ pub(super) fn run_simple(
         }
         Err(error) => {
             audit_logger.log(
-                &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                    format!("agent {agent_id} failed: {error}"))
-                    .with_severity(AuditSeverity::Warning)
-                    .with_agent(agent_id)
-                    .with_model(model),
+                &AuditEvent::new(
+                    &config.session_id,
+                    AuditEventKind::SessionEnd,
+                    format!("agent {agent_id} failed: {error}"),
+                )
+                .with_severity(AuditSeverity::Warning)
+                .with_agent(agent_id)
+                .with_model(model),
             );
             runtime.session_mut().success = false;
             AgentRunResult {
@@ -103,10 +116,13 @@ pub(super) fn check_governance(
     if let Some(max) = governance.max_total_tool_invocations {
         if tool_count > max {
             audit_logger.log(
-                &AuditEvent::new(session_id, AuditEventKind::GovernanceViolation,
-                    format!("agent exceeded {max} tool invocations"))
-                    .with_severity(AuditSeverity::Warning)
-                    .with_agent(agent_id),
+                &AuditEvent::new(
+                    session_id,
+                    AuditEventKind::GovernanceViolation,
+                    format!("agent exceeded {max} tool invocations"),
+                )
+                .with_severity(AuditSeverity::Warning)
+                .with_agent(agent_id),
             );
         }
     }
@@ -165,8 +181,7 @@ pub(super) fn load_or_build_index(
         }
     }
 
-    let index = CodebaseIndexer::build_index(workspace_root, config)
-        .map_err(|e| e.to_string())?;
+    let index = CodebaseIndexer::build_index(workspace_root, config).map_err(|e| e.to_string())?;
     let _ = CodebaseIndexer::save_index(workspace_root, &index);
     Ok(index)
 }

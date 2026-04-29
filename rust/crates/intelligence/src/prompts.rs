@@ -42,20 +42,36 @@ pub enum ToolInstructionStyle {
 }
 
 /// Detect model family from model name.
-#[must_use] pub fn detect_family(model_name: &str) -> ModelFamily {
+#[must_use]
+pub fn detect_family(model_name: &str) -> ModelFamily {
     let lower = model_name.to_lowercase();
-    if lower.contains("qwen") { return ModelFamily::Qwen; }
-    if lower.contains("deepseek") { return ModelFamily::DeepSeek; }
-    if lower.contains("mistral") || lower.contains("codestral") { return ModelFamily::Mistral; }
-    if lower.contains("codellama") { return ModelFamily::CodeLlama; }
-    if lower.contains("gemma") { return ModelFamily::Gemma; }
-    if lower.contains("phi") { return ModelFamily::Phi; }
-    if lower.contains("llama") { return ModelFamily::Llama; }
+    if lower.contains("qwen") {
+        return ModelFamily::Qwen;
+    }
+    if lower.contains("deepseek") {
+        return ModelFamily::DeepSeek;
+    }
+    if lower.contains("mistral") || lower.contains("codestral") {
+        return ModelFamily::Mistral;
+    }
+    if lower.contains("codellama") {
+        return ModelFamily::CodeLlama;
+    }
+    if lower.contains("gemma") {
+        return ModelFamily::Gemma;
+    }
+    if lower.contains("phi") {
+        return ModelFamily::Phi;
+    }
+    if lower.contains("llama") {
+        return ModelFamily::Llama;
+    }
     ModelFamily::Generic
 }
 
 /// Get the optimal prompt template for a model.
-#[must_use] pub fn template_for_model(model_name: &str) -> PromptTemplate {
+#[must_use]
+pub fn template_for_model(model_name: &str) -> PromptTemplate {
     let family = detect_family(model_name);
     match family {
         ModelFamily::Qwen => PromptTemplate {
@@ -127,7 +143,8 @@ pub enum ToolInstructionStyle {
 }
 
 /// Build an optimized system prompt for a specific model.
-#[must_use] pub fn build_optimized_prompt(
+#[must_use]
+pub fn build_optimized_prompt(
     model_name: &str,
     base_prompt: &str,
     context_injection: Option<&str>,
@@ -140,7 +157,8 @@ pub enum ToolInstructionStyle {
 
     // Chain of thought instruction
     if template.chain_of_thought {
-        sections.push("Think step by step before acting. Explain your reasoning briefly.".to_string());
+        sections
+            .push("Think step by step before acting. Explain your reasoning briefly.".to_string());
     }
 
     // JSON hint for models that print tool calls as text
@@ -168,7 +186,10 @@ mod tests {
         assert_eq!(detect_family("qwen3-coder:30b"), ModelFamily::Qwen);
         assert_eq!(detect_family("llama3.1:8b"), ModelFamily::Llama);
         assert_eq!(detect_family("mistral:7b"), ModelFamily::Mistral);
-        assert_eq!(detect_family("deepseek-coder:latest"), ModelFamily::DeepSeek);
+        assert_eq!(
+            detect_family("deepseek-coder:latest"),
+            ModelFamily::DeepSeek
+        );
         assert_eq!(detect_family("codellama:7b"), ModelFamily::CodeLlama);
         assert_eq!(detect_family("gemma4:26b"), ModelFamily::Gemma);
         assert_eq!(detect_family("gemma4:31b"), ModelFamily::Gemma);
@@ -178,7 +199,13 @@ mod tests {
 
     #[test]
     fn templates_have_valid_tool_limits() {
-        for name in ["qwen3:8b", "llama3.1:8b", "mistral:7b", "deepseek-coder:latest", "codellama:7b"] {
+        for name in [
+            "qwen3:8b",
+            "llama3.1:8b",
+            "mistral:7b",
+            "deepseek-coder:latest",
+            "codellama:7b",
+        ] {
             let template = template_for_model(name);
             assert!(template.max_tools_per_request >= 3);
             assert!(template.max_tools_per_request <= 6);
@@ -196,13 +223,17 @@ mod tests {
         assert!(sections.iter().any(|s| s.contains("Tachy")));
         assert!(sections.iter().any(|s| s.contains("42 files")));
         // Llama needs JSON hint
-        assert!(sections.iter().any(|s| s.contains("function calling mechanism")));
+        assert!(sections
+            .iter()
+            .any(|s| s.contains("function calling mechanism")));
     }
 
     #[test]
     fn qwen_does_not_need_json_hint() {
         let sections = build_optimized_prompt("qwen3-coder:30b", "base", None);
-        assert!(!sections.iter().any(|s| s.contains("function calling mechanism")));
+        assert!(!sections
+            .iter()
+            .any(|s| s.contains("function calling mechanism")));
     }
 
     #[test]
@@ -212,6 +243,9 @@ mod tests {
         assert_eq!(template.max_tools_per_request, 6);
         assert!(!template.needs_json_hint); // Gemma 4 has native function calling
         assert!(template.chain_of_thought);
-        assert_eq!(template.tool_instruction_style, ToolInstructionStyle::Standard);
+        assert_eq!(
+            template.tool_instruction_style,
+            ToolInstructionStyle::Standard
+        );
     }
 }

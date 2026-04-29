@@ -3,7 +3,8 @@
 use std::path::Path;
 
 /// Detect the programming language from a file path extension.
-#[must_use] pub fn detect_language(path: &str) -> &str {
+#[must_use]
+pub fn detect_language(path: &str) -> &str {
     match path.rsplit('.').next() {
         Some("rs") => "rust",
         Some("py") => "python",
@@ -29,7 +30,8 @@ use std::path::Path;
 }
 
 /// Detect the test command for the workspace (based on marker files).
-#[must_use] pub fn detect_test_command(workspace_root: &Path) -> Option<String> {
+#[must_use]
+pub fn detect_test_command(workspace_root: &Path) -> Option<String> {
     if workspace_root.join("Cargo.toml").exists() {
         Some("cargo test".to_string())
     } else if workspace_root.join("package.json").exists() {
@@ -64,21 +66,61 @@ pub(crate) fn detect_build_system(workspace_root: &Path) -> Option<String> {
 pub(crate) fn is_ignored_dir(name: &str) -> bool {
     matches!(
         name,
-        ".git" | ".tachy" | "node_modules" | "target" | "__pycache__"
-            | ".venv" | "vendor" | ".next" | "dist" | "build"
-            | ".idea" | ".vscode" | ".DS_Store"
+        ".git"
+            | ".tachy"
+            | "node_modules"
+            | "target"
+            | "__pycache__"
+            | ".venv"
+            | "vendor"
+            | ".next"
+            | "dist"
+            | "build"
+            | ".idea"
+            | ".vscode"
+            | ".DS_Store"
     )
 }
 
 pub(crate) fn is_binary_extension(ext: &str) -> bool {
     matches!(
         ext,
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "svg"
-            | "wasm" | "o" | "so" | "dylib" | "dll" | "exe" | "a"
-            | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z"
-            | "pdf" | "doc" | "docx" | "xls" | "xlsx"
-            | "mp3" | "mp4" | "avi" | "mov" | "wav"
-            | "ttf" | "otf" | "woff" | "woff2" | "eot"
-            | "lock" | "bin"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "bmp"
+            | "ico"
+            | "svg"
+            | "wasm"
+            | "o"
+            | "so"
+            | "dylib"
+            | "dll"
+            | "exe"
+            | "a"
+            | "zip"
+            | "tar"
+            | "gz"
+            | "bz2"
+            | "xz"
+            | "7z"
+            | "pdf"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "mp3"
+            | "mp4"
+            | "avi"
+            | "mov"
+            | "wav"
+            | "ttf"
+            | "otf"
+            | "woff"
+            | "woff2"
+            | "eot"
+            | "lock"
+            | "bin"
     )
 }

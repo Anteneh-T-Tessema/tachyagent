@@ -12,10 +12,10 @@
 //! This avoids the full opentelemetry-sdk dependency tree while still emitting
 //! valid OTLP JSON that Grafana Tempo, Honeycomb, and Datadog can ingest.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -101,7 +101,8 @@ impl Default for SpanCollector {
 }
 
 impl SpanCollector {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             spans: Vec::new(),
             otlp_endpoint: std::env::var("TACHY_OTLP_ENDPOINT").ok(),
@@ -110,7 +111,8 @@ impl SpanCollector {
         }
     }
 
-    #[must_use] pub fn is_enabled(&self) -> bool {
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
         self.otlp_endpoint.is_some()
     }
 
@@ -124,8 +126,13 @@ impl SpanCollector {
 
     /// Export buffered spans to the OTLP endpoint (fire-and-forget).
     pub fn flush(&mut self) {
-        if self.spans.is_empty() { return; }
-        let Some(endpoint) = &self.otlp_endpoint else { self.spans.clear(); return; };
+        if self.spans.is_empty() {
+            return;
+        }
+        let Some(endpoint) = &self.otlp_endpoint else {
+            self.spans.clear();
+            return;
+        };
 
         let url = format!("{endpoint}/v1/traces");
         let payload = build_otlp_payload(&self.spans, &self.service_name);
@@ -137,37 +144,42 @@ impl SpanCollector {
             let _ = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
-                .and_then(|c| c.post(&url_clone)
-                    .header("Content-Type", "application/json")
-                    .body(payload_clone)
-                    .send());
+                .and_then(|c| {
+                    c.post(&url_clone)
+                        .header("Content-Type", "application/json")
+                        .body(payload_clone)
+                        .send()
+                });
         });
     }
 }
 
 /// OTLP JSON payload builder (OTLP/HTTP JSON format).
 fn build_otlp_payload(spans: &[Span], service_name: &str) -> String {
-    let span_data: Vec<serde_json::Value> = spans.iter().map(|s| {
-        let attrs: Vec<serde_json::Value> = s.attributes.iter().map(|(k, v)| {
+    let span_data: Vec<serde_json::Value> = spans
+        .iter()
+        .map(|s| {
+            let attrs: Vec<serde_json::Value> = s.attributes.iter().map(|(k, v)| {
             serde_json::json!({ "key": k, "value": { "stringValue": v.to_string() } })
         }).collect();
 
-        let mut obj = serde_json::json!({
-            "traceId": s.trace_id,
-            "spanId": s.span_id,
-            "name": s.name,
-            "startTimeUnixNano": s.start_time_unix_nano.to_string(),
-            "endTimeUnixNano": s.end_time_unix_nano.to_string(),
-            "attributes": attrs,
-            "status": { "code": format!("{:?}", s.status) },
-        });
+            let mut obj = serde_json::json!({
+                "traceId": s.trace_id,
+                "spanId": s.span_id,
+                "name": s.name,
+                "startTimeUnixNano": s.start_time_unix_nano.to_string(),
+                "endTimeUnixNano": s.end_time_unix_nano.to_string(),
+                "attributes": attrs,
+                "status": { "code": format!("{:?}", s.status) },
+            });
 
-        if let Some(parent) = &s.parent_span_id {
-            obj["parentSpanId"] = serde_json::Value::String(parent.clone());
-        }
+            if let Some(parent) = &s.parent_span_id {
+                obj["parentSpanId"] = serde_json::Value::String(parent.clone());
+            }
 
-        obj
-    }).collect();
+            obj
+        })
+        .collect();
 
     serde_json::json!({
         "resourceSpans": [{
@@ -182,7 +194,8 @@ fn build_otlp_payload(spans: &[Span], service_name: &str) -> String {
                 "spans": span_data,
             }]
         }]
-    }).to_string()
+    })
+    .to_string()
 }
 
 // ── Tracer ────────────────────────────────────────────────────────────────────
@@ -198,8 +211,12 @@ impl Tracer {
         Self { collector }
     }
 
-    #[must_use] pub fn is_enabled(&self) -> bool {
-        self.collector.lock().map(|c| c.is_enabled()).unwrap_or(false)
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.collector
+            .lock()
+            .map(|c| c.is_enabled())
+            .unwrap_or(false)
     }
 
     /// Start a new root span (no parent).
@@ -208,7 +225,11 @@ impl Tracer {
     }
 
     /// Start a child span under an existing trace.
-    pub fn start_child_span(&self, name: impl Into<String>, parent_span_id: Option<String>) -> ActiveSpan {
+    pub fn start_child_span(
+        &self,
+        name: impl Into<String>,
+        parent_span_id: Option<String>,
+    ) -> ActiveSpan {
         ActiveSpan {
             trace_id: random_id(16),
             span_id: random_id(8),
@@ -240,7 +261,9 @@ pub fn record_agent_run(
     tool_invocations: u32,
     duration_ms: u64,
 ) {
-    if !tracer.is_enabled() { return; }
+    if !tracer.is_enabled() {
+        return;
+    }
     let mut span = tracer.start_span("tachy.agent.run");
     span.set_attr("agent.id", agent_id);
     span.set_attr("agent.model", model);
@@ -248,7 +271,11 @@ pub fn record_agent_run(
     span.set_attr("agent.iterations", iterations as i64);
     span.set_attr("agent.tool_invocations", i64::from(tool_invocations));
     span.set_attr("agent.duration_ms", duration_ms as i64);
-    if success { span.finish(); } else { span.finish_error("agent run failed"); }
+    if success {
+        span.finish();
+    } else {
+        span.finish_error("agent run failed");
+    }
 }
 
 /// Record a tool invocation span.
@@ -259,12 +286,18 @@ pub fn record_tool_invocation(
     success: bool,
     duration_ms: u64,
 ) {
-    if !tracer.is_enabled() { return; }
+    if !tracer.is_enabled() {
+        return;
+    }
     let mut span = tracer.start_span("tachy.tool.invoke");
     span.set_attr("tool.name", tool_name);
     span.set_attr("agent.id", agent_id);
     span.set_attr("tool.duration_ms", duration_ms as i64);
-    if success { span.finish(); } else { span.finish_error("tool invocation failed"); }
+    if success {
+        span.finish();
+    } else {
+        span.finish_error("tool invocation failed");
+    }
 }
 
 /// Record an LLM generation span.
@@ -276,23 +309,26 @@ pub fn record_llm_call(
     ttft_ms: u32,
     success: bool,
 ) {
-    if !tracer.is_enabled() { return; }
+    if !tracer.is_enabled() {
+        return;
+    }
     let mut span = tracer.start_span("tachy.llm.generate");
     span.set_attr("llm.model", model);
     span.set_attr("llm.input_tokens", input_tokens as i64);
     span.set_attr("llm.output_tokens", output_tokens as i64);
     span.set_attr("llm.ttft_ms", i64::from(ttft_ms));
-    if success { span.finish(); } else { span.finish_error("LLM call failed"); }
+    if success {
+        span.finish();
+    } else {
+        span.finish_error("LLM call failed");
+    }
 }
 
 /// Record a visual perception event (screenshot).
-pub fn record_vision_snapshot(
-    tracer: &Tracer,
-    agent_id: &str,
-    url: &str,
-    path: &str,
-) {
-    if !tracer.is_enabled() { return; }
+pub fn record_vision_snapshot(tracer: &Tracer, agent_id: &str, url: &str, path: &str) {
+    if !tracer.is_enabled() {
+        return;
+    }
     let mut span = tracer.start_span("tachy.vision.snapshot");
     span.set_attr("agent.id", agent_id);
     span.set_attr("vision.url", url);

@@ -62,16 +62,27 @@ pub fn run_mcp_server() {
                     jsonrpc: "2.0".to_string(),
                     id: Value::Null,
                     result: None,
-                    error: Some(JsonRpcError { code: -32700, message: format!("parse error: {e}") }),
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: format!("parse error: {e}"),
+                    }),
                 };
-                let _ = writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap_or_default());
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::to_string(&resp).unwrap_or_default()
+                );
                 let _ = stdout.flush();
                 continue;
             }
         };
 
         let response = handle_mcp_request(&request);
-        let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap_or_default());
+        let _ = writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&response).unwrap_or_default()
+        );
         let _ = stdout.flush();
     }
 }
@@ -104,26 +115,31 @@ fn handle_mcp_request(req: &JsonRpcRequest) -> JsonRpcResponse {
         },
 
         "tools/list" => {
-            let tools: Vec<Value> = tools::mvp_tool_specs().iter().map(|spec| {
-                json!({
-                    "name": spec.name,
-                    "description": spec.description,
-                    "inputSchema": spec.input_schema,
+            let tools: Vec<Value> = tools::mvp_tool_specs()
+                .iter()
+                .map(|spec| {
+                    json!({
+                        "name": spec.name,
+                        "description": spec.description,
+                        "inputSchema": spec.input_schema,
+                    })
                 })
-            }).collect();
+                .collect();
 
             // Add custom tools
-            let tachy_dir = std::env::current_dir()
-                .unwrap_or_default()
-                .join(".tachy");
+            let tachy_dir = std::env::current_dir().unwrap_or_default().join(".tachy");
             let custom = tools::CustomToolRegistry::load(&tachy_dir);
-            let custom_tools: Vec<Value> = custom.tool_specs().iter().map(|spec| {
-                json!({
-                    "name": spec.name,
-                    "description": spec.description,
-                    "inputSchema": spec.input_schema,
+            let custom_tools: Vec<Value> = custom
+                .tool_specs()
+                .iter()
+                .map(|spec| {
+                    json!({
+                        "name": spec.name,
+                        "description": spec.description,
+                        "inputSchema": spec.input_schema,
+                    })
                 })
-            }).collect();
+                .collect();
 
             let all_tools: Vec<Value> = tools.into_iter().chain(custom_tools).collect();
 
@@ -136,7 +152,11 @@ fn handle_mcp_request(req: &JsonRpcRequest) -> JsonRpcResponse {
         }
 
         "tools/call" => {
-            let tool_name = req.params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let tool_name = req
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
             // Execute the tool
@@ -174,7 +194,10 @@ fn handle_mcp_request(req: &JsonRpcRequest) -> JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
             id,
             result: None,
-            error: Some(JsonRpcError { code: -32601, message: format!("method not found: {}", req.method) }),
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: format!("method not found: {}", req.method),
+            }),
         },
     }
 }

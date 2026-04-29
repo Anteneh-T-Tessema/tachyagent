@@ -106,7 +106,10 @@ impl PlatformConfig {
             Ok(content) => serde_json::from_str::<Self>(&content)
                 .map(Self::with_required_templates)
                 .unwrap_or_else(|e| {
-                    eprintln!("warning: failed to parse {}: {e}, using defaults", path.display());
+                    eprintln!(
+                        "warning: failed to parse {}: {e}, using defaults",
+                        path.display()
+                    );
                     Self::default()
                 }),
             Err(_) => Self::default(),
@@ -187,13 +190,16 @@ impl PlatformWorkspace {
 
     /// Create a high-speed temporary clone of this workspace for Dreaming/Simulation.
     pub fn create_sandbox(&self) -> Result<SandboxWorkspace, String> {
-        let sandbox_id = format!("dream-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
-        
+        let sandbox_id = format!(
+            "dream-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+
         let sandbox_root = std::env::temp_dir().join(sandbox_id);
-        
+
         // Ensure parent exists
         std::fs::create_dir_all(&sandbox_root)
             .map_err(|e| format!("failed to create sandbox dir: {e}"))?;
@@ -202,10 +208,14 @@ impl PlatformWorkspace {
         // For now, we'll do a simple recursive copy excluding .git and .tachy
         let status = std::process::Command::new("rsync")
             .arg("-a")
-            .arg("--exclude").arg(".git")
-            .arg("--exclude").arg(".tachy")
-            .arg("--exclude").arg("target")
-            .arg("--exclude").arg("node_modules")
+            .arg("--exclude")
+            .arg(".git")
+            .arg("--exclude")
+            .arg(".tachy")
+            .arg("--exclude")
+            .arg("target")
+            .arg("--exclude")
+            .arg("node_modules")
             .arg(format!("{}/", self.root.display()))
             .arg(format!("{}/", sandbox_root.display()))
             .status()

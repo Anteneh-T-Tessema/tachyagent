@@ -68,13 +68,18 @@ pub struct ChannelsFile {
 }
 
 /// Load channel configurations from `.tachy/channels.yaml`.
-#[must_use] pub fn load_channels(tachy_dir: &Path) -> Vec<ChannelConfig> {
+#[must_use]
+pub fn load_channels(tachy_dir: &Path) -> Vec<ChannelConfig> {
     let yaml_path = tachy_dir.join("channels.yaml");
     let yml_path = tachy_dir.join("channels.yml");
 
-    let path = if yaml_path.exists() { yaml_path }
-        else if yml_path.exists() { yml_path }
-        else { return Vec::new() };
+    let path = if yaml_path.exists() {
+        yaml_path
+    } else if yml_path.exists() {
+        yml_path
+    } else {
+        return Vec::new();
+    };
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -95,11 +100,16 @@ pub fn slack_post_message(bot_token: &str, channel: &str, text: &str) -> Result<
 
     let output = std::process::Command::new("curl")
         .args([
-            "-s", "-X", "POST",
+            "-s",
+            "-X",
+            "POST",
             "https://slack.com/api/chat.postMessage",
-            "-H", &format!("Authorization: Bearer {token}"),
-            "-H", "Content-Type: application/json",
-            "-d", &body.to_string(),
+            "-H",
+            &format!("Authorization: Bearer {token}"),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
         ])
         .output()
         .map_err(|e| format!("curl failed: {e}"))?;
@@ -125,17 +135,25 @@ pub fn discord_send_message(bot_token: &str, channel_id: &str, text: &str) -> Re
 
     let output = std::process::Command::new("curl")
         .args([
-            "-s", "-X", "POST",
+            "-s",
+            "-X",
+            "POST",
             &format!("https://discord.com/api/v10/channels/{channel_id}/messages"),
-            "-H", &format!("Authorization: Bot {token}"),
-            "-H", "Content-Type: application/json",
-            "-d", &body.to_string(),
+            "-H",
+            &format!("Authorization: Bot {token}"),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
         ])
         .output()
         .map_err(|e| format!("curl failed: {e}"))?;
 
-    if output.status.success() { Ok(()) }
-    else { Err(String::from_utf8_lossy(&output.stderr).to_string()) }
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }
 
 /// Send a message to a Telegram chat using the Bot API.
@@ -156,16 +174,23 @@ pub fn telegram_send_message(bot_token: &str, chat_id: &str, text: &str) -> Resu
 
     let output = std::process::Command::new("curl")
         .args([
-            "-s", "-X", "POST",
+            "-s",
+            "-X",
+            "POST",
             &format!("https://api.telegram.org/bot{token}/sendMessage"),
-            "-H", "Content-Type: application/json",
-            "-d", &body.to_string(),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
         ])
         .output()
         .map_err(|e| format!("curl failed: {e}"))?;
 
-    if output.status.success() { Ok(()) }
-    else { Err(String::from_utf8_lossy(&output.stderr).to_string()) }
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }
 
 /// Expand $`ENV_VAR` references in a string.
@@ -199,12 +224,16 @@ fn parse_channels_yaml(content: &str) -> Vec<ChannelConfig> {
                     map.insert("allowed_users".to_string(), serde_json::json!(users));
                 }
                 if let Ok(ch) = serde_json::from_value::<ChannelConfig>(serde_json::Value::Object(
-                    map.into_iter().collect()
+                    map.into_iter().collect(),
                 )) {
                     channels.push(ch);
                 }
             }
-            let val = trimmed.strip_prefix("- type:").unwrap().trim().trim_matches('"');
+            let val = trimmed
+                .strip_prefix("- type:")
+                .unwrap()
+                .trim()
+                .trim_matches('"');
             let mut map = BTreeMap::new();
             map.insert("type".to_string(), serde_json::json!(val));
             map.insert("enabled".to_string(), serde_json::json!(true));
@@ -234,9 +263,13 @@ fn parse_channels_yaml(content: &str) -> Vec<ChannelConfig> {
                 let key = key.trim().trim_start_matches("- ");
                 let val = val.trim().trim_matches('"').trim_matches('\'');
                 if !key.is_empty() && !val.is_empty() {
-                    if val == "true" { map.insert(key.to_string(), serde_json::json!(true)); }
-                    else if val == "false" { map.insert(key.to_string(), serde_json::json!(false)); }
-                    else { map.insert(key.to_string(), serde_json::json!(val)); }
+                    if val == "true" {
+                        map.insert(key.to_string(), serde_json::json!(true));
+                    } else if val == "false" {
+                        map.insert(key.to_string(), serde_json::json!(false));
+                    } else {
+                        map.insert(key.to_string(), serde_json::json!(val));
+                    }
                 }
             }
         }
@@ -248,7 +281,7 @@ fn parse_channels_yaml(content: &str) -> Vec<ChannelConfig> {
             map.insert("allowed_users".to_string(), serde_json::json!(users));
         }
         if let Ok(ch) = serde_json::from_value::<ChannelConfig>(serde_json::Value::Object(
-            map.into_iter().collect()
+            map.into_iter().collect(),
         )) {
             channels.push(ch);
         }

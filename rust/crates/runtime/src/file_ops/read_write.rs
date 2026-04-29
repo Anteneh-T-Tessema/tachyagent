@@ -145,8 +145,9 @@ pub fn read_file(
     let content = fs::read_to_string(&absolute_path)?;
     let lines: Vec<&str> = content.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
-    let end_index = limit
-        .map_or(lines.len(), |limit| start_index.saturating_add(limit).min(lines.len()));
+    let end_index = limit.map_or(lines.len(), |limit| {
+        start_index.saturating_add(limit).min(lines.len())
+    });
     let selected = lines[start_index..end_index].join("\n");
 
     Ok(ReadFileOutput {

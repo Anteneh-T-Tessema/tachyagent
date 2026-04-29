@@ -98,7 +98,12 @@ mod tests {
 
     #[test]
     fn reconstructs_usage_from_session_messages() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(), success: false, human_override: false, team_id: None,
+        let session = Session {
+            branches: Vec::new(),
+            current_branch: String::new(),
+            success: false,
+            human_override: false,
+            team_id: None,
             version: 1,
             messages: vec![ConversationMessage {
                 role: MessageRole::Assistant,

@@ -41,12 +41,14 @@ pub enum LicenseStatus {
 
 impl LicenseStatus {
     /// Can the user run Tachy?
-    #[must_use] pub fn is_active(&self) -> bool {
+    #[must_use]
+    pub fn is_active(&self) -> bool {
         matches!(self, Self::TrialActive { .. } | Self::Licensed { .. })
     }
 
     /// Human-readable status for display.
-    #[must_use] pub fn display(&self) -> String {
+    #[must_use]
+    pub fn display(&self) -> String {
         match self {
             Self::TrialActive { remaining_secs } => {
                 let days = remaining_secs / 86400;
@@ -61,7 +63,9 @@ impl LicenseStatus {
                 let tier_name = match tier {
                     LicenseTier::Trial => "Trial",
                     LicenseTier::Individual => "Individual",
-                    LicenseTier::Team { seats } => return format!("Team ({seats} seats) — {email}"),
+                    LicenseTier::Team { seats } => {
+                        return format!("Team ({seats} seats) — {email}")
+                    }
                     LicenseTier::Enterprise => "Enterprise",
                 };
                 format!("{tier_name} — {email}")
@@ -101,7 +105,8 @@ pub struct LicenseData {
 
 impl LicenseFile {
     /// Create a new trial license file.
-    #[must_use] pub fn new_trial() -> Self {
+    #[must_use]
+    pub fn new_trial() -> Self {
         Self {
             first_run_at: now_epoch(),
             machine_id: compute_machine_id(),
@@ -111,7 +116,8 @@ impl LicenseFile {
     }
 
     /// Load from disk, or create a new trial if not found.
-    #[must_use] pub fn load_or_create(tachy_dir: &Path) -> Self {
+    #[must_use]
+    pub fn load_or_create(tachy_dir: &Path) -> Self {
         let path = license_path(tachy_dir);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(file) = serde_json::from_str::<LicenseFile>(&content) {
@@ -127,14 +133,14 @@ impl LicenseFile {
     /// Save to disk.
     pub fn save(&self, tachy_dir: &Path) -> Result<(), String> {
         let path = license_path(tachy_dir);
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("serialize license: {e}"))?;
-        std::fs::write(&path, json)
-            .map_err(|e| format!("write license file: {e}"))
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("serialize license: {e}"))?;
+        std::fs::write(&path, json).map_err(|e| format!("write license file: {e}"))
     }
 
     /// Check current license status.
-    #[must_use] pub fn status(&self) -> LicenseStatus {
+    #[must_use]
+    pub fn status(&self) -> LicenseStatus {
         // If we have a verified license, check it
         if let Some(license) = &self.license {
             // Check expiry
@@ -228,8 +234,10 @@ fn now_epoch() -> u64 {
 }
 
 fn compute_machine_id() -> String {
-    let hostname = std::process::Command::new("hostname")
-        .output().map_or_else(|_| "unknown".to_string(), |o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let hostname = std::process::Command::new("hostname").output().map_or_else(
+        |_| "unknown".to_string(),
+        |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+    );
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
@@ -324,7 +332,11 @@ mod tests {
         let secret = "test-secret-key-for-tachy";
         let payload = r#"{"email":"[email]","tier":"individual","expires_at":0,"machine_id":null,"issued_at":1700000000}"#;
         let sig = hmac_sha256(secret.as_bytes(), payload.as_bytes());
-        let key = format!("TACHY-{}-{}", base64_encode(payload.as_bytes()), base64_encode(&sig));
+        let key = format!(
+            "TACHY-{}-{}",
+            base64_encode(payload.as_bytes()),
+            base64_encode(&sig)
+        );
 
         let mut file = LicenseFile::new_trial();
         let result = file.activate(&key, secret);
@@ -339,7 +351,11 @@ mod tests {
         let secret = "correct-secret";
         let payload = r#"{"email":"[email]","tier":"individual","expires_at":0,"machine_id":null,"issued_at":1700000000}"#;
         let sig = hmac_sha256(b"wrong-secret", payload.as_bytes());
-        let key = format!("TACHY-{}-{}", base64_encode(payload.as_bytes()), base64_encode(&sig));
+        let key = format!(
+            "TACHY-{}-{}",
+            base64_encode(payload.as_bytes()),
+            base64_encode(&sig)
+        );
 
         let mut file = LicenseFile::new_trial();
         let result = file.activate(&key, secret);
@@ -364,7 +380,8 @@ mod tests {
     }
 
     fn base64_encode(data: &[u8]) -> String {
-        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut result = String::new();
         for chunk in data.chunks(3) {
             let b0 = chunk[0] as u32;
@@ -373,8 +390,16 @@ mod tests {
             let triple = (b0 << 16) | (b1 << 8) | b2;
             result.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
             result.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
-            if chunk.len() > 1 { result.push(TABLE[((triple >> 6) & 0x3F) as usize] as char); } else { result.push('='); }
-            if chunk.len() > 2 { result.push(TABLE[(triple & 0x3F) as usize] as char); } else { result.push('='); }
+            if chunk.len() > 1 {
+                result.push(TABLE[((triple >> 6) & 0x3F) as usize] as char);
+            } else {
+                result.push('=');
+            }
+            if chunk.len() > 2 {
+                result.push(TABLE[(triple & 0x3F) as usize] as char);
+            } else {
+                result.push('=');
+            }
         }
         result
     }

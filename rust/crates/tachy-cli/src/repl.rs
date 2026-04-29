@@ -5,22 +5,22 @@ use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::render::{approval_prompt, ApprovalChoice, Spinner, TerminalRenderer};
 use audit::{AuditEvent, AuditEventKind, AuditLogger, AuditSeverity, FileAuditSink};
 use backend::{BackendRegistry, DynBackend};
 use crossterm::execute;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use platform::PlatformConfig;
-use crate::render::{approval_prompt, ApprovalChoice, Spinner, TerminalRenderer};
 use runtime::{
-    load_system_prompt, preview_edit_file, preview_write_file,
-    CompactionConfig, ContentBlock, ConversationRuntime,
-    PermissionMode, PermissionPolicy, RuntimeEvent, Session, ToolError, ToolExecutor,
+    load_system_prompt, preview_edit_file, preview_write_file, CompactionConfig, ContentBlock,
+    ConversationRuntime, PermissionMode, PermissionPolicy, RuntimeEvent, Session, ToolError,
+    ToolExecutor,
 };
 use tools::{execute_tool, execute_tool_with_diff};
 
+use crate::setup::detect_project;
 use crate::DEFAULT_DATE;
 use crate::DEFAULT_MODEL;
-use crate::setup::detect_project;
 
 // ---------------------------------------------------------------------------
 // LiveCli — interactive agent session holder
@@ -42,12 +42,18 @@ pub(crate) struct LiveCli {
 }
 
 impl LiveCli {
-    pub(crate) fn new(model: String, enable_tools: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn new(
+        model: String,
+        enable_tools: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
-        let session_id = format!("sess-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let session_id = format!(
+            "sess-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         let tachy_dir = env::current_dir()?.join(".tachy");
         let audit_path = tachy_dir.join("audit.jsonl");
@@ -58,13 +64,12 @@ impl LiveCli {
             }
         }
 
-        let config = PlatformConfig::load(
-            env::current_dir()?.join(".tachy").join("config.json"),
-        );
+        let config = PlatformConfig::load(env::current_dir()?.join(".tachy").join("config.json"));
         let governance = config.governance.clone();
 
         let registry = BackendRegistry::with_defaults();
-        let client = registry.create_client(&model, enable_tools)
+        let client = registry
+            .create_client(&model, enable_tools)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         let backend = DynBackend::new(client);
 
@@ -79,8 +84,12 @@ impl LiveCli {
         );
 
         audit_logger.log(
-            &AuditEvent::new(&session_id, AuditEventKind::SessionStart, "interactive session started")
-                .with_model(&model),
+            &AuditEvent::new(
+                &session_id,
+                AuditEventKind::SessionStart,
+                "interactive session started",
+            )
+            .with_model(&model),
         );
 
         Ok(Self {
@@ -131,7 +140,9 @@ impl LiveCli {
                                 let _ = execute!(
                                     stdout,
                                     crossterm::cursor::MoveToColumn(0),
-                                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
+                                    crossterm::terminal::Clear(
+                                        crossterm::terminal::ClearType::CurrentLine
+                                    ),
                                 );
                             }
                             let mut i = 0;
@@ -139,7 +150,10 @@ impl LiveCli {
                             while i < chars.len() {
                                 if !in_code_block && (chars[i] == '`' || chars[i] == '~') {
                                     let marker = chars[i];
-                                    if i + 2 < chars.len() && chars[i+1] == marker && chars[i+2] == marker {
+                                    if i + 2 < chars.len()
+                                        && chars[i + 1] == marker
+                                        && chars[i + 2] == marker
+                                    {
                                         if !text_buf.is_empty() {
                                             print!("{text_buf}");
                                             let _ = stdout.flush();
@@ -148,7 +162,10 @@ impl LiveCli {
                                         in_code_block = true;
                                         i += 3;
                                         let mut lang = String::new();
-                                        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '\n' {
+                                        while i < chars.len()
+                                            && !chars[i].is_whitespace()
+                                            && chars[i] != '\n'
+                                        {
                                             lang.push(chars[i]);
                                             i += 1;
                                         }
@@ -164,8 +181,14 @@ impl LiveCli {
                                 }
                                 if in_code_block && (chars[i] == '`' || chars[i] == '~') {
                                     let marker = chars[i];
-                                    if i + 2 < chars.len() && chars[i+1] == marker && chars[i+2] == marker {
-                                        print!("{}", renderer.highlight_code(&code_buf, &code_lang));
+                                    if i + 2 < chars.len()
+                                        && chars[i + 1] == marker
+                                        && chars[i + 2] == marker
+                                    {
+                                        print!(
+                                            "{}",
+                                            renderer.highlight_code(&code_buf, &code_lang)
+                                        );
                                         print!("\x1b[36m╰─\x1b[0m\n\n");
                                         let _ = stdout.flush();
                                         code_buf.clear();
@@ -226,11 +249,16 @@ impl LiveCli {
                     println!();
                 } else {
                     spinner.finish(
-                        &format!("Done ({} iteration{}, {} tool call{}, {}ms)",
+                        &format!(
+                            "Done ({} iteration{}, {} tool call{}, {}ms)",
                             summary.iterations,
                             if summary.iterations == 1 { "" } else { "s" },
                             summary.tool_results.len(),
-                            if summary.tool_results.len() == 1 { "" } else { "s" },
+                            if summary.tool_results.len() == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
                             elapsed_ms,
                         ),
                         &theme,
@@ -255,12 +283,21 @@ impl LiveCli {
                 }
                 for tool_msg in &summary.tool_results {
                     for block in &tool_msg.blocks {
-                        if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = block {
+                        if let ContentBlock::ToolResult {
+                            tool_name,
+                            output,
+                            is_error,
+                            ..
+                        } = block
+                        {
                             if *is_error {
                                 execute!(
                                     stdout,
                                     SetForegroundColor(Color::Red),
-                                    Print(format!("  ✘ {tool_name}: {}\n", output.lines().next().unwrap_or(""))),
+                                    Print(format!(
+                                        "  ✘ {tool_name}: {}\n",
+                                        output.lines().next().unwrap_or("")
+                                    )),
                                     ResetColor
                                 )?;
                             }
@@ -285,7 +322,12 @@ impl LiveCli {
                     &AuditEvent::new(
                         &self.session_id,
                         AuditEventKind::AssistantMessage,
-                        format!("iterations={} tools={} latency_ms={}", summary.iterations, summary.tool_results.len(), elapsed_ms),
+                        format!(
+                            "iterations={} tools={} latency_ms={}",
+                            summary.iterations,
+                            summary.tool_results.len(),
+                            elapsed_ms
+                        ),
                     )
                     .with_model(&self.model),
                 );
@@ -293,27 +335,44 @@ impl LiveCli {
 
                 for tool_msg in &summary.tool_results {
                     for block in &tool_msg.blocks {
-                        if let ContentBlock::ToolResult { tool_name, is_error, .. } = block {
-                            let count = self.tool_invocation_counts
+                        if let ContentBlock::ToolResult {
+                            tool_name,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            let count = self
+                                .tool_invocation_counts
                                 .entry(tool_name.clone())
                                 .or_insert(0);
                             *count += 1;
                             self.total_tool_invocations += 1;
 
                             if let Some(violation) = self.governance.check_tool_invocation(
-                                tool_name, "", self.total_tool_invocations, *count,
+                                tool_name,
+                                "",
+                                self.total_tool_invocations,
+                                *count,
                             ) {
-                                self.audit_logger.log(&violation.to_audit_event(&self.session_id));
+                                self.audit_logger
+                                    .log(&violation.to_audit_event(&self.session_id));
                                 self.audit_event_count += 1;
                                 eprintln!("⚠ Governance: {}", violation.detail);
                             }
 
-                            let severity = if *is_error { AuditSeverity::Warning } else { AuditSeverity::Info };
+                            let severity = if *is_error {
+                                AuditSeverity::Warning
+                            } else {
+                                AuditSeverity::Info
+                            };
                             self.audit_logger.log(
-                                &AuditEvent::new(&self.session_id, AuditEventKind::ToolResult,
-                                    format!("tool={tool_name} error={is_error}"))
-                                    .with_severity(severity)
-                                    .with_tool(tool_name),
+                                &AuditEvent::new(
+                                    &self.session_id,
+                                    AuditEventKind::ToolResult,
+                                    format!("tool={tool_name} error={is_error}"),
+                                )
+                                .with_severity(severity)
+                                .with_tool(tool_name),
                             );
                             self.audit_event_count += 1;
                         }
@@ -326,8 +385,12 @@ impl LiveCli {
             Err(error) => {
                 spinner.fail("Request failed", &theme, &mut stdout)?;
                 self.audit_logger.log(
-                    &AuditEvent::new(&self.session_id, AuditEventKind::SessionEnd, error.to_string())
-                        .with_severity(AuditSeverity::Warning),
+                    &AuditEvent::new(
+                        &self.session_id,
+                        AuditEventKind::SessionEnd,
+                        error.to_string(),
+                    )
+                    .with_severity(AuditSeverity::Warning),
                 );
                 self.audit_event_count += 1;
                 Err(Box::new(error))
@@ -349,7 +412,10 @@ impl LiveCli {
         );
     }
 
-    pub(crate) fn switch_model(&mut self, new_model: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn switch_model(
+        &mut self,
+        new_model: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let registry = BackendRegistry::with_defaults();
         let client = registry.create_client(new_model, true)?;
         let backend = DynBackend::new(client);
@@ -369,7 +435,8 @@ impl LiveCli {
             .map(|d| d.join(".tachy").join("config.json"));
         if let Some(path) = &config_path {
             let mut val: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(path) {
-                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::default()))
+                serde_json::from_str(&raw)
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::default()))
             } else {
                 serde_json::Value::Object(serde_json::Map::default())
             };
@@ -380,9 +447,12 @@ impl LiveCli {
         }
 
         self.audit_logger.log(
-            &AuditEvent::new(&self.session_id, AuditEventKind::UserMessage,
-                format!("model switched to {new_model}"))
-                .with_model(new_model),
+            &AuditEvent::new(
+                &self.session_id,
+                AuditEventKind::UserMessage,
+                format!("model switched to {new_model}"),
+            )
+            .with_model(new_model),
         );
         self.audit_event_count += 1;
         Ok(())
@@ -404,10 +474,11 @@ impl LiveCli {
             self.system_prompt.clone(),
         );
 
-        self.audit_logger.log(
-            &AuditEvent::new(&self.session_id, AuditEventKind::SessionCompacted,
-                format!("removed {removed} messages")),
-        );
+        self.audit_logger.log(&AuditEvent::new(
+            &self.session_id,
+            AuditEventKind::SessionCompacted,
+            format!("removed {removed} messages"),
+        ));
         self.audit_event_count += 1;
         println!("Compacted {removed} messages.");
         Ok(())
@@ -426,7 +497,8 @@ impl LiveCli {
 /// Find the most recent saved session file for auto-resume.
 pub(crate) fn last_session_path() -> Option<PathBuf> {
     let sessions_dir = env::current_dir().ok()?.join(".tachy").join("sessions");
-    let mut entries: Vec<_> = std::fs::read_dir(&sessions_dir).ok()?
+    let mut entries: Vec<_> = std::fs::read_dir(&sessions_dir)
+        .ok()?
         .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
         .collect();
@@ -440,7 +512,8 @@ pub(crate) fn last_session_path() -> Option<PathBuf> {
 
 pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let model = model.unwrap_or_else(|| {
-        std::env::current_dir().ok()
+        std::env::current_dir()
+            .ok()
             .map(|d| d.join(".tachy").join("config.json"))
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -486,10 +559,14 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                             project_info.language,
                             if let Some(tc) = &project_info.test_command {
                                 format!("Test command: `{tc}`\n")
-                            } else { String::new() },
+                            } else {
+                                String::new()
+                            },
                             if let Some(bc) = &project_info.build_command {
                                 format!("Build command: `{bc}`\n")
-                            } else { String::new() },
+                            } else {
+                                String::new()
+                            },
                         );
                         let _ = std::fs::write(&tachy_md_path, &content);
                         eprintln!("  ✓ TACHY.md refreshed (git HEAD newer than last sync)");
@@ -582,7 +659,9 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                 println!("  /model [name]     Show current model / switch to a different one");
                 println!("  /sessions         List saved sessions");
                 println!("  /audit            Show audit event count");
-                println!("  /fix <desc>       Fix an issue (describe it or leave blank for last error)");
+                println!(
+                    "  /fix <desc>       Fix an issue (describe it or leave blank for last error)"
+                );
                 println!("  /test             Run the project test suite and report failures");
                 println!("  /review           Review staged git changes");
                 println!("  /commit           Generate a conventional commit message");
@@ -591,12 +670,10 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
             }
             "/status" => cli.print_status(),
             "/compact" => cli.compact()?,
-            "/save" => {
-                match cli.save_session() {
-                    Ok(path) => println!("Session saved to {path}"),
-                    Err(e) => eprintln!("Failed to save: {e}"),
-                }
-            }
+            "/save" => match cli.save_session() {
+                Ok(path) => println!("Session saved to {path}"),
+                Err(e) => eprintln!("Failed to save: {e}"),
+            },
             "/undo" => {
                 if let Ok(mut stack) = cli.undo_stack.lock() {
                     if let Some((path, content)) = stack.pop() {
@@ -638,9 +715,9 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                             .filter_map(std::result::Result::ok)
                             .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
                             .collect();
-                        sessions.sort_by_key(|e| std::cmp::Reverse(
-                            e.metadata().ok().and_then(|m| m.modified().ok())
-                        ));
+                        sessions.sort_by_key(|e| {
+                            std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok()))
+                        });
                         if sessions.is_empty() {
                             println!("No saved sessions.");
                         } else {
@@ -648,8 +725,12 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                             for (i, entry) in sessions.iter().take(10).enumerate() {
                                 let name = entry.file_name();
                                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                                println!("  {}. {} ({:.1} KB)", i + 1,
-                                    name.to_string_lossy(), size as f64 / 1024.0);
+                                println!(
+                                    "  {}. {} ({:.1} KB)",
+                                    i + 1,
+                                    name.to_string_lossy(),
+                                    size as f64 / 1024.0
+                                );
                             }
                             println!("\nResume with: tachy --resume <session-id>");
                         }
@@ -661,11 +742,14 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                 let desc = s[4..].trim();
                 let prompt = if desc.is_empty() {
                     "Find and fix the most obvious bug or error in this codebase. \
-                     Run the tests after fixing to verify the fix works.".to_string()
+                     Run the tests after fixing to verify the fix works."
+                        .to_string()
                 } else {
-                    format!("Fix this issue: {desc}\n\n\
+                    format!(
+                        "Fix this issue: {desc}\n\n\
                              Steps: 1) Locate the relevant code. 2) Apply the fix. \
-                             3) Run the tests to verify.")
+                             3) Run the tests to verify."
+                    )
                 };
                 cli.run_turn(&prompt)?;
             }
@@ -681,7 +765,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                      Provide: 1) A concise summary of what changed and why, \
                      2) Any potential bugs or correctness issues, \
                      3) Style and naming feedback, \
-                     4) Concrete suggestions for improvement."
+                     4) Concrete suggestions for improvement.",
                 )?;
             }
             "/commit" => {
@@ -691,7 +775,7 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                      Format: type(scope): short description\n\
                      Types: feat/fix/docs/style/refactor/test/chore\n\
                      Keep the subject line under 72 characters. \
-                     Add a body if needed to explain motivation or breaking changes."
+                     Add a body if needed to explain motivation or breaking changes.",
                 )?;
             }
             s if s.starts_with("/explain") => {
@@ -699,10 +783,13 @@ pub(crate) fn run_repl(model: Option<String>) -> Result<(), Box<dyn std::error::
                 let prompt = if target.is_empty() {
                     "Explain what this project does: list the main source files, \
                      describe each module's purpose in one sentence, and explain \
-                     how they connect to each other.".to_string()
+                     how they connect to each other."
+                        .to_string()
                 } else {
-                    format!("Explain `{target}` in plain English — its purpose, \
-                             key functions/types, and how it fits into the broader codebase.")
+                    format!(
+                        "Explain `{target}` in plain English — its purpose, \
+                             key functions/types, and how it fits into the broader codebase."
+                    )
                 };
                 cli.run_turn(&prompt)?;
             }
@@ -736,7 +823,9 @@ impl CliToolExecutor {
         }
     }
 
-    pub(crate) fn with_undo_stack(undo_stack: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>) -> Self {
+    pub(crate) fn with_undo_stack(
+        undo_stack: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> Self {
         Self { undo_stack }
     }
 }
@@ -762,9 +851,18 @@ impl ToolExecutor for CliToolExecutor {
                 preview_write_file(path, content).ok()
             } else {
                 let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                let old_str = value.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-                let new_str = value.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-                let replace_all = value.get("replace_all").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                let old_str = value
+                    .get("old_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let new_str = value
+                    .get("new_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let replace_all = value
+                    .get("replace_all")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 preview_edit_file(path, old_str, new_str, replace_all).ok()
             };
 
@@ -812,7 +910,10 @@ impl ToolExecutor for CliToolExecutor {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
                         if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
                             let lines = content.lines().count();
-                            let path = parsed.get("filePath").and_then(|v| v.as_str()).unwrap_or("?");
+                            let path = parsed
+                                .get("filePath")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
                             let _ = execute!(
                                 stdout,
                                 SetForegroundColor(Color::DarkGrey),
@@ -851,8 +952,7 @@ pub(crate) fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::E
 }
 
 pub(crate) fn permission_policy_from_env() -> PermissionPolicy {
-    let mode = env::var("TACHY_PERMISSION_MODE")
-        .unwrap_or_else(|_| "workspace-write".to_string());
+    let mode = env::var("TACHY_PERMISSION_MODE").unwrap_or_else(|_| "workspace-write".to_string());
     match mode.as_str() {
         "read-only" => PermissionPolicy::new(PermissionMode::Deny)
             .with_tool_mode("read_file", PermissionMode::Allow)
@@ -873,23 +973,28 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 
 fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
-        "bash" => input.get("command")
+        "bash" => input
+            .get("command")
             .and_then(|v| v.as_str())
             .map(|c| format!("`{}`", truncate(c, 80)))
             .unwrap_or_default(),
-        "read_file" | "write_file" | "edit_file" => input.get("path")
+        "read_file" | "write_file" | "edit_file" => input
+            .get("path")
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string)
             .unwrap_or_default(),
-        "grep_search" => input.get("pattern")
+        "grep_search" => input
+            .get("pattern")
             .and_then(|v| v.as_str())
             .map(|p| format!("/{p}/"))
             .unwrap_or_default(),
-        "glob_search" => input.get("pattern")
+        "glob_search" => input
+            .get("pattern")
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string)
             .unwrap_or_default(),
-        "list_directory" => input.get("path")
+        "list_directory" => input
+            .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(".")
             .to_string(),
@@ -908,11 +1013,13 @@ fn summarize_tool_params(tool_name: &str, input_json: &str) -> String {
     };
 
     match tool_name {
-        "bash" => obj.get("command")
+        "bash" => obj
+            .get("command")
             .and_then(|v| v.as_str())
             .map(|s| truncate(s, 80))
             .unwrap_or_default(),
-        "read_file" | "write_file" | "list_directory" => obj.get("path")
+        "read_file" | "write_file" | "list_directory" => obj
+            .get("path")
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| ".".to_string()),
@@ -922,19 +1029,20 @@ fn summarize_tool_params(tool_name: &str, input_json: &str) -> String {
             let preview = old.lines().next().unwrap_or("");
             format!("{path}: {}", truncate(preview, 50))
         }
-        "grep_search" => obj.get("pattern")
+        "grep_search" => obj
+            .get("pattern")
             .and_then(|v| v.as_str())
             .map(|s| format!("/{s}/"))
             .unwrap_or_default(),
-        "glob_search" => obj.get("pattern")
+        "glob_search" => obj
+            .get("pattern")
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string)
             .unwrap_or_default(),
-        _ => {
-            obj.values()
-                .find_map(|v| v.as_str())
-                .map(|s| truncate(s, 60))
-                .unwrap_or_default()
-        }
+        _ => obj
+            .values()
+            .find_map(|v| v.as_str())
+            .map(|s| truncate(s, 60))
+            .unwrap_or_default(),
     }
 }

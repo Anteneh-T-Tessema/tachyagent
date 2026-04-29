@@ -28,9 +28,13 @@ pub struct GovernanceViolation {
 impl GovernanceViolation {
     #[must_use]
     pub fn to_audit_event(&self, session_id: &str) -> AuditEvent {
-        AuditEvent::new(session_id, AuditEventKind::GovernanceViolation, &self.detail)
-            .with_severity(self.severity)
-            .with_tool(&self.tool_name)
+        AuditEvent::new(
+            session_id,
+            AuditEventKind::GovernanceViolation,
+            &self.detail,
+        )
+        .with_severity(self.severity)
+        .with_tool(&self.tool_name)
     }
 }
 
@@ -119,27 +123,29 @@ impl GovernancePolicy {
                 return Some(GovernanceViolation {
                     rule_name: "max_total_tool_invocations".to_string(),
                     tool_name: tool_name.to_string(),
-                    detail: format!(
-                        "session exceeded maximum of {max} total tool invocations"
-                    ),
+                    detail: format!("session exceeded maximum of {max} total tool invocations"),
                     severity: AuditSeverity::Critical,
                 });
             }
         }
 
         // Destructive shell check
-        if self.block_destructive_shell && tool_name == "bash"
-            && (input.contains("rm -rf /") || input.contains("rm -rf ~")) {
-                return Some(GovernanceViolation {
-                    rule_name: "block_destructive_shell".to_string(),
-                    tool_name: tool_name.to_string(),
-                    detail: "destructive shell command blocked by governance policy".to_string(),
-                    severity: AuditSeverity::Critical,
-                });
-            }
+        if self.block_destructive_shell
+            && tool_name == "bash"
+            && (input.contains("rm -rf /") || input.contains("rm -rf ~"))
+        {
+            return Some(GovernanceViolation {
+                rule_name: "block_destructive_shell".to_string(),
+                tool_name: tool_name.to_string(),
+                detail: "destructive shell command blocked by governance policy".to_string(),
+                severity: AuditSeverity::Critical,
+            });
+        }
 
         // Protected paths check for write operations
-        if (tool_name == "write_file" || tool_name == "edit_file") && !self.protected_paths.is_empty() {
+        if (tool_name == "write_file" || tool_name == "edit_file")
+            && !self.protected_paths.is_empty()
+        {
             for pattern in &self.protected_paths {
                 if input.contains(pattern.trim_matches('*')) {
                     return Some(GovernanceViolation {
@@ -173,9 +179,7 @@ impl GovernancePolicy {
                         return Some(GovernanceViolation {
                             rule_name: "blocked_pattern".to_string(),
                             tool_name: tool_name.to_string(),
-                            detail: format!(
-                                "tool input matched blocked pattern '{pattern}'"
-                            ),
+                            detail: format!("tool input matched blocked pattern '{pattern}'"),
                             severity: AuditSeverity::Critical,
                         });
                     }

@@ -6,9 +6,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use backend::BackendRegistry;
+use commands::handle_slash_command;
 use platform::PlatformWorkspace;
 use runtime::{load_system_prompt, CompactionConfig, Session};
-use commands::handle_slash_command;
 
 pub(crate) fn print_bootstrap_plan() {
     for phase in runtime::BootstrapPlan::default_plan().phases() {
@@ -79,7 +79,10 @@ pub(crate) fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     let mut report = backend::run_health_check("http://localhost:11434");
 
     if report.ollama_running {
-        println!("  ✓ Ollama running (v{})", report.ollama_version.as_deref().unwrap_or("unknown"));
+        println!(
+            "  ✓ Ollama running (v{})",
+            report.ollama_version.as_deref().unwrap_or("unknown")
+        );
         ollama_ok = true;
     } else {
         let ollama_installed = std::process::Command::new("ollama")
@@ -107,7 +110,10 @@ pub(crate) fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(std::time::Duration::from_secs(1));
             report = backend::run_health_check("http://localhost:11434");
             if report.ollama_running {
-                println!("  ✓ Ollama running (v{})", report.ollama_version.as_deref().unwrap_or("unknown"));
+                println!(
+                    "  ✓ Ollama running (v{})",
+                    report.ollama_version.as_deref().unwrap_or("unknown")
+                );
                 ollama_ok = true;
                 break;
             }
@@ -129,9 +135,13 @@ pub(crate) fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             model_name = rec;
         } else {
             let ram_gb = backend::detect_system_ram_gb_public();
-            let model_to_pull = if ram_gb >= 32 { "gemma4:26b" }
-                else if ram_gb >= 16 { "qwen3:8b" }
-                else { "gemma4:e4b" };
+            let model_to_pull = if ram_gb >= 32 {
+                "gemma4:26b"
+            } else if ram_gb >= 16 {
+                "qwen3:8b"
+            } else {
+                "gemma4:e4b"
+            };
             println!("  Detected {ram_gb} GB RAM — pulling {model_to_pull}...");
             match backend::pull_model(model_to_pull) {
                 Ok(()) => {
@@ -171,7 +181,11 @@ pub(crate) fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
     if manual_steps.is_empty() {
         println!("\n✅ Setup complete!\n");
-        let m = if model_name.is_empty() { "gemma4:26b" } else { &model_name };
+        let m = if model_name.is_empty() {
+            "gemma4:26b"
+        } else {
+            &model_name
+        };
         println!("Quick start:");
         println!("  tachy --model {m}          Interactive REPL");
         println!("  tachy serve                             Start web UI at http://localhost:7777");
@@ -200,7 +214,11 @@ pub(crate) fn install_ollama() -> Result<(), String> {
             return Ok(());
         }
         println!("    Script failed, trying direct binary download...");
-        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "amd64"
+        };
         let url = format!("https://ollama.com/download/ollama-linux-{arch}");
         let status = std::process::Command::new("sh")
             .arg("-c")
@@ -251,7 +269,9 @@ pub(crate) fn install_ollama() -> Result<(), String> {
         if !status.success() {
             return Err("macOS Ollama download failed".to_string());
         }
-        let _ = std::process::Command::new("open").arg("/Applications/Ollama.app").spawn();
+        let _ = std::process::Command::new("open")
+            .arg("/Applications/Ollama.app")
+            .spawn();
         std::thread::sleep(std::time::Duration::from_secs(3));
         Ok(())
     } else if cfg!(target_os = "windows") {
@@ -321,7 +341,11 @@ pub(crate) fn start_ollama() -> Result<(), String> {
         }
     }
 
-    let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
+    let shell = if cfg!(target_os = "windows") {
+        "cmd"
+    } else {
+        "sh"
+    };
     let args: Vec<&str> = if cfg!(target_os = "windows") {
         vec!["/C", "start /B ollama serve"]
     } else {
@@ -348,7 +372,10 @@ pub(crate) fn init_workspace() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Sessions: {}", ws.sessions_dir().display());
     println!("  Default model: {}", ws.config.default_model);
     println!("  Agent templates: {}", ws.config.agent_templates.len());
-    println!("  Governance: destructive shell blocked={}", ws.config.governance.block_destructive_shell);
+    println!(
+        "  Governance: destructive shell blocked={}",
+        ws.config.governance.block_destructive_shell
+    );
 
     let tachy_md_path = cwd.join("TACHY.md");
     if !tachy_md_path.exists() {
@@ -366,13 +393,20 @@ pub(crate) fn init_workspace() -> Result<(), Box<dyn std::error::Error>> {
                 project_info.language,
                 if let Some(tc) = &project_info.test_command {
                     format!("Test command: `{tc}`\n")
-                } else { String::new() },
+                } else {
+                    String::new()
+                },
                 if let Some(bc) = &project_info.build_command {
                     format!("Build command: `{bc}`\n")
-                } else { String::new() },
+                } else {
+                    String::new()
+                },
             );
             std::fs::write(&tachy_md_path, &content)?;
-            println!("  ✓ Created TACHY.md ({} project detected)", project_info.language);
+            println!(
+                "  ✓ Created TACHY.md ({} project detected)",
+                project_info.language
+            );
             if let Some(tc) = &project_info.test_command {
                 println!("    Test command: {tc}");
             }
@@ -397,14 +431,19 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<ProjectInfo> {
         });
     }
     if cwd.join("package.json").exists() {
-        let test_cmd = if cwd.join("vitest.config.ts").exists() || cwd.join("vitest.config.js").exists() {
-            Some("npx vitest --run".to_string())
-        } else if cwd.join("jest.config.js").exists() || cwd.join("jest.config.ts").exists() {
-            Some("npx jest".to_string())
+        let test_cmd =
+            if cwd.join("vitest.config.ts").exists() || cwd.join("vitest.config.js").exists() {
+                Some("npx vitest --run".to_string())
+            } else if cwd.join("jest.config.js").exists() || cwd.join("jest.config.ts").exists() {
+                Some("npx jest".to_string())
+            } else {
+                Some("npm test".to_string())
+            };
+        let lang = if cwd.join("tsconfig.json").exists() {
+            "TypeScript"
         } else {
-            Some("npm test".to_string())
+            "JavaScript"
         };
-        let lang = if cwd.join("tsconfig.json").exists() { "TypeScript" } else { "JavaScript" };
         return Some(ProjectInfo {
             language: lang.to_string(),
             test_command: test_cmd,
@@ -467,12 +506,15 @@ pub(crate) fn warmup_model(model: &str) -> Result<(), Box<dyn std::error::Error>
 
     let start = std::time::Instant::now();
     let registry = BackendRegistry::with_defaults();
-    let mut client = registry.create_client(model, false)
-        .or_else(|_| {
-            backend::OllamaBackend::new(model.to_string(), "http://localhost:11434".to_string(), false)
-                .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
-                .map_err(|e| runtime::RuntimeError::new(e.to_string()))
-        })?;
+    let mut client = registry.create_client(model, false).or_else(|_| {
+        backend::OllamaBackend::new(
+            model.to_string(),
+            "http://localhost:11434".to_string(),
+            false,
+        )
+        .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
+        .map_err(|e| runtime::RuntimeError::new(e.to_string()))
+    })?;
 
     let request = runtime::ApiRequest {
         system_prompt: vec!["You are helpful.".to_string()],

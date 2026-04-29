@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for the plan executor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct PlanConfig {
     pub max_steps: usize,
     pub max_revisions: usize,
@@ -77,10 +78,24 @@ pub struct BlueprintAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlanStatus { Created, InProgress, Completed, Failed, Revised, ResumeReady, SafePlanReady }
+pub enum PlanStatus {
+    Created,
+    InProgress,
+    Completed,
+    Failed,
+    Revised,
+    ResumeReady,
+    SafePlanReady,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StepStatus { Pending, Running, Completed, Failed, Skipped }
+pub enum StepStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Skipped,
+}
 
 /// Result of executing a full plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,7 +141,8 @@ pub struct PlanExecutor;
 
 impl PlanExecutor {
     /// Build the planning prompt for the LLM.
-    #[must_use] pub fn build_planning_prompt(user_prompt: &str, codebase_summary: Option<&str>) -> String {
+    #[must_use]
+    pub fn build_planning_prompt(user_prompt: &str, codebase_summary: Option<&str>) -> String {
         let context = codebase_summary.unwrap_or("No codebase index available.");
         format!(
             "You are a planning agent. Given the user's task, create a numbered plan.\n\
@@ -150,14 +166,13 @@ impl PlanExecutor {
         let json_start = response.find('{').ok_or_else(|| {
             PlanError::PlanGeneration("no JSON object found in response".to_string())
         })?;
-        let json_end = response.rfind('}').ok_or_else(|| {
-            PlanError::PlanGeneration("no closing brace found".to_string())
-        })?;
+        let json_end = response
+            .rfind('}')
+            .ok_or_else(|| PlanError::PlanGeneration("no closing brace found".to_string()))?;
 
         let json_str = &response[json_start..=json_end];
-        let parsed: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-            PlanError::PlanGeneration(format!("invalid JSON: {e}"))
-        })?;
+        let parsed: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| PlanError::PlanGeneration(format!("invalid JSON: {e}")))?;
 
         let steps_array = parsed
             .get("steps")
@@ -168,32 +183,58 @@ impl PlanExecutor {
             .iter()
             .enumerate()
             .map(|(i, step)| PlanStep {
-                number: step.get("number").and_then(serde_json::Value::as_u64).unwrap_or(i as u64 + 1) as usize,
-                description: step.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                instruction: step.get("instruction").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                number: step
+                    .get("number")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(i as u64 + 1) as usize,
+                description: step
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                instruction: step
+                    .get("instruction")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 expected_files: step
                     .get("expected_files")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 status: StepStatus::Pending,
                 result: None,
                 actions: None,
-                worker_node_id: step.get("worker_node_id").and_then(|v| v.as_str()).map(String::from),
-                visual_baseline: step.get("visual_baseline").and_then(|v| v.as_str()).map(String::from),
+                worker_node_id: step
+                    .get("worker_node_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                visual_baseline: step
+                    .get("visual_baseline")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 url: step.get("url").and_then(|v| v.as_str()).map(String::from),
             })
             .filter(|s| !s.instruction.is_empty())
             .collect();
 
         if steps.is_empty() {
-            return Err(PlanError::PlanGeneration("no valid steps in plan".to_string()));
+            return Err(PlanError::PlanGeneration(
+                "no valid steps in plan".to_string(),
+            ));
         }
 
-        let id = format!("plan-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let id = format!(
+            "plan-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         Ok(Plan {
             id,
@@ -205,7 +246,8 @@ impl PlanExecutor {
     }
 
     /// Build the prompt to translate a plan step into a concrete Blueprint (Tool List).
-    #[must_use] pub fn build_blueprinting_prompt(step: &PlanStep, available_tools: &str) -> String {
+    #[must_use]
+    pub fn build_blueprinting_prompt(step: &PlanStep, available_tools: &str) -> String {
         format!(
             "You are a Senior Engineer (The Architect). Your task is to translate a high-level plan step into a deterministic 'Blueprint' (a list of specific tool calls).\n\n\
              Plan Step to Blueprint:\n\
@@ -234,21 +276,33 @@ impl PlanExecutor {
         })?;
 
         let json_str = &response[json_start..=json_end];
-        let parsed: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-            PlanError::PlanGeneration(format!("invalid Blueprint JSON: {e}"))
-        })?;
+        let parsed: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| PlanError::PlanGeneration(format!("invalid Blueprint JSON: {e}")))?;
 
         let actions_array = parsed
             .get("actions")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| PlanError::PlanGeneration("missing 'actions' array in blueprint".to_string()))?;
+            .ok_or_else(|| {
+                PlanError::PlanGeneration("missing 'actions' array in blueprint".to_string())
+            })?;
 
         let actions: Vec<BlueprintAction> = actions_array
             .iter()
             .map(|act| BlueprintAction {
-                tool_name: act.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                arguments: act.get("arguments").cloned().unwrap_or(serde_json::json!({})),
-                rationale: act.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                tool_name: act
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                arguments: act
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
+                rationale: act
+                    .get("rationale")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             })
             .collect();
 
@@ -300,7 +354,8 @@ mod tests {
 
     #[test]
     fn planning_prompt_includes_task() {
-        let prompt = PlanExecutor::build_planning_prompt("add rate limiting", Some("42 files, rust"));
+        let prompt =
+            PlanExecutor::build_planning_prompt("add rate limiting", Some("42 files, rust"));
         assert!(prompt.contains("add rate limiting"));
         assert!(prompt.contains("42 files"));
     }

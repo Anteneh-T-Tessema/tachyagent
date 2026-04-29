@@ -1,12 +1,15 @@
 //! Load tests for the parallel executor, DAG scheduler, and file locking.
 //!
 //! These tests use mock agent execution (no real Ollama) to stress-test
-//! the Orchestrator, FileLockManager, and concurrent scheduling under load.
+//! the Orchestrator, `FileLockManager`, and concurrent scheduling under load.
 //!
 //! Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6
 
+use daemon::parallel::{
+    AgentTask, Orchestrator, ParallelRun, RunStatus, TaskConditions, TaskResult, TaskRole,
+    TaskStatus,
+};
 use proptest::prelude::*;
-use daemon::parallel::{AgentTask, Orchestrator, ParallelRun, RunStatus, TaskResult, TaskRole, TaskStatus};
 use runtime::FileLockManager;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,8 +30,11 @@ fn make_task(id: &str, run_id: &str) -> AgentTask {
         created_at: 0,
         started_at: None,
         completed_at: None,
-        work_dir: None, team_id: None,
-        conditions: Default::default(), approval_required: false, approved: false,
+        work_dir: None,
+        team_id: None,
+        conditions: TaskConditions::default(),
+        approval_required: false,
+        approved: false,
     }
 }
 
@@ -39,7 +45,7 @@ fn make_dep_task(id: &str, run_id: &str, dep: &str) -> AgentTask {
     t
 }
 
-/// Helper: a successful TaskResult for completing tasks.
+/// Helper: a successful `TaskResult` for completing tasks.
 fn ok_result() -> TaskResult {
     TaskResult {
         success: true,
@@ -62,7 +68,9 @@ fn ok_result() -> TaskResult {
 #[test]
 fn load_20_independent_tasks_complete_within_timeout() {
     let run_id = "load-20";
-    let tasks: Vec<AgentTask> = (0..20).map(|i| make_task(&format!("t{i}"), run_id)).collect();
+    let tasks: Vec<AgentTask> = (0..20)
+        .map(|i| make_task(&format!("t{i}"), run_id))
+        .collect();
 
     let run = ParallelRun {
         id: run_id.into(),
@@ -93,21 +101,18 @@ fn load_20_independent_tasks_complete_within_timeout() {
             o.next_task()
         };
 
-        match task {
-            Some(t) => {
-                // Mock execution: just complete immediately
-                let mut o = orch.lock().unwrap();
-                o.complete_task(&t.id, ok_result());
-                completed_count += 1;
+        if let Some(t) = task {
+            // Mock execution: just complete immediately
+            let mut o = orch.lock().unwrap();
+            o.complete_task(&t.id, ok_result());
+            completed_count += 1;
+        } else {
+            let o = orch.lock().unwrap();
+            if o.pending_count() == 0 && o.active_count() == 0 {
+                break;
             }
-            None => {
-                let o = orch.lock().unwrap();
-                if o.pending_count() == 0 && o.active_count() == 0 {
-                    break;
-                }
-                drop(o);
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            drop(o);
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -167,23 +172,23 @@ fn load_deep_dependency_chain_strict_order() {
 
     for _ in 0..100 {
         // safety bound
-        match orch.next_task() {
-            Some(t) => {
-                execution_order.push(t.id.clone());
-                orch.complete_task(&t.id, ok_result());
+        if let Some(t) = orch.next_task() {
+            execution_order.push(t.id.clone());
+            orch.complete_task(&t.id, ok_result());
+        } else {
+            if orch.pending_count() == 0 && orch.active_count() == 0 {
+                break;
             }
-            None => {
-                if orch.pending_count() == 0 && orch.active_count() == 0 {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 
     // Verify strict sequential order
     let expected: Vec<String> = (0..10).map(|i| format!("chain-{i}")).collect();
-    assert_eq!(execution_order, expected, "tasks must execute in strict dependency order");
+    assert_eq!(
+        execution_order, expected,
+        "tasks must execute in strict dependency order"
+    );
 
     let run = orch.get_run(run_id).unwrap();
     assert_eq!(run.status, RunStatus::Completed);
@@ -205,7 +210,9 @@ fn load_concurrent_file_lock_mutual_exclusion() {
     // If we ever see two different agents holding the same file, that's a violation.
     let violations = Arc::new(Mutex::new(Vec::<String>::new()));
     // Track current holders: file -> agent_id
-    let holders = Arc::new(Mutex::new(std::collections::HashMap::<String, String>::new()));
+    let holders = Arc::new(Mutex::new(
+        std::collections::HashMap::<String, String>::new(),
+    ));
 
     let mut handles = Vec::new();
 
@@ -213,8 +220,6 @@ fn load_concurrent_file_lock_mutual_exclusion() {
         let mgr = mgr.clone();
         let violations = Arc::clone(&violations);
         let holders = Arc::clone(&holders);
-        let files = files.clone();
-
         let handle = std::thread::spawn(move || {
             let agent_id = format!("agent-{thread_idx}");
 
@@ -271,7 +276,9 @@ fn load_concurrent_file_lock_mutual_exclusion() {
 #[test]
 fn load_throughput_100_tasks() {
     let run_id = "load-throughput";
-    let tasks: Vec<AgentTask> = (0..100).map(|i| make_task(&format!("tp-{i}"), run_id)).collect();
+    let tasks: Vec<AgentTask> = (0..100)
+        .map(|i| make_task(&format!("tp-{i}"), run_id))
+        .collect();
 
     let run = ParallelRun {
         id: run_id.into(),
@@ -329,12 +336,12 @@ fn load_throughput_100_tasks() {
     let p95_complete = complete_task_latencies[94];
 
     eprintln!("=== Load Test: Throughput (100 tasks) ===");
-    eprintln!("  Total elapsed:       {:?}", overall_elapsed);
-    eprintln!("  Tasks/sec:           {:.1}", tasks_per_sec);
-    eprintln!("  next_task  p50:      {:?}", p50_next);
-    eprintln!("  next_task  p95:      {:?}", p95_next);
-    eprintln!("  complete_task p50:   {:?}", p50_complete);
-    eprintln!("  complete_task p95:   {:?}", p95_complete);
+    eprintln!("  Total elapsed:       {overall_elapsed:?}");
+    eprintln!("  Tasks/sec:           {tasks_per_sec:.1}");
+    eprintln!("  next_task  p50:      {p50_next:?}");
+    eprintln!("  next_task  p95:      {p95_next:?}");
+    eprintln!("  complete_task p50:   {p50_complete:?}");
+    eprintln!("  complete_task p95:   {p95_complete:?}");
 
     assert_eq!(task_ids.len(), 100, "should pull all 100 tasks");
 
@@ -344,8 +351,7 @@ fn load_throughput_100_tasks() {
     // Sanity: throughput should be at least 100 tasks/sec for in-memory operations
     assert!(
         tasks_per_sec > 100.0,
-        "throughput too low: {:.1} tasks/sec",
-        tasks_per_sec
+        "throughput too low: {tasks_per_sec:.1} tasks/sec"
     );
 }
 
@@ -432,8 +438,7 @@ fn load_file_lock_ttl_expiry() {
     // All agents released their locks, so should be empty
     assert!(
         final_locks.is_empty(),
-        "all locks should be released, got {:?}",
-        final_locks
+        "all locks should be released, got {final_locks:?}"
     );
 }
 
@@ -484,11 +489,7 @@ fn load_release_all_selective_under_concurrency() {
 
     // Verify the remaining locks belong to the correct agents
     for (file, agent) in &remaining {
-        let agent_num: u32 = agent
-            .strip_prefix("sel-agent-")
-            .unwrap()
-            .parse()
-            .unwrap();
+        let agent_num: u32 = agent.strip_prefix("sel-agent-").unwrap().parse().unwrap();
         assert!(
             agent_num % 2 == 1,
             "only odd-numbered agents should remain, found {agent} holding {file}"
@@ -561,15 +562,12 @@ proptest! {
 
         let mut execution_order = Vec::new();
         for _ in 0..n * 10 {
-            match orch.next_task() {
-                Some(t) => {
-                    execution_order.push(t.id.clone());
-                    orch.complete_task(&t.id, ok_result());
-                }
-                None => {
-                    if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
-                    std::thread::sleep(Duration::from_millis(1));
-                }
+            if let Some(t) = orch.next_task() {
+                execution_order.push(t.id.clone());
+                orch.complete_task(&t.id, ok_result());
+            } else {
+                if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
 
@@ -604,15 +602,12 @@ proptest! {
 
         let mut completed = 0;
         for _ in 0..n * 10 {
-            match orch.next_task() {
-                Some(t) => {
-                    orch.complete_task(&t.id, ok_result());
-                    completed += 1;
-                }
-                None => {
-                    if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
-                    std::thread::sleep(Duration::from_millis(1));
-                }
+            if let Some(t) = orch.next_task() {
+                orch.complete_task(&t.id, ok_result());
+                completed += 1;
+            } else {
+                if orch.pending_count() == 0 && orch.active_count() == 0 { break; }
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
 

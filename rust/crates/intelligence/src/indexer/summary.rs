@@ -138,7 +138,11 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                         break;
                     }
                 } else if t.starts_with("\"\"\"") || t.starts_with("'''") {
-                    delimiter = if t.starts_with("\"\"\"") { "\"\"\"" } else { "'''" };
+                    delimiter = if t.starts_with("\"\"\"") {
+                        "\"\"\""
+                    } else {
+                        "'''"
+                    };
                     let rest = t.trim_start_matches(delimiter);
                     // Single-line docstring
                     if let Some(end) = rest.find(delimiter) {
@@ -152,14 +156,21 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                         doc_lines.push(rest.trim());
                     }
                     in_doc = true;
-                } else if t.starts_with('#') || t.is_empty()
-                    || t.starts_with("import ") || t.starts_with("from ") {
+                } else if t.starts_with('#')
+                    || t.is_empty()
+                    || t.starts_with("import ")
+                    || t.starts_with("from ")
+                {
                     // skip imports/comments
                 } else {
                     break; // hit code, no module docstring
                 }
             }
-            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+            if doc_lines.is_empty() {
+                None
+            } else {
+                Some(doc_lines.join(" "))
+            }
         }
         "typescript" | "javascript" => {
             // /** ... */ JSDoc at top of file
@@ -169,8 +180,12 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                 let t = line.trim();
                 if in_block {
                     if t.contains("*/") {
-                        let before = t.split("*/").next().unwrap_or("")
-                            .trim_start_matches('*').trim();
+                        let before = t
+                            .split("*/")
+                            .next()
+                            .unwrap_or("")
+                            .trim_start_matches('*')
+                            .trim();
                         if !before.is_empty() {
                             doc_lines.push(before.to_string());
                         }
@@ -201,7 +216,11 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                     break;
                 }
             }
-            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+            if doc_lines.is_empty() {
+                None
+            } else {
+                Some(doc_lines.join(" "))
+            }
         }
         "go" => {
             // Package comment: lines starting with // before `package`
@@ -220,7 +239,11 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
                     doc_lines.clear(); // reset on non-comment before package
                 }
             }
-            if doc_lines.is_empty() { None } else { Some(doc_lines.join(" ")) }
+            if doc_lines.is_empty() {
+                None
+            } else {
+                Some(doc_lines.join(" "))
+            }
         }
         _ => None,
     }
@@ -230,9 +253,10 @@ fn extract_module_doc(content: &str, language: &str) -> Option<String> {
 /// "audit/src/security.rs" → "audit security"
 /// "daemon/src/http.rs"    → "daemon http"
 fn path_to_module_hint(path: &str) -> String {
-    let without_ext = path.rsplit('.').nth(1).map_or(path, |_| {
-        path.rsplit_once('.').map_or(path, |(l, _)| l)
-    });
+    let without_ext = path
+        .rsplit('.')
+        .nth(1)
+        .map_or(path, |_| path.rsplit_once('.').map_or(path, |(l, _)| l));
     let parts: Vec<&str> = without_ext
         .split('/')
         .filter(|p| !matches!(*p, "src" | "lib" | "mod" | "index" | "main" | "." | ".."))
@@ -246,7 +270,8 @@ fn truncate_summary(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         // find a char boundary
-        let boundary = s.char_indices()
+        let boundary = s
+            .char_indices()
             .map(|(i, _)| i)
             .take_while(|&i| i < max.saturating_sub(1))
             .last()
@@ -256,9 +281,18 @@ fn truncate_summary(s: &str, max: usize) -> String {
 }
 
 pub(crate) fn extract_rust_export(line: &str) -> Option<String> {
-    for prefix in ["pub fn ", "pub struct ", "pub enum ", "pub trait ", "pub type ", "pub mod "] {
+    for prefix in [
+        "pub fn ",
+        "pub struct ",
+        "pub enum ",
+        "pub trait ",
+        "pub type ",
+        "pub mod ",
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
-            let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+            let name = rest
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .next()?;
             if !name.is_empty() {
                 return Some(name.to_string());
             }
@@ -271,7 +305,9 @@ pub(crate) fn extract_python_export(line: &str) -> Option<String> {
     if !line.starts_with(' ') && !line.starts_with('\t') {
         for prefix in ["def ", "class "] {
             if let Some(rest) = line.strip_prefix(prefix) {
-                let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+                let name = rest
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()?;
                 if !name.is_empty() {
                     return Some(name.to_string());
                 }
@@ -292,7 +328,9 @@ pub(crate) fn extract_ts_export(line: &str) -> Option<String> {
         "export default class ",
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
-            let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+            let name = rest
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .next()?;
             if !name.is_empty() {
                 return Some(name.to_string());
             }
@@ -309,7 +347,9 @@ pub(crate) fn extract_go_export(line: &str) -> Option<String> {
         } else {
             rest
         };
-        let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+        let name = rest
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .next()?;
         if !name.is_empty() && name.chars().next()?.is_uppercase() {
             return Some(name.to_string());
         }

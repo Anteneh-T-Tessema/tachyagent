@@ -1,7 +1,7 @@
 //! `tachy doctor` — system health check, GPU stats, and model benchmark.
 
-use std::io::{self, Write};
 use std::env;
+use std::io::{self, Write};
 
 use backend::BackendRegistry;
 
@@ -17,7 +17,9 @@ pub(crate) fn run_doctor(json: bool) {
         .and_then(|o| {
             let stdout = String::from_utf8_lossy(&o.stdout);
             stdout.lines().nth(1).and_then(|line| {
-                line.split_whitespace().nth(3).and_then(|kb| kb.parse::<u64>().ok())
+                line.split_whitespace()
+                    .nth(3)
+                    .and_then(|kb| kb.parse::<u64>().ok())
             })
         })
         .map(|kb| kb / 1_048_576); // KB → GB
@@ -57,27 +59,27 @@ pub(crate) fn run_doctor(json: bool) {
 
     if report.ollama_running && !report.local_models.is_empty() {
         println!();
-        let test_model = report.recommended_model.as_deref()
+        let test_model = report
+            .recommended_model
+            .as_deref()
             .unwrap_or(&report.local_models[0].name);
         print!("  Testing {test_model} with tool call... ");
         io::stdout().flush().ok();
 
         let registry = BackendRegistry::with_defaults();
-        let client_result = registry.create_client(test_model, true)
-            .or_else(|_| {
-                backend::OllamaBackend::new(
-                    test_model.to_string(),
-                    base_url.to_string(),
-                    true,
-                )
+        let client_result = registry.create_client(test_model, true).or_else(|_| {
+            backend::OllamaBackend::new(test_model.to_string(), base_url.to_string(), true)
                 .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
                 .map_err(|e| runtime::RuntimeError::new(e.to_string()))
-            });
+        });
 
         match client_result {
             Ok(mut client) => {
                 let request = runtime::ApiRequest {
-                    system_prompt: vec!["You are a helpful assistant. Use the bash tool to run: echo tachy-ok".to_string()],
+                    system_prompt: vec![
+                        "You are a helpful assistant. Use the bash tool to run: echo tachy-ok"
+                            .to_string(),
+                    ],
                     messages: vec![runtime::ConversationMessage::user_text("Run echo tachy-ok")],
                     format: runtime::ResponseFormat::default(),
                 };
@@ -85,12 +87,19 @@ pub(crate) fn run_doctor(json: bool) {
                 match client.stream(request) {
                     Ok(events) => {
                         let elapsed = start.elapsed();
-                        let has_tool = events.iter().any(|e| matches!(e, runtime::AssistantEvent::ToolUse { .. }));
-                        let has_text = events.iter().any(|e| matches!(e, runtime::AssistantEvent::TextDelta(_)));
+                        let has_tool = events
+                            .iter()
+                            .any(|e| matches!(e, runtime::AssistantEvent::ToolUse { .. }));
+                        let has_text = events
+                            .iter()
+                            .any(|e| matches!(e, runtime::AssistantEvent::TextDelta(_)));
                         if has_tool {
                             println!("✓ tool calling works ({:.1}s)", elapsed.as_secs_f64());
                         } else if has_text {
-                            println!("⚠ responded with text only, no tool call ({:.1}s)", elapsed.as_secs_f64());
+                            println!(
+                                "⚠ responded with text only, no tool call ({:.1}s)",
+                                elapsed.as_secs_f64()
+                            );
                             println!("    This model may not support tool calling reliably.");
                         } else {
                             println!("⚠ empty response ({:.1}s)", elapsed.as_secs_f64());
@@ -103,12 +112,11 @@ pub(crate) fn run_doctor(json: bool) {
         }
 
         let registry2 = BackendRegistry::with_defaults();
-        let client2 = registry2.create_client(test_model, true)
-            .or_else(|_| {
-                backend::OllamaBackend::new(test_model.to_string(), base_url.to_string(), true)
-                    .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
-                    .map_err(|e| runtime::RuntimeError::new(e.to_string()))
-            });
+        let client2 = registry2.create_client(test_model, true).or_else(|_| {
+            backend::OllamaBackend::new(test_model.to_string(), base_url.to_string(), true)
+                .map(|b| Box::new(b) as Box<dyn runtime::ApiClient>)
+                .map_err(|e| runtime::RuntimeError::new(e.to_string()))
+        });
         if let Ok(mut client2) = client2 {
             print!("  Benchmarking {test_model} throughput... ");
             io::stdout().flush().ok();
@@ -123,8 +131,15 @@ pub(crate) fn run_doctor(json: bool) {
             match client2.stream(bench_req) {
                 Ok(events) => {
                     let elapsed = t0.elapsed().as_secs_f64();
-                    let total_chars: usize = events.iter()
-                        .filter_map(|e| if let runtime::AssistantEvent::TextDelta(s) = e { Some(s.len()) } else { None })
+                    let total_chars: usize = events
+                        .iter()
+                        .filter_map(|e| {
+                            if let runtime::AssistantEvent::TextDelta(s) = e {
+                                Some(s.len())
+                            } else {
+                                None
+                            }
+                        })
                         .sum();
                     let approx_tokens = (total_chars as f64 / 4.0).max(1.0);
                     let tps = approx_tokens / elapsed.max(0.001);

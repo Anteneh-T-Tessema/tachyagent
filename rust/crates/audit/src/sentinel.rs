@@ -1,7 +1,6 @@
 //! Compliance Sentinel — real-time policy enforcement for sovereign security.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ViolationAction {
@@ -31,6 +30,7 @@ pub struct ComplianceSentinel {
 }
 
 impl ComplianceSentinel {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             rules: vec![
@@ -60,6 +60,7 @@ impl ComplianceSentinel {
     }
 
     /// Scan tool inputs/outputs for security violations.
+    #[must_use]
     pub fn scan(&self, content: &str) -> Option<SecurityViolation> {
         for rule in &self.rules {
             if let Ok(re) = regex::Regex::new(&rule.pattern) {

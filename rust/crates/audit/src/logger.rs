@@ -69,7 +69,10 @@ impl MemoryAuditSink {
 
     #[must_use]
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -119,7 +122,8 @@ impl AuditLogger {
     }
 
     /// Create a logger that continues the hash chain from an existing audit file.
-    #[must_use] pub fn resume_from_file(path: &Path) -> Self {
+    #[must_use]
+    pub fn resume_from_file(path: &Path) -> Self {
         let logger = Self::new();
         if let Ok(content) = std::fs::read_to_string(path) {
             let mut max_seq = 0u64;
@@ -148,9 +152,19 @@ impl AuditLogger {
     }
 
     /// Log an event with both hash chain signing and an asymmetric signature.
-    pub fn log_signed(&self, event: &AuditEvent, signer: Option<&dyn crate::event::AsymmetricSigner>) {
-        let mut seq = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut last = self.last_hash.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub fn log_signed(
+        &self,
+        event: &AuditEvent,
+        signer: Option<&dyn crate::event::AsymmetricSigner>,
+    ) {
+        let mut seq = self
+            .sequence
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = self
+            .last_hash
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         *seq += 1;
         let mut signed = event.clone();
@@ -166,7 +180,10 @@ impl AuditLogger {
 
         // Redact registered secrets from the detail field before persisting.
         {
-            let masks = self.masked_secrets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let masks = self
+                .masked_secrets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for secret in masks.iter() {
                 if signed.detail.contains(secret.as_str()) {
                     signed.detail = signed.detail.replace(secret.as_str(), "[REDACTED]");
@@ -199,13 +216,19 @@ impl AuditLogger {
     /// Get the current sequence number.
     #[must_use]
     pub fn sequence(&self) -> u64 {
-        *self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        *self
+            .sequence
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Get the last hash in the chain.
     #[must_use]
     pub fn last_hash(&self) -> String {
-        self.last_hash.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.last_hash
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -220,9 +243,9 @@ impl Default for AuditLogger {
 /// Batching HTTP sink — POSTs audit events as JSON to any compatible endpoint.
 ///
 /// # Compatible targets
-/// - **PostgREST** → PostgreSQL: `http://localhost:3000/audit_events`
+/// - **`PostgREST`** → `PostgreSQL`: `http://localhost:3000/audit_events`
 /// - **Splunk HEC**: `https://splunk.corp/services/collector/event`
-/// - **Elastic / OpenSearch**: `https://elastic.corp/audit/_doc`
+/// - **Elastic / `OpenSearch`**: `https://elastic.corp/audit/_doc`
 /// - **Datadog Logs API**: `https://http-intake.logs.datadoghq.com/api/v2/logs`
 /// - Any REST endpoint that accepts `{"events": [...]}` or `[...]`
 ///
@@ -263,6 +286,7 @@ impl HttpAuditSink {
     }
 
     /// Add a custom header sent with every batch request.
+    #[must_use]
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra_headers.push((name.into(), value.into()));
         self
@@ -273,7 +297,9 @@ impl HttpAuditSink {
             return Ok(());
         }
         let body = serde_json::json!({ "events": events });
-        let mut req = self.client.post(&self.endpoint)
+        let mut req = self
+            .client
+            .post(&self.endpoint)
             .header("Content-Type", "application/json");
         if let Some(token) = &self.bearer_token {
             req = req.header("Authorization", format!("Bearer {token}"));
@@ -281,7 +307,9 @@ impl HttpAuditSink {
         for (k, v) in &self.extra_headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let resp = req.json(&body).send()
+        let resp = req
+            .json(&body)
+            .send()
             .map_err(|e| format!("http audit send failed: {e}"))?;
         if resp.status().is_success() {
             Ok(())
@@ -335,8 +363,8 @@ impl AuditSink for HttpAuditSink {
 ///
 /// # Compatible targets
 /// - **AWS S3** (standard)
-/// - **MinIO** (on-prem sovereign storage)
-/// - **Cloudflare R2** / **Backblaze B2** / **DigitalOcean Spaces**
+/// - **`MinIO`** (on-prem sovereign storage)
+/// - **Cloudflare R2** / **Backblaze B2** / **`DigitalOcean` Spaces**
 ///
 /// Authentication uses AWS Signature Version 4 (HMAC-SHA256).
 /// No AWS SDK required — implemented with `reqwest::blocking`.
@@ -377,7 +405,8 @@ impl S3AuditSink {
         }
     }
 
-    /// Override the S3 endpoint (required for MinIO, R2, Spaces, B2).
+    /// Override the S3 endpoint (required for `MinIO`, R2, Spaces, B2).
+    #[must_use]
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint_override = Some(endpoint.into());
         self
@@ -410,9 +439,8 @@ impl S3AuditSink {
             date_time,
         );
         let signed_headers = "content-length;content-type;host;x-amz-content-sha256;x-amz-date";
-        let canonical_request = format!(
-            "PUT\n/{key}\n\n{canonical_headers}\n{signed_headers}\n{content_sha256}"
-        );
+        let canonical_request =
+            format!("PUT\n/{key}\n\n{canonical_headers}\n{signed_headers}\n{content_sha256}");
 
         // String to sign
         let scope = format!("{date_only}/{}/s3/aws4_request", self.region);
@@ -436,7 +464,8 @@ impl S3AuditSink {
             self.access_key_id, scope, signed_headers, signature
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .put(&url)
             .header("Authorization", auth)
             .header("Content-Type", "application/x-ndjson")
@@ -450,8 +479,11 @@ impl S3AuditSink {
         if resp.status().is_success() {
             Ok(())
         } else {
-            Err(format!("s3 returned {}: {}", resp.status(),
-                resp.text().unwrap_or_default()))
+            Err(format!(
+                "s3 returned {}: {}",
+                resp.status(),
+                resp.text().unwrap_or_default()
+            ))
         }
     }
 
@@ -476,9 +508,10 @@ impl S3AuditSink {
         let month = day_of_year / 30 + 1;
         let day = day_of_year % 30 + 1;
         let seq_from = events.first().map(|e| e.sequence).unwrap_or(0);
-        let seq_to   = events.last().map(|e| e.sequence).unwrap_or(0);
+        let seq_to = events.last().map(|e| e.sequence).unwrap_or(0);
         let bundle_hash = hex_encode(&sha256_bytes_public(
-            events.iter()
+            events
+                .iter()
                 .map(|e| e.hash.as_str())
                 .collect::<Vec<_>>()
                 .join("")
@@ -487,8 +520,11 @@ impl S3AuditSink {
         format!(
             "{}/{:04}/{:02}/{:02}/seq-{}-{}-{}.jsonl",
             self.prefix.trim_end_matches('/'),
-            y, month.min(12), day.min(31),
-            seq_from, seq_to,
+            y,
+            month.min(12),
+            day.min(31),
+            seq_from,
+            seq_to,
             &bundle_hash[..12],
         )
     }
@@ -516,8 +552,9 @@ impl AuditSink for S3AuditSink {
             return Ok(());
         }
         let key = self.build_key(&batch);
-        let body: Vec<u8> = batch.iter()
-            .map(|e| e.to_json_line())
+        let body: Vec<u8> = batch
+            .iter()
+            .map(super::event::AuditEvent::to_json_line)
             .collect::<Vec<_>>()
             .join("\n")
             .into_bytes();
@@ -574,7 +611,7 @@ fn format_iso8601(secs: u64) -> String {
     let hh = (s / 3600) % 24;
     let days = s / 86400;
     // Gregorian approximation (good for 1970–2099)
-    let y = (days * 400 + 365) / 146097 + 1970;
+    let y = (days * 400 + 365) / 146_097 + 1970;
     let leap = |yr: u64| yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0);
     let days_in_year = |yr: u64| if leap(yr) { 366u64 } else { 365 };
     let mut rem = days;
@@ -583,14 +620,35 @@ fn format_iso8601(secs: u64) -> String {
         rem -= days_in_year(yr);
         yr += 1;
     }
-    let month_days: [u64; 12] = [31, if leap(yr) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days: [u64; 12] = [
+        31,
+        if leap(yr) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut mo = 0usize;
     while mo < 11 && rem >= month_days[mo] {
         rem -= month_days[mo];
         mo += 1;
     }
     let _ = y; // suppress unused warning — yr is the correct year
-    format!("{:04}{:02}{:02}T{:02}{:02}{:02}Z", yr, mo + 1, rem + 1, hh, mm, ss)
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        yr,
+        mo + 1,
+        rem + 1,
+        hh,
+        mm,
+        ss
+    )
 }
 
 #[cfg(test)]
@@ -634,8 +692,10 @@ mod tests {
         // Inspect buffer length via flush — it will fail (no server) but only
         // after the buffer has been drained into the attempt.
         let err = sink.flush().unwrap_err();
-        assert!(err.contains("Connection refused") || err.contains("connect") || err.contains("error"),
-            "unexpected error: {err}");
+        assert!(
+            err.contains("Connection refused") || err.contains("connect") || err.contains("error"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -651,7 +711,10 @@ mod tests {
         // Second flush should also fail with re-queued events (not empty).
         let err = sink.flush();
         // If it returned Ok(()) the buffer was empty — that would mean events were lost.
-        assert!(err.is_err(), "events should have been re-queued after first failed flush");
+        assert!(
+            err.is_err(),
+            "events should have been re-queued after first failed flush"
+        );
     }
 
     #[test]
@@ -668,7 +731,14 @@ mod tests {
 
     #[test]
     fn s3_sink_key_format_contains_prefix_and_sequences() {
-        let sink = S3AuditSink::new("my-bucket", "tachy/audit", "us-east-1", "AKID", "SECRET", None);
+        let sink = S3AuditSink::new(
+            "my-bucket",
+            "tachy/audit",
+            "us-east-1",
+            "AKID",
+            "SECRET",
+            None,
+        );
         let mut events: Vec<AuditEvent> = Vec::new();
         for i in 0..3 {
             let mut e = AuditEvent::new("s1", AuditEventKind::ToolInvocation, format!("cmd {i}"));
@@ -677,8 +747,14 @@ mod tests {
             events.push(e);
         }
         let key = sink.build_key(&events);
-        assert!(key.starts_with("tachy/audit/"), "key should start with prefix: {key}");
-        assert!(key.contains("seq-10-12-"), "key should encode seq range: {key}");
+        assert!(
+            key.starts_with("tachy/audit/"),
+            "key should start with prefix: {key}"
+        );
+        assert!(
+            key.contains("seq-10-12-"),
+            "key should encode seq range: {key}"
+        );
         assert!(key.ends_with(".jsonl"), "key should end with .jsonl: {key}");
     }
 
@@ -687,7 +763,10 @@ mod tests {
         let sink = S3AuditSink::new("bucket", "prefix", "us-east-1", "AK", "SK", None)
             .with_endpoint("http://minio:9000");
         let url = format!("{}/some-key", sink.base_url());
-        assert!(url.starts_with("http://minio:9000/bucket/some-key"), "got: {url}");
+        assert!(
+            url.starts_with("http://minio:9000/bucket/some-key"),
+            "got: {url}"
+        );
     }
 
     #[test]

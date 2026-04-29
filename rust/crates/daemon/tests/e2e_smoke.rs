@@ -1,7 +1,7 @@
 //! End-to-end smoke test — runs a real agent against a real Ollama model.
 //! Requires Ollama running with a model pulled.
 //!
-//! Run with: cargo test -p daemon --test e2e_smoke -- --ignored --nocapture
+//! Run with: cargo test -p daemon --test `e2e_smoke` -- --ignored --nocapture
 
 use std::path::PathBuf;
 
@@ -53,7 +53,8 @@ fn agent_run_with_real_model() {
         template,
         session_id: "e2e-smoke".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(), team_id: None,
+        environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -70,14 +71,22 @@ fn agent_run_with_real_model() {
         false,
     );
 
-    eprintln!("Result: success={}, iterations={}, tools={}", result.success, result.iterations, result.tool_invocations);
-    eprintln!("Summary: {}", &result.summary[..result.summary.len().min(500)]);
+    eprintln!(
+        "Result: success={}, iterations={}, tools={}",
+        result.success, result.iterations, result.tool_invocations
+    );
+    eprintln!(
+        "Summary: {}",
+        &result.summary[..result.summary.len().min(500)]
+    );
 
     assert!(result.success, "agent should succeed");
     assert!(result.iterations > 0, "should have at least 1 iteration");
     // The agent should have read the file
-    assert!(result.summary.to_lowercase().contains("add") || result.tool_invocations > 0,
-        "agent should mention the add function or use tools");
+    assert!(
+        result.summary.to_lowercase().contains("add") || result.tool_invocations > 0,
+        "agent should mention the add function or use tools"
+    );
 
     std::fs::remove_dir_all(root).ok();
 }
@@ -94,7 +103,8 @@ fn diff_preview_with_real_write() {
     let (output, preview) = runtime::write_file(
         path.to_str().unwrap(),
         "line1\nMODIFIED\nline3\nnew_line4\n",
-    ).expect("write should succeed");
+    )
+    .expect("write should succeed");
 
     assert_eq!(output.kind, "update");
     assert!(!preview.is_new_file);
@@ -123,9 +133,11 @@ fn chat_template_reads_file_and_references_content() {
         eprintln!("Ollama not running — skipping");
         return;
     }
-    let model = match find_available_model() {
-        Some(m) => m,
-        None => { eprintln!("No model available — skipping"); return; }
+    let model = if let Some(m) = find_available_model() {
+        m
+    } else {
+        eprintln!("No model available — skipping");
+        return;
     };
 
     let content = "fn greet(name: &str) -> String {\n    format!(\"Hello, {}!\", name)\n}\n";
@@ -140,7 +152,8 @@ fn chat_template_reads_file_and_references_content() {
         template,
         session_id: "e2e-chat-read".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(), team_id: None,
+        environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -157,11 +170,17 @@ fn chat_template_reads_file_and_references_content() {
         false,
     );
 
-    eprintln!("Summary: {}", &result.summary[..result.summary.len().min(300)]);
+    eprintln!(
+        "Summary: {}",
+        &result.summary[..result.summary.len().min(300)]
+    );
     assert!(result.success, "agent should succeed");
     let lower = result.summary.to_lowercase();
     assert!(
-        lower.contains("greet") || lower.contains("hello") || lower.contains("name") || result.tool_invocations > 0,
+        lower.contains("greet")
+            || lower.contains("hello")
+            || lower.contains("name")
+            || result.tool_invocations > 0,
         "agent should reference the file content"
     );
 
@@ -179,12 +198,18 @@ fn code_reviewer_template_produces_review_summary() {
         eprintln!("Ollama not running — skipping");
         return;
     }
-    let model = match find_available_model() {
-        Some(m) => m,
-        None => { eprintln!("No model available — skipping"); return; }
+    let model = if let Some(m) = find_available_model() {
+        m
+    } else {
+        eprintln!("No model available — skipping");
+        return;
     };
 
-    std::fs::write(root.join("calc.rs"), "fn divide(a: i32, b: i32) -> i32 { a / b }\n").unwrap();
+    std::fs::write(
+        root.join("calc.rs"),
+        "fn divide(a: i32, b: i32) -> i32 { a / b }\n",
+    )
+    .unwrap();
 
     let state = daemon::DaemonState::init(root.clone()).expect("init");
     let mut template = platform::AgentTemplate::code_reviewer();
@@ -195,7 +220,8 @@ fn code_reviewer_template_produces_review_summary() {
         template,
         session_id: "e2e-review".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(), team_id: None,
+        environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -212,9 +238,15 @@ fn code_reviewer_template_produces_review_summary() {
         false,
     );
 
-    eprintln!("Review summary: {}", &result.summary[..result.summary.len().min(300)]);
+    eprintln!(
+        "Review summary: {}",
+        &result.summary[..result.summary.len().min(300)]
+    );
     assert!(result.success, "code reviewer should succeed");
-    assert!(!result.summary.trim().is_empty(), "review summary should be non-empty");
+    assert!(
+        !result.summary.trim().is_empty(),
+        "review summary should be non-empty"
+    );
 
     std::fs::remove_dir_all(root).ok();
 }
@@ -230,9 +262,11 @@ fn agent_creates_reads_and_modifies_file() {
         eprintln!("Ollama not running — skipping");
         return;
     }
-    let model = match find_available_model() {
-        Some(m) => m,
-        None => { eprintln!("No model available — skipping"); return; }
+    let model = if let Some(m) = find_available_model() {
+        m
+    } else {
+        eprintln!("No model available — skipping");
+        return;
     };
 
     let state = daemon::DaemonState::init(root.clone()).expect("init");
@@ -244,7 +278,8 @@ fn agent_creates_reads_and_modifies_file() {
         template,
         session_id: "e2e-file-ops".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(), team_id: None,
+        environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -261,7 +296,10 @@ fn agent_creates_reads_and_modifies_file() {
         false,
     );
 
-    eprintln!("File ops result: success={}, tools={}", result.success, result.tool_invocations);
+    eprintln!(
+        "File ops result: success={}, tools={}",
+        result.success, result.tool_invocations
+    );
     assert!(result.success, "agent should succeed");
     // Either the agent used tools to create the file, or acknowledged it
     assert!(
@@ -276,8 +314,8 @@ fn agent_creates_reads_and_modifies_file() {
 #[test]
 #[ignore = "requires Ollama running with a model (run with --ignored)"]
 fn parallel_execution_two_independent_tasks_complete() {
+    use daemon::parallel::{AgentTask, ParallelRun, RunStatus, TaskConditions, TaskStatus};
     use std::sync::{Arc, Mutex};
-    use daemon::parallel::{AgentTask, ParallelRun, RunStatus, TaskStatus};
 
     let root = temp_dir("parallel");
 
@@ -286,13 +324,15 @@ fn parallel_execution_two_independent_tasks_complete() {
         eprintln!("Ollama not running — skipping");
         return;
     }
-    let model = match find_available_model() {
-        Some(m) => m,
-        None => { eprintln!("No model available — skipping"); return; }
+    let model = if let Some(m) = find_available_model() {
+        m
+    } else {
+        eprintln!("No model available — skipping");
+        return;
     };
 
     let state = Arc::new(Mutex::new(
-        daemon::DaemonState::init(root.clone()).expect("init")
+        daemon::DaemonState::init(root.clone()).expect("init"),
     ));
 
     let now = std::time::SystemTime::now()
@@ -316,7 +356,9 @@ fn parallel_execution_two_independent_tasks_complete() {
         completed_at: None,
         work_dir: Some(root.clone()),
         team_id: None,
-        conditions: Default::default(), approval_required: false, approved: false,
+        conditions: TaskConditions::default(),
+        approval_required: false,
+        approved: false,
     };
 
     let run = ParallelRun {
@@ -342,13 +384,18 @@ fn parallel_execution_two_independent_tasks_complete() {
     }
 
     assert!(
-        matches!(completed_run.status, RunStatus::Completed | RunStatus::Failed),
+        matches!(
+            completed_run.status,
+            RunStatus::Completed | RunStatus::Failed
+        ),
         "run should reach terminal status"
     );
     for task in &completed_run.tasks {
         assert!(
             matches!(task.status, TaskStatus::Completed | TaskStatus::Failed),
-            "task {} should be in terminal status, got {:?}", task.id, task.status
+            "task {} should be in terminal status, got {:?}",
+            task.id,
+            task.status
         );
     }
 
@@ -366,9 +413,11 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         eprintln!("Ollama not running — skipping");
         return;
     }
-    let model = match find_available_model() {
-        Some(m) => m,
-        None => { eprintln!("No model available — skipping"); return; }
+    let model = if let Some(m) = find_available_model() {
+        m
+    } else {
+        eprintln!("No model available — skipping");
+        return;
     };
 
     // Build a logger with a MemoryAuditSink to capture events
@@ -389,7 +438,8 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         template,
         session_id: "e2e-audit".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(), team_id: None,
+        environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -407,13 +457,23 @@ fn agent_run_produces_audit_events_with_hash_chain() {
     );
 
     let events = captured.events();
-    eprintln!("Agent success={}, audit events={}", result.success, events.len());
+    eprintln!(
+        "Agent success={}, audit events={}",
+        result.success,
+        events.len()
+    );
     assert!(result.success, "agent should succeed");
-    assert!(!events.is_empty(), "at least one audit event should be produced");
+    assert!(
+        !events.is_empty(),
+        "at least one audit event should be produced"
+    );
 
     // Verify hash chain: each event must have a non-empty hash
     for event in &events {
-        assert!(!event.hash.is_empty(), "audit event hash should not be empty");
+        assert!(
+            !event.hash.is_empty(),
+            "audit event hash should not be empty"
+        );
     }
 
     std::fs::remove_dir_all(root).ok();
@@ -431,12 +491,14 @@ fn find_available_model() -> Option<String> {
     let preferences = ["gemma4:e4b", "qwen3:8b", "llama3.1:8b", "gemma4:26b"];
     for pref in &preferences {
         if stdout.contains(pref) {
-            return Some(pref.to_string());
+            return Some((*pref).to_string());
         }
     }
 
     // Fall back to first available model
-    stdout.lines().nth(1).map(|line| {
-        line.split_whitespace().next().unwrap_or("").to_string()
-    }).filter(|s| !s.is_empty())
+    stdout
+        .lines()
+        .nth(1)
+        .map(|line| line.split_whitespace().next().unwrap_or("").to_string())
+        .filter(|s| !s.is_empty())
 }

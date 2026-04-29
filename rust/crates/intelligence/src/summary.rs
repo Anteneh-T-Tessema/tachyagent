@@ -3,8 +3,8 @@
 //! Uses Flash Distillation patterns to condense long conversation histories
 //! into high-density state summaries.
 
-use serde::{Deserialize, Serialize};
 use crate::finetune::FlashCompactor;
+use serde::{Deserialize, Serialize};
 
 /// A compressed snapshot of a conversation's state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,19 +21,23 @@ pub struct SummaryManager;
 
 impl SummaryManager {
     /// Distill a list of messages into a single "State Summary".
-    /// 
-    /// This uses the FlashCompactor to extract logic and tool sequences 
+    ///
+    /// This uses the `FlashCompactor` to extract logic and tool sequences
     /// while discarding chatty overhead.
+    #[must_use]
     pub fn summarize(messages: &[serde_json::Value]) -> String {
         let mut summary = String::from("Current Session State:\n");
-        
+
         // Wrap in a dummy session for FlashCompactor
         let dummy_session = serde_json::json!({
             "success": true,
             "messages": messages
         });
 
-        if let Some(distilled) = FlashCompactor::distill_to_level(&dummy_session, crate::finetune::CompactionLevel::Logic) {
+        if let Some(distilled) = FlashCompactor::distill_to_level(
+            &dummy_session,
+            crate::finetune::CompactionLevel::Logic,
+        ) {
             summary.push_str(&distilled);
         } else {
             summary.push_str("No logic extracted yet.");
@@ -59,7 +63,7 @@ mod tests {
             json!({"role": "user", "content": "fix the bug"}),
             json!({"role": "assistant", "content": "I will search for the bug.\n```bash\ngrep -r \"bug\" .\n```"}),
         ];
-        
+
         let summary = SummaryManager::summarize(&messages);
         assert!(summary.contains("Session State"));
         assert!(summary.contains("search for the bug"));

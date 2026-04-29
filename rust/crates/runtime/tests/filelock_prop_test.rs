@@ -3,12 +3,12 @@
 //! Feature: product-hardening-v3
 //! Validates: Requirements 10.3, 10.5, 10.6
 //!
-//! Run with: cargo test -p runtime --test filelock_prop_test
+//! Run with: cargo test -p runtime --test `filelock_prop_test`
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use proptest::prelude::*;
 use runtime::FileLockManager;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Property 25: File lock mutual exclusion under contention
@@ -73,7 +73,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 /// Verify that a lock is automatically treated as expired after its TTL.
-/// We use acquire_with_wait with a short timeout to demonstrate that
+/// We use `acquire_with_wait` with a short timeout to demonstrate that
 /// after a lock has been released (simulating TTL), another agent can acquire.
 #[test]
 fn file_lock_ttl_expiry_via_release() {
@@ -92,7 +92,7 @@ fn file_lock_ttl_expiry_via_release() {
     assert!(result.is_ok(), "should succeed after lock is released");
 }
 
-/// Verify acquire_with_wait times out correctly when lock is never released.
+/// Verify `acquire_with_wait` times out correctly when lock is never released.
 #[test]
 fn file_lock_acquire_with_wait_timeout() {
     // Feature: product-hardening-v3, Property 26: File lock TTL expiry
@@ -105,7 +105,11 @@ fn file_lock_acquire_with_wait_timeout() {
 
     assert!(result.is_err(), "should time out");
     // Should have waited at least 100ms (within 300ms margin)
-    assert!(elapsed >= Duration::from_millis(100), "should have waited: {}ms", elapsed.as_millis());
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "should have waited: {}ms",
+        elapsed.as_millis()
+    );
 }
 
 proptest! {
@@ -137,7 +141,7 @@ proptest! {
 // Property 27: release_all is selective
 // ---------------------------------------------------------------------------
 
-/// release_all(agent_id) releases only that agent's locks, leaving others intact.
+/// `release_all(agent_id)` releases only that agent's locks, leaving others intact.
 #[test]
 fn release_all_selectivity_basic() {
     // Feature: product-hardening-v3, Property 27: release_all is selective
@@ -233,7 +237,9 @@ fn concurrent_mutual_exclusion() {
         }));
     }
 
-    for h in handles { h.join().unwrap(); }
+    for h in handles {
+        h.join().unwrap();
+    }
 
     // After all threads complete, no locks should remain
     assert!(mgr.list_locks().is_empty(), "all locks should be released");

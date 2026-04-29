@@ -10,14 +10,14 @@
 //! - Append new memories via the `remember` tool
 //! - The file is human-readable and version-controllable
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 const MAX_MEMORY_BYTES: usize = 8000;
 /// When the file exceeds this, pruning fires to reclaim space.
 const PRUNE_THRESHOLD_BYTES: usize = 12_000;
 /// Pruning evicts oldest entries of lowest-priority categories first.
-/// Order: Note → Pattern → ProjectContext → Decision → Preference (never evict).
+/// Order: Note → Pattern → `ProjectContext` → Decision → Preference (never evict).
 const PRUNE_ORDER: &[MemoryCategory] = &[
     MemoryCategory::Note,
     MemoryCategory::Pattern,
@@ -51,7 +51,8 @@ pub struct AgentMemory {
 
 impl AgentMemory {
     /// Load memory from `.tachy/memory.md`.
-    #[must_use] pub fn load(tachy_dir: &Path) -> Self {
+    #[must_use]
+    pub fn load(tachy_dir: &Path) -> Self {
         let path = tachy_dir.join("memory.md");
         let entries = if path.exists() {
             parse_memory_file(&path)
@@ -63,7 +64,8 @@ impl AgentMemory {
 
     /// Get memory content formatted for injection into the system prompt.
     /// Truncates to fit within token budget.
-    #[must_use] pub fn as_system_context(&self) -> Option<String> {
+    #[must_use]
+    pub fn as_system_context(&self) -> Option<String> {
         if self.entries.is_empty() {
             return None;
         }
@@ -137,16 +139,21 @@ impl AgentMemory {
             .map_err(|e| format!("failed to open memory file for rewrite: {e}"))?;
         writeln!(file, "# Agent Memory").map_err(|e| format!("write failed: {e}"))?;
         for entry in &self.entries {
-            writeln!(file, "\n## {} — {}", entry.timestamp, category_label(&entry.category))
-                .map_err(|e| format!("write failed: {e}"))?;
-            writeln!(file, "{}", entry.content)
-                .map_err(|e| format!("write failed: {e}"))?;
+            writeln!(
+                file,
+                "\n## {} — {}",
+                entry.timestamp,
+                category_label(&entry.category)
+            )
+            .map_err(|e| format!("write failed: {e}"))?;
+            writeln!(file, "{}", entry.content).map_err(|e| format!("write failed: {e}"))?;
         }
         Ok(())
     }
 
     /// Get all entries.
-    #[must_use] pub fn entries(&self) -> &[MemoryEntry] {
+    #[must_use]
+    pub fn entries(&self) -> &[MemoryEntry] {
         &self.entries
     }
 
@@ -160,10 +167,14 @@ impl AgentMemory {
             .map_err(|e| format!("failed to open memory file: {e}"))?;
 
         // Write as markdown
-        writeln!(file, "\n## {} — {}", entry.timestamp, category_label(&entry.category))
-            .map_err(|e| format!("write failed: {e}"))?;
-        writeln!(file, "{}", entry.content)
-            .map_err(|e| format!("write failed: {e}"))?;
+        writeln!(
+            file,
+            "\n## {} — {}",
+            entry.timestamp,
+            category_label(&entry.category)
+        )
+        .map_err(|e| format!("write failed: {e}"))?;
+        writeln!(file, "{}", entry.content).map_err(|e| format!("write failed: {e}"))?;
 
         Ok(())
     }
@@ -245,9 +256,14 @@ fn now_timestamp() -> String {
 
 /// Execute the "remember" tool — called by the LLM to store a memory.
 pub fn execute_remember(input: &serde_json::Value, tachy_dir: &Path) -> Result<String, String> {
-    let content = input.get("content").and_then(|v| v.as_str())
+    let content = input
+        .get("content")
+        .and_then(|v| v.as_str())
         .ok_or("'content' parameter required")?;
-    let category = input.get("category").and_then(|v| v.as_str()).unwrap_or("note");
+    let category = input
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("note");
     let cat = match category {
         "preference" => MemoryCategory::Preference,
         "project" => MemoryCategory::ProjectContext,
@@ -268,22 +284,33 @@ pub struct HiveMind {
 }
 
 impl HiveMind {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Retrieve insights relevant to a current task context.
+    #[must_use]
     pub fn retrieve_insights(&self, context: &str) -> Vec<MemoryEntry> {
         // In a real implementation, this would use semantic vector search
-        self.shared_insights.iter()
-            .filter(|i| context.to_lowercase().contains(&i.category_label().to_lowercase()) || 
-                        context.to_lowercase().split_whitespace().any(|w| i.content.to_lowercase().contains(w)))
+        self.shared_insights
+            .iter()
+            .filter(|i| {
+                context
+                    .to_lowercase()
+                    .contains(&i.category_label().to_lowercase())
+                    || context
+                        .to_lowercase()
+                        .split_whitespace()
+                        .any(|w| i.content.to_lowercase().contains(w))
+            })
             .cloned()
             .collect()
     }
 }
 
 impl MemoryEntry {
+    #[must_use]
     pub fn category_label(&self) -> &'static str {
         category_label(&self.category)
     }
@@ -293,13 +320,17 @@ pub struct MemorySyndicator;
 
 impl MemorySyndicator {
     /// Syndicate local memories to the global hive mind if they meet reward criteria.
-    pub fn syndicate(local: &AgentMemory, hive: &mut HiveMind, min_reward: f32) {
+    pub fn syndicate(local: &AgentMemory, hive: &mut HiveMind, _min_reward: f32) {
         for entry in local.entries() {
             // Syndicate patterns and decisions as they are most valuable for cross-mission reuse
-            if entry.category == MemoryCategory::Pattern || entry.category == MemoryCategory::Decision {
-                if !hive.shared_insights.iter().any(|i| i.content == entry.content) {
-                    hive.shared_insights.push(entry.clone());
-                }
+            if (entry.category == MemoryCategory::Pattern
+                || entry.category == MemoryCategory::Decision)
+                && !hive
+                    .shared_insights
+                    .iter()
+                    .any(|i| i.content == entry.content)
+            {
+                hive.shared_insights.push(entry.clone());
             }
         }
     }
@@ -311,7 +342,10 @@ mod tests {
 
     #[test]
     fn empty_memory_returns_none() {
-        let mem = AgentMemory { path: PathBuf::from("/tmp/nonexistent"), entries: Vec::new() };
+        let mem = AgentMemory {
+            path: PathBuf::from("/tmp/nonexistent"),
+            entries: Vec::new(),
+        };
         assert!(mem.as_system_context().is_none());
     }
 
@@ -320,8 +354,16 @@ mod tests {
         let mem = AgentMemory {
             path: PathBuf::from("/tmp/test"),
             entries: vec![
-                MemoryEntry { timestamp: "1".to_string(), content: "User prefers Rust".to_string(), category: MemoryCategory::Preference },
-                MemoryEntry { timestamp: "2".to_string(), content: "Project uses PostgreSQL".to_string(), category: MemoryCategory::ProjectContext },
+                MemoryEntry {
+                    timestamp: "1".to_string(),
+                    content: "User prefers Rust".to_string(),
+                    category: MemoryCategory::Preference,
+                },
+                MemoryEntry {
+                    timestamp: "2".to_string(),
+                    content: "Project uses PostgreSQL".to_string(),
+                    category: MemoryCategory::ProjectContext,
+                },
             ],
         };
         let ctx = mem.as_system_context().unwrap();
@@ -353,7 +395,8 @@ mod tests {
 
         let mut mem = AgentMemory::load(&dir);
         mem.remember("Test memory", MemoryCategory::Note).unwrap();
-        mem.remember("Another memory", MemoryCategory::Decision).unwrap();
+        mem.remember("Another memory", MemoryCategory::Decision)
+            .unwrap();
 
         // Reload and verify
         let mem2 = AgentMemory::load(&dir);

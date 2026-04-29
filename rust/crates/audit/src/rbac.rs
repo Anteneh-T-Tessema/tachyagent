@@ -66,7 +66,8 @@ pub enum Action {
 }
 
 /// Check if a role is allowed to perform an action.
-#[must_use] pub fn check_permission(role: Role, action: Action) -> AccessResult {
+#[must_use]
+pub fn check_permission(role: Role, action: Action) -> AccessResult {
     let allowed = match action {
         // Everyone can view health and models
         Action::ViewHealth | Action::ListModels | Action::ListTemplates => true,
@@ -81,7 +82,11 @@ pub enum Action {
         // Only admins and above can manage users and governance
         Action::ManageUsers | Action::ManageGovernance => role >= Role::Admin,
         // ManageModels, Webhooks, Intelligence, and Policies require Architect or above
-        Action::ManageModels | Action::ManageWebhooks | Action::ManageCloudJobs | Action::ManageIntelligence | Action::ManagePolicies => role >= Role::Architect,
+        Action::ManageModels
+        | Action::ManageWebhooks
+        | Action::ManageCloudJobs
+        | Action::ManageIntelligence
+        | Action::ManagePolicies => role >= Role::Architect,
         // Only security admins can manage SSO
         Action::ManageEnterpriseSSO => role >= Role::SecurityAdmin,
     };
@@ -99,7 +104,8 @@ pub enum Action {
 ///
 /// The caller must resolve the user's role in the team (via `TeamManager::get_member_role`)
 /// and pass it as `team_role`. If the user is not a member, pass `None`.
-#[must_use] pub fn check_team_permission(
+#[must_use]
+pub fn check_team_permission(
     user_id: &str,
     team_id: &str,
     action: Action,
@@ -122,27 +128,36 @@ pub struct UserStore {
 impl UserStore {
     #[must_use]
     pub fn new() -> Self {
-        Self { users: BTreeMap::new() }
+        Self {
+            users: BTreeMap::new(),
+        }
     }
 
     /// Create a default admin user.
-    #[must_use] pub fn with_default_admin(api_key_hash: &str) -> Self {
+    #[must_use]
+    pub fn with_default_admin(api_key_hash: &str) -> Self {
         let mut store = Self::new();
-        store.users.insert("admin".to_string(), User {
-            id: "admin".to_string(),
-            name: "Default Admin".to_string(),
-            role: Role::Admin,
-            api_key_hash: api_key_hash.to_string(),
-            created_at: timestamp(),
-            enabled: true,
-            active_team_id: None,
-        });
+        store.users.insert(
+            "admin".to_string(),
+            User {
+                id: "admin".to_string(),
+                name: "Default Admin".to_string(),
+                role: Role::Admin,
+                api_key_hash: api_key_hash.to_string(),
+                created_at: timestamp(),
+                enabled: true,
+                active_team_id: None,
+            },
+        );
         store
     }
 
     /// Authenticate a user by API key hash. Returns the user if found and enabled.
-    #[must_use] pub fn authenticate(&self, api_key_hash: &str) -> Option<&User> {
-        self.users.values().find(|u| u.enabled && u.api_key_hash == api_key_hash)
+    #[must_use]
+    pub fn authenticate(&self, api_key_hash: &str) -> Option<&User> {
+        self.users
+            .values()
+            .find(|u| u.enabled && u.api_key_hash == api_key_hash)
     }
 
     /// Add a new user.
@@ -156,7 +171,8 @@ impl UserStore {
     }
 
     /// List all users.
-    #[must_use] pub fn list_users(&self) -> Vec<&User> {
+    #[must_use]
+    pub fn list_users(&self) -> Vec<&User> {
         self.users.values().collect()
     }
 }
@@ -177,7 +193,11 @@ pub struct RoleQuota {
 
 impl Default for RoleQuota {
     fn default() -> Self {
-        Self { max_tokens_per_hour: 0, max_cost_usd_per_day: 0.0, max_concurrent_runs: 0 }
+        Self {
+            max_tokens_per_hour: 0,
+            max_cost_usd_per_day: 0.0,
+            max_concurrent_runs: 0,
+        }
     }
 }
 
@@ -185,11 +205,26 @@ impl Default for RoleQuota {
 #[must_use]
 pub fn default_quota_for_role(role: Role) -> RoleQuota {
     match role {
-        Role::Viewer      => RoleQuota { max_tokens_per_hour: 10_000,  max_cost_usd_per_day: 0.10, max_concurrent_runs: 1  },
-        Role::Developer   => RoleQuota { max_tokens_per_hour: 100_000, max_cost_usd_per_day: 5.0,  max_concurrent_runs: 3  },
-        Role::Architect   => RoleQuota { max_tokens_per_hour: 500_000, max_cost_usd_per_day: 25.0, max_concurrent_runs: 10 },
-        Role::Admin        | Role::SecurityAdmin
-                          => RoleQuota { max_tokens_per_hour: 0, max_cost_usd_per_day: 0.0, max_concurrent_runs: 0 },
+        Role::Viewer => RoleQuota {
+            max_tokens_per_hour: 10_000,
+            max_cost_usd_per_day: 0.10,
+            max_concurrent_runs: 1,
+        },
+        Role::Developer => RoleQuota {
+            max_tokens_per_hour: 100_000,
+            max_cost_usd_per_day: 5.0,
+            max_concurrent_runs: 3,
+        },
+        Role::Architect => RoleQuota {
+            max_tokens_per_hour: 500_000,
+            max_cost_usd_per_day: 25.0,
+            max_concurrent_runs: 10,
+        },
+        Role::Admin | Role::SecurityAdmin => RoleQuota {
+            max_tokens_per_hour: 0,
+            max_cost_usd_per_day: 0.0,
+            max_concurrent_runs: 0,
+        },
     }
 }
 
@@ -222,7 +257,10 @@ pub struct QuotaStore {
 }
 
 impl QuotaStore {
-    #[must_use] pub fn new() -> Self { Self::default() }
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn now_secs() -> u64 {
         std::time::SystemTime::now()
@@ -233,12 +271,14 @@ impl QuotaStore {
 
     fn get_or_init(&mut self, user_id: &str) -> &mut UserUsage {
         let now = Self::now_secs();
-        self.usage.entry(user_id.to_string()).or_insert_with(|| UserUsage {
-            user_id: user_id.to_string(),
-            window_start_secs: now,
-            day_start_secs: now,
-            ..Default::default()
-        })
+        self.usage
+            .entry(user_id.to_string())
+            .or_insert_with(|| UserUsage {
+                user_id: user_id.to_string(),
+                window_start_secs: now,
+                day_start_secs: now,
+                ..Default::default()
+            })
     }
 
     fn reset_if_stale(u: &mut UserUsage, now: u64) {
@@ -253,26 +293,47 @@ impl QuotaStore {
     }
 
     /// Pre-flight check: would adding `tokens`/`cost_usd` and one new run exceed quota?
-    pub fn check_quota(&mut self, user_id: &str, role: Role, tokens: u64, cost_usd: f64) -> QuotaResult {
-        let quota = self.overrides.get(user_id).cloned()
+    pub fn check_quota(
+        &mut self,
+        user_id: &str,
+        role: Role,
+        tokens: u64,
+        cost_usd: f64,
+    ) -> QuotaResult {
+        let quota = self
+            .overrides
+            .get(user_id)
+            .cloned()
             .unwrap_or_else(|| default_quota_for_role(role));
         let now = Self::now_secs();
         let u = self.get_or_init(user_id);
         Self::reset_if_stale(u, now);
 
-        if quota.max_tokens_per_hour > 0 && u.tokens_this_hour + tokens > quota.max_tokens_per_hour {
+        if quota.max_tokens_per_hour > 0 && u.tokens_this_hour + tokens > quota.max_tokens_per_hour
+        {
             return QuotaResult::Exceeded {
-                reason: format!("token quota: {}/{} tokens this hour", u.tokens_this_hour, quota.max_tokens_per_hour),
+                reason: format!(
+                    "token quota: {}/{} tokens this hour",
+                    u.tokens_this_hour, quota.max_tokens_per_hour
+                ),
             };
         }
-        if quota.max_cost_usd_per_day > 0.0 && u.cost_usd_today + cost_usd > quota.max_cost_usd_per_day {
+        if quota.max_cost_usd_per_day > 0.0
+            && u.cost_usd_today + cost_usd > quota.max_cost_usd_per_day
+        {
             return QuotaResult::Exceeded {
-                reason: format!("cost quota: ${:.4}/${:.4} today", u.cost_usd_today, quota.max_cost_usd_per_day),
+                reason: format!(
+                    "cost quota: ${:.4}/${:.4} today",
+                    u.cost_usd_today, quota.max_cost_usd_per_day
+                ),
             };
         }
         if quota.max_concurrent_runs > 0 && u.active_runs >= quota.max_concurrent_runs {
             return QuotaResult::Exceeded {
-                reason: format!("concurrent-run quota: {}/{}", u.active_runs, quota.max_concurrent_runs),
+                reason: format!(
+                    "concurrent-run quota: {}/{}",
+                    u.active_runs, quota.max_concurrent_runs
+                ),
             };
         }
         QuotaResult::Ok
@@ -307,7 +368,8 @@ impl QuotaStore {
         self.overrides.insert(user_id.to_string(), quota);
     }
 
-    #[must_use] pub fn get_usage(&self, user_id: &str) -> Option<&UserUsage> {
+    #[must_use]
+    pub fn get_usage(&self, user_id: &str) -> Option<&UserUsage> {
         self.usage.get(user_id)
     }
 }
@@ -325,22 +387,38 @@ mod tests {
 
     #[test]
     fn viewer_cannot_run_agents() {
-        assert_eq!(check_permission(Role::Viewer, Action::RunAgent), AccessResult::Denied { reason: "Viewer cannot perform RunAgent".to_string() });
+        assert_eq!(
+            check_permission(Role::Viewer, Action::RunAgent),
+            AccessResult::Denied {
+                reason: "Viewer cannot perform RunAgent".to_string()
+            }
+        );
     }
 
     #[test]
     fn developer_can_run_agents() {
-        assert_eq!(check_permission(Role::Developer, Action::RunAgent), AccessResult::Allowed);
+        assert_eq!(
+            check_permission(Role::Developer, Action::RunAgent),
+            AccessResult::Allowed
+        );
     }
 
     #[test]
     fn developer_cannot_manage_users() {
-        assert!(matches!(check_permission(Role::Developer, Action::ManageUsers), AccessResult::Denied { .. }));
+        assert!(matches!(
+            check_permission(Role::Developer, Action::ManageUsers),
+            AccessResult::Denied { .. }
+        ));
     }
 
     #[test]
     fn admin_can_do_everything() {
-        for action in [Action::ViewHealth, Action::RunAgent, Action::ManageUsers, Action::ManageGovernance] {
+        for action in [
+            Action::ViewHealth,
+            Action::RunAgent,
+            Action::ManageUsers,
+            Action::ManageGovernance,
+        ] {
             assert_eq!(check_permission(Role::Admin, action), AccessResult::Allowed);
         }
     }
@@ -386,25 +464,30 @@ mod tests {
 
     #[test]
     fn team_permission_allows_member_with_role() {
-        let result = check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Developer));
+        let result =
+            check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Developer));
         assert_eq!(result, AccessResult::Allowed);
     }
 
     #[test]
     fn team_permission_denies_viewer_running_agent() {
-        let result = check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Viewer));
+        let result =
+            check_team_permission("user-1", "team-1", Action::RunAgent, Some(Role::Viewer));
         assert!(matches!(result, AccessResult::Denied { .. }));
     }
 
     #[test]
     fn team_permission_denies_non_member() {
         let result = check_team_permission("user-1", "team-1", Action::ListAgents, None);
-        assert!(matches!(result, AccessResult::Denied { ref reason } if reason.contains("not a member")));
+        assert!(
+            matches!(result, AccessResult::Denied { ref reason } if reason.contains("not a member"))
+        );
     }
 
     #[test]
     fn team_permission_admin_can_manage() {
-        let result = check_team_permission("user-1", "team-1", Action::ManageUsers, Some(Role::Admin));
+        let result =
+            check_team_permission("user-1", "team-1", Action::ManageUsers, Some(Role::Admin));
         assert_eq!(result, AccessResult::Allowed);
     }
 
@@ -442,7 +525,9 @@ mod tests {
         store.increment_active_runs("dev1");
         store.increment_active_runs("dev1"); // at limit (3 for Developer)
         let res = store.check_quota("dev1", Role::Developer, 0, 0.0);
-        assert!(matches!(res, QuotaResult::Exceeded { ref reason } if reason.contains("concurrent")));
+        assert!(
+            matches!(res, QuotaResult::Exceeded { ref reason } if reason.contains("concurrent"))
+        );
         store.decrement_active_runs("dev1");
         let res2 = store.check_quota("dev1", Role::Developer, 0, 0.0);
         assert_eq!(res2, QuotaResult::Ok);
@@ -451,11 +536,14 @@ mod tests {
     #[test]
     fn quota_per_user_override() {
         let mut store = QuotaStore::new();
-        store.set_override("power-dev", RoleQuota {
-            max_tokens_per_hour: 1_000_000,
-            max_cost_usd_per_day: 50.0,
-            max_concurrent_runs: 20,
-        });
+        store.set_override(
+            "power-dev",
+            RoleQuota {
+                max_tokens_per_hour: 1_000_000,
+                max_cost_usd_per_day: 50.0,
+                max_concurrent_runs: 20,
+            },
+        );
         store.record_usage("power-dev", 500_000, 0.0);
         let res = store.check_quota("power-dev", Role::Developer, 400_000, 0.0);
         assert_eq!(res, QuotaResult::Ok); // override, not the 100k role default

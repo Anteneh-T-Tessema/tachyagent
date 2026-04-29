@@ -5,16 +5,16 @@ use std::sync::{Arc, Mutex};
 
 use audit::{AuditEvent, AuditEventKind, AuditLogger, AuditSeverity, GovernancePolicy};
 use backend::{BackendRegistry, DynBackend};
-use intelligence::{
-    CodebaseIndex, IntelligenceConfig,
-    build_optimized_prompt,
-};
+use intelligence::{build_optimized_prompt, CodebaseIndex, IntelligenceConfig};
 use runtime::{ConversationRuntime, Session};
 
 use platform::AgentConfig;
 
-use super::{AgentRunResult, executor::{IntelligentToolExecutor, build_permission_policy}};
 use super::simple::{check_governance, extract_text_summary, run_simple};
+use super::{
+    executor::{build_permission_policy, IntelligentToolExecutor},
+    AgentRunResult,
+};
 
 /// Full intelligence pipeline: plan → execute steps → edit-test-fix → git commit.
 pub(super) fn run_with_planning(
@@ -36,21 +36,24 @@ pub(super) fn run_with_planning(
 
     // Step 1: Generate a plan by asking the LLM
     let codebase_summary = index.as_ref().map(|idx| {
-        format!("{} files, primary language: {}, test command: {}",
+        format!(
+            "{} files, primary language: {}, test command: {}",
             idx.project.total_files,
             idx.project.primary_language.as_deref().unwrap_or("unknown"),
             idx.project.test_command.as_deref().unwrap_or("none"),
         )
     });
 
-    let planning_prompt = intelligence::PlanExecutor::build_planning_prompt(
-        prompt,
-        codebase_summary.as_deref(),
-    );
+    let planning_prompt =
+        intelligence::PlanExecutor::build_planning_prompt(prompt, codebase_summary.as_deref());
 
     audit_logger.log(
-        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart, "generating plan")
-            .with_agent(agent_id),
+        &AuditEvent::new(
+            &config.session_id,
+            AuditEventKind::SessionStart,
+            "generating plan",
+        )
+        .with_agent(agent_id),
     );
 
     let plan_result = runtime.run_turn(&planning_prompt, None);
@@ -59,11 +62,16 @@ pub(super) fn run_with_planning(
         Err(_) => String::new(),
     };
 
-    let plan = if let Ok(p) = intelligence::PlanExecutor::parse_plan(&plan_text, prompt) { p } else {
+    let plan = if let Ok(p) = intelligence::PlanExecutor::parse_plan(&plan_text, prompt) {
+        p
+    } else {
         audit_logger.log(
-            &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
-                "plan generation failed, falling back to simple execution")
-                .with_agent(agent_id),
+            &AuditEvent::new(
+                &config.session_id,
+                AuditEventKind::SessionStart,
+                "plan generation failed, falling back to simple execution",
+            )
+            .with_agent(agent_id),
         );
         return run_simple(agent_id, config, prompt, runtime, governance, audit_logger);
     };
@@ -84,16 +92,22 @@ pub(super) fn run_with_planning(
             match intelligence::GitTools::branch(&branch_name, true) {
                 Ok(result) => {
                     audit_logger.log(
-                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
-                            format!("created branch {}", result.name))
-                            .with_agent(agent_id),
+                        &AuditEvent::new(
+                            &config.session_id,
+                            AuditEventKind::SessionStart,
+                            format!("created branch {}", result.name),
+                        )
+                        .with_agent(agent_id),
                     );
                 }
                 Err(e) => {
                     audit_logger.log(
-                        &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
-                            format!("branch creation failed: {e}"))
-                            .with_agent(agent_id),
+                        &AuditEvent::new(
+                            &config.session_id,
+                            AuditEventKind::SessionStart,
+                            format!("branch creation failed: {e}"),
+                        )
+                        .with_agent(agent_id),
                     );
                 }
             }
@@ -121,7 +135,12 @@ pub(super) fn run_with_planning(
             &AuditEvent::new(
                 &config.session_id,
                 AuditEventKind::SessionStart,
-                format!("executing step {}/{}: {}", step.number, plan.steps.len(), step.description),
+                format!(
+                    "executing step {}/{}: {}",
+                    step.number,
+                    plan.steps.len(),
+                    step.description
+                ),
             )
             .with_agent(agent_id),
         );
@@ -139,7 +158,12 @@ pub(super) fn run_with_planning(
             .collect();
 
         let step_system_prompt = build_step_system_prompt(
-            config, step, index, workspace_root, intelligence_config, model,
+            config,
+            step,
+            index,
+            workspace_root,
+            intelligence_config,
+            model,
         );
 
         let enable_tools = !config.template.allowed_tools.is_empty();
@@ -181,7 +205,8 @@ pub(super) fn run_with_planning(
             step_tool_executor,
             permission_policy,
             step_system_prompt,
-        ).with_max_iterations(config.template.max_iterations);
+        )
+        .with_max_iterations(config.template.max_iterations);
 
         let step_prompt = if let Some(ref prior) = prior_step_result {
             format!(
@@ -197,7 +222,10 @@ pub(super) fn run_with_planning(
                 total_iterations += summary.iterations;
                 total_tool_invocations += summary.tool_results.len() as u32;
                 let step_text = extract_text_summary(&summary.assistant_messages);
-                all_results.push(format!("Step {}: {}\n{}", step.number, step.description, step_text));
+                all_results.push(format!(
+                    "Step {}: {}\n{}",
+                    step.number, step.description, step_text
+                ));
                 prior_step_result = Some(if step_text.len() > 800 {
                     format!("{}…", &step_text[..800])
                 } else {
@@ -207,23 +235,47 @@ pub(super) fn run_with_planning(
 
                 // Edit-test-fix cycle
                 if intelligence_config.edit_test_fix_enabled && !step.expected_files.is_empty() {
-                    if let Some(test_cmd) = intelligence::EditTestFix::detect_test_command(workspace_root, index.as_ref()) {
-                        let targeted = intelligence::EditTestFix::targeted_test_command(&test_cmd, &step.expected_files);
+                    if let Some(test_cmd) = intelligence::EditTestFix::detect_test_command(
+                        workspace_root,
+                        index.as_ref(),
+                    ) {
+                        let targeted = intelligence::EditTestFix::targeted_test_command(
+                            &test_cmd,
+                            &step.expected_files,
+                        );
                         let lsp_enabled = intelligence_config.edit_test_fix.lsp_diagnostics_enabled;
                         let check = intelligence::EditTestFix::run_diagnostic_then_test(
-                            workspace_root, &step.expected_files, &targeted,
-                            intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
+                            workspace_root,
+                            &step.expected_files,
+                            &targeted,
+                            intelligence_config.edit_test_fix.test_timeout_secs,
+                            lsp_enabled,
                         );
 
                         match check {
                             intelligence::CycleCheckResult::Passed => {
                                 // Visual check (Phase 26)
-                                if let (Some(url), Some(baseline)) = (&step.url, &step.visual_baseline) {
-                                    if let Ok(report) = intelligence::EditTestFix::run_visual_check(url, baseline, workspace_root) {
-                                        let diff_summary = report.diff_report.as_deref().unwrap_or("No diff summary available");
+                                if let (Some(url), Some(baseline)) =
+                                    (&step.url, &step.visual_baseline)
+                                {
+                                    if let Ok(report) = intelligence::EditTestFix::run_visual_check(
+                                        url,
+                                        baseline,
+                                        workspace_root,
+                                    ) {
+                                        let diff_summary = report
+                                            .diff_report
+                                            .as_deref()
+                                            .unwrap_or("No diff summary available");
                                         if diff_summary.contains("FAILURE") {
-                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::VisualSnapshot,
-                                                format!("visual failure at {url}: {}", diff_summary))
+                                            audit_logger.log(
+                                                &AuditEvent::new(
+                                                    &config.session_id,
+                                                    AuditEventKind::VisualSnapshot,
+                                                    format!(
+                                                        "visual failure at {url}: {diff_summary}"
+                                                    ),
+                                                )
                                                 .with_severity(audit::AuditSeverity::Warning)
                                                 .with_agent(agent_id)
                                                 .with_visual_anchor(&report.screenshot_path)
@@ -231,28 +283,35 @@ pub(super) fn run_with_planning(
                                                     "url": url,
                                                     "baseline": baseline,
                                                     "diff": diff_summary,
-                                                })));
-                                            
+                                                })),
+                                            );
+
                                             let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &intelligence::TestResult {
                                                 exit_code: 1,
                                                 stdout: String::new(),
-                                                stderr: format!("Visual Regression detected: {}", diff_summary),
+                                                stderr: format!("Visual Regression detected: {diff_summary}"),
                                             }, &step.expected_files, Some(&report));
-                                            
+
                                             if let Ok(s) = step_runtime.run_turn(&fix, None) {
                                                 total_iterations += s.iterations;
-                                                total_tool_invocations += s.tool_results.len() as u32;
+                                                total_tool_invocations +=
+                                                    s.tool_results.len() as u32;
                                             }
                                         } else {
-                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::VisualSnapshot,
-                                                format!("visual verification passed for {url}"))
+                                            audit_logger.log(
+                                                &AuditEvent::new(
+                                                    &config.session_id,
+                                                    AuditEventKind::VisualSnapshot,
+                                                    format!("visual verification passed for {url}"),
+                                                )
                                                 .with_agent(agent_id)
                                                 .with_visual_anchor(&report.screenshot_path)
                                                 .with_visual_metadata(serde_json::json!({
                                                     "url": url,
                                                     "baseline": baseline,
                                                     "diff": diff_summary,
-                                                })));
+                                                })),
+                                            );
                                         }
                                     }
                                 }
@@ -264,27 +323,52 @@ pub(super) fn run_with_planning(
                                             diag_result.error_count, diag_result.warning_count))
                                         .with_agent(agent_id),
                                 );
-                                let fix_prompt = intelligence::EditTestFix::build_diagnostic_fix_prompt(&diag_result, &step.expected_files);
-                                for retry in 0..intelligence_config.edit_test_fix.max_retries {
-                                    if let Ok(fix_summary) = step_runtime.run_turn(&fix_prompt, None) {
-                                        total_iterations += fix_summary.iterations;
-                                        total_tool_invocations += fix_summary.tool_results.len() as u32;
-                                    }
-                                    let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
-                                        workspace_root, &step.expected_files, &targeted,
-                                        intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
+                                let fix_prompt =
+                                    intelligence::EditTestFix::build_diagnostic_fix_prompt(
+                                        &diag_result,
+                                        &step.expected_files,
                                     );
+                                for retry in 0..intelligence_config.edit_test_fix.max_retries {
+                                    if let Ok(fix_summary) =
+                                        step_runtime.run_turn(&fix_prompt, None)
+                                    {
+                                        total_iterations += fix_summary.iterations;
+                                        total_tool_invocations +=
+                                            fix_summary.tool_results.len() as u32;
+                                    }
+                                    let recheck =
+                                        intelligence::EditTestFix::run_diagnostic_then_test(
+                                            workspace_root,
+                                            &step.expected_files,
+                                            &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs,
+                                            lsp_enabled,
+                                        );
                                     match recheck {
                                         intelligence::CycleCheckResult::Passed => {
-                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                                format!("fixed after {} retries", retry + 1)).with_agent(agent_id));
+                                            audit_logger.log(
+                                                &AuditEvent::new(
+                                                    &config.session_id,
+                                                    AuditEventKind::SessionEnd,
+                                                    format!("fixed after {} retries", retry + 1),
+                                                )
+                                                .with_agent(agent_id),
+                                            );
                                             break;
                                         }
-                                        intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                            let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files, None);
+                                        intelligence::CycleCheckResult::TestFailure(
+                                            test_result,
+                                        ) => {
+                                            let fix = intelligence::EditTestFix::build_fix_prompt(
+                                                &targeted,
+                                                &test_result,
+                                                &step.expected_files,
+                                                None,
+                                            );
                                             if let Ok(s) = step_runtime.run_turn(&fix, None) {
                                                 total_iterations += s.iterations;
-                                                total_tool_invocations += s.tool_results.len() as u32;
+                                                total_tool_invocations +=
+                                                    s.tool_results.len() as u32;
                                             }
                                             break;
                                         }
@@ -293,66 +377,116 @@ pub(super) fn run_with_planning(
                                 }
                             }
                             intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                let fix_prompt = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files, None);
+                                let fix_prompt = intelligence::EditTestFix::build_fix_prompt(
+                                    &targeted,
+                                    &test_result,
+                                    &step.expected_files,
+                                    None,
+                                );
                                 audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SelfRepair,
                                     format!("tests failed for step {}, attempting autonomous repair", step.number)).with_agent(agent_id));
-                                for retry in 0..intelligence_config.edit_test_fix.max_retries {
+                                for _retry in 0..intelligence_config.edit_test_fix.max_retries {
                                     if let Ok(s) = step_runtime.run_turn(&fix_prompt, None) {
                                         total_iterations += s.iterations;
                                         total_tool_invocations += s.tool_results.len() as u32;
                                     }
-                                    let recheck = intelligence::EditTestFix::run_diagnostic_then_test(
-                                        workspace_root, &step.expected_files, &targeted,
-                                        intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
-                                    );
+                                    let recheck =
+                                        intelligence::EditTestFix::run_diagnostic_then_test(
+                                            workspace_root,
+                                            &step.expected_files,
+                                            &targeted,
+                                            intelligence_config.edit_test_fix.test_timeout_secs,
+                                            lsp_enabled,
+                                        );
                                     if matches!(recheck, intelligence::CycleCheckResult::Passed) {
                                         // Phase 27: Swarm Governance Review
-                                        let consensus = intelligence::ConsensusEngine::review_repair(
-                                            &registry,
-                                            "Autonomous Repair Delta",
-                                            "Tests Passed",
-                                            None,
-                                        );
+                                        let consensus =
+                                            intelligence::ConsensusEngine::review_repair(
+                                                registry,
+                                                "Autonomous Repair Delta",
+                                                "Tests Passed",
+                                                None,
+                                            );
 
                                         if consensus.is_approved {
-                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::ConsensusSeal,
-                                                format!("autonomous repair approved (score: {:.2})", consensus.aggregate_score))
+                                            audit_logger.log(
+                                                &AuditEvent::new(
+                                                    &config.session_id,
+                                                    AuditEventKind::ConsensusSeal,
+                                                    format!(
+                                                        "autonomous repair approved (score: {:.2})",
+                                                        consensus.aggregate_score
+                                                    ),
+                                                )
                                                 .with_agent(agent_id)
-                                                .with_consensus_report(serde_json::to_value(&consensus).unwrap_or_default()));
-                                            
+                                                .with_consensus_report(
+                                                    serde_json::to_value(&consensus)
+                                                        .unwrap_or_default(),
+                                                ),
+                                            );
+
                                             // Phase 29: Broadcast Consensus Event
                                             if let Some(ref ds) = daemon_state {
-                                                let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                                let s = ds.lock().unwrap_or_else(
+                                                    std::sync::PoisonError::into_inner,
+                                                );
                                                 let event = crate::internal_bus::MissionEvent::ConsensusFormed {
                                                     agent_id: agent_id.to_string(),
                                                     report: consensus.clone(),
                                                 };
-                                                let _ = s.swarm.mission_control.broadcast(event.clone());
+                                                let _ = s
+                                                    .swarm
+                                                    .mission_control
+                                                    .broadcast(event.clone());
                                                 {
-                                                    let mut feed = s.swarm.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                                    let mut feed =
+                                                        s.swarm.mission_feed.lock().unwrap_or_else(
+                                                            std::sync::PoisonError::into_inner,
+                                                        );
                                                     feed.push_front(event.clone());
-                                                    if feed.len() > 100 { feed.pop_back(); }
+                                                    if feed.len() > 100 {
+                                                        feed.pop_back();
+                                                    }
                                                 }
-                                                s.publish_event("mission_event", serde_json::to_value(event).unwrap_or_default());
+                                                s.publish_event(
+                                                    "mission_event",
+                                                    serde_json::to_value(event).unwrap_or_default(),
+                                                );
                                             }
                                             break;
-                                        } else {
-                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::GovernanceViolation,
-                                                format!("repair VETOED by consensus (score: {:.2})", consensus.aggregate_score))
-                                                .with_severity(audit::AuditSeverity::Warning)
-                                                .with_agent(agent_id)
-                                                .with_consensus_report(serde_json::to_value(&consensus).unwrap_or_default()));
-                                            
-                                            // Phase 29: Broadcast Veto
-                                            if let Some(ref ds) = daemon_state {
-                                                let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                                                let event = crate::internal_bus::MissionEvent::ConsensusFormed {
-                                                    agent_id: agent_id.to_string(),
-                                                    report: consensus.clone(),
-                                                };
-                                                let _ = s.swarm.mission_control.broadcast(event.clone());
-                                                s.publish_event("mission_event", serde_json::to_value(event).unwrap_or_default());
-                                            }
+                                        }
+                                        audit_logger.log(
+                                            &AuditEvent::new(
+                                                &config.session_id,
+                                                AuditEventKind::GovernanceViolation,
+                                                format!(
+                                                    "repair VETOED by consensus (score: {:.2})",
+                                                    consensus.aggregate_score
+                                                ),
+                                            )
+                                            .with_severity(audit::AuditSeverity::Warning)
+                                            .with_agent(agent_id)
+                                            .with_consensus_report(
+                                                serde_json::to_value(&consensus)
+                                                    .unwrap_or_default(),
+                                            ),
+                                        );
+
+                                        // Phase 29: Broadcast Veto
+                                        if let Some(ref ds) = daemon_state {
+                                            let s = ds
+                                                .lock()
+                                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                            let event = crate::internal_bus::MissionEvent::ConsensusFormed {
+                                                agent_id: agent_id.to_string(),
+                                                report: consensus.clone(),
+                                            };
+                                            let _ =
+                                                s.swarm.mission_control.broadcast(event.clone());
+                                            s.publish_event(
+                                                "mission_event",
+                                                serde_json::to_value(event).unwrap_or_default(),
+                                            );
                                         }
                                     }
                                 }
@@ -363,46 +497,66 @@ pub(super) fn run_with_planning(
                 }
 
                 // Git commit after successful step
-                if intelligence_config.git_enabled && intelligence_config.plan.auto_commit
-                    && intelligence::GitTools::is_git_repo() {
-                        let msg = format!("tachy: step {} — {}", step.number, step.description);
-                        if let Ok(result) = intelligence::GitTools::commit(&msg) { audit_logger.log(
-                            &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                format!("committed: {}", result.hash)).with_agent(agent_id),
-                        ); }
+                if intelligence_config.git_enabled
+                    && intelligence_config.plan.auto_commit
+                    && intelligence::GitTools::is_git_repo()
+                {
+                    let msg = format!("tachy: step {} — {}", step.number, step.description);
+                    if let Ok(result) = intelligence::GitTools::commit(&msg) {
+                        audit_logger.log(
+                            &AuditEvent::new(
+                                &config.session_id,
+                                AuditEventKind::SessionEnd,
+                                format!("committed: {}", result.hash),
+                            )
+                            .with_agent(agent_id),
+                        );
                     }
+                }
             }
             Err(error) => {
                 // Roll back every file this step was expected to touch so the
                 // workspace is not left in a broken mid-plan state.
                 let mut rolled_back = 0usize;
                 for (path, maybe_original) in &step_snapshots {
-                    match maybe_original {
-                        Some(original) => {
-                            if std::fs::write(path, original).is_ok() {
-                                rolled_back += 1;
-                            }
-                        }
-                        None => {
-                            // File did not exist before this step — remove it.
-                            let _ = std::fs::remove_file(path);
+                    if let Some(original) = maybe_original {
+                        if std::fs::write(path, original).is_ok() {
                             rolled_back += 1;
                         }
+                    } else {
+                        // File did not exist before this step — remove it.
+                        let _ = std::fs::remove_file(path);
+                        rolled_back += 1;
                     }
                 }
                 audit_logger.log(
-                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                        format!("step {} failed: {error} — rolled back {rolled_back} file(s)", step.number))
-                        .with_severity(AuditSeverity::Warning)
-                        .with_agent(agent_id),
+                    &AuditEvent::new(
+                        &config.session_id,
+                        AuditEventKind::SessionEnd,
+                        format!(
+                            "step {} failed: {error} — rolled back {rolled_back} file(s)",
+                            step.number
+                        ),
+                    )
+                    .with_severity(AuditSeverity::Warning)
+                    .with_agent(agent_id),
                 );
-                all_results.push(format!("Step {} FAILED (rolled back {rolled_back} files): {}", step.number, error));
+                all_results.push(format!(
+                    "Step {} FAILED (rolled back {rolled_back} files): {}",
+                    step.number, error
+                ));
                 break;
             }
         }
     }
 
-    check_governance(governance, total_tool_invocations, &config.session_id, agent_id, audit_logger);
+    check_governance(
+        governance,
+        total_tool_invocations,
+        &config.session_id,
+        agent_id,
+        audit_logger,
+    );
 
     let result_summary = all_results.join("\n\n");
     let result_summary = if result_summary.len() > 4000 {
@@ -417,9 +571,14 @@ pub(super) fn run_with_planning(
         &AuditEvent::new(
             &config.session_id,
             AuditEventKind::SessionEnd,
-            format!("plan {}: {}/{} steps completed, {} iterations, {} tools",
+            format!(
+                "plan {}: {}/{} steps completed, {} iterations, {} tools",
                 if success { "completed" } else { "partial" },
-                steps_completed, plan.steps.len(), total_iterations, total_tool_invocations),
+                steps_completed,
+                plan.steps.len(),
+                total_iterations,
+                total_tool_invocations
+            ),
         )
         .with_agent(agent_id)
         .with_model(model),
@@ -483,7 +642,9 @@ pub(super) fn build_step_system_prompt(
             sections.push(format!(
                 "Project: {} files, primary language: {lang}{}",
                 idx.project.total_files,
-                idx.project.test_command.as_deref()
+                idx.project
+                    .test_command
+                    .as_deref()
                     .map(|c| format!(", test command: {c}"))
                     .unwrap_or_default()
             ));

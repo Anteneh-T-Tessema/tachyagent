@@ -4,18 +4,20 @@ mod directory;
 mod read_write;
 mod search;
 
-pub use directory::{DirEntry, ListDirectoryOutput, list_directory};
+pub use directory::{list_directory, DirEntry, ListDirectoryOutput};
 pub use read_write::{
-    DiffPreview, EditFileOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
-    WriteFileOutput, edit_file, preview_edit_file, preview_write_file, read_file, write_file,
+    edit_file, preview_edit_file, preview_write_file, read_file, write_file, DiffPreview,
+    EditFileOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
-pub use search::{GlobSearchOutput, GrepSearchInput, GrepSearchOutput, glob_search, grep_search};
+pub use search::{glob_search, grep_search, GlobSearchOutput, GrepSearchInput, GrepSearchOutput};
 
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{edit_file, glob_search, grep_search, list_directory, read_file, write_file, GrepSearchInput};
+    use super::{
+        edit_file, glob_search, grep_search, list_directory, read_file, write_file, GrepSearchInput,
+    };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -28,8 +30,9 @@ mod tests {
     #[test]
     fn reads_and_writes_files() {
         let path = temp_path("read-write.txt");
-        let (write_output, diff_preview) = write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
-            .expect("write should succeed");
+        let (write_output, diff_preview) =
+            write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
+                .expect("write should succeed");
         assert_eq!(write_output.kind, "create");
         assert!(diff_preview.is_new_file);
         assert!(diff_preview.additions > 0);
@@ -44,8 +47,9 @@ mod tests {
         let path = temp_path("edit.txt");
         write_file(path.to_string_lossy().as_ref(), "alpha beta alpha")
             .expect("initial write should succeed");
-        let (output, diff_preview) = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
-            .expect("edit should succeed");
+        let (output, diff_preview) =
+            edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
+                .expect("edit should succeed");
         assert!(output.replace_all);
         assert!(diff_preview.additions > 0 || diff_preview.deletions > 0);
         assert!(!diff_preview.diff_text.is_empty());
@@ -151,17 +155,20 @@ mod tests {
     fn lists_directory_contents() {
         let dir = temp_path("list-dir");
         std::fs::create_dir_all(dir.join("subdir")).expect("subdir should be created");
-        write_file(
-            dir.join("file.txt").to_string_lossy().as_ref(),
-            "hello",
-        )
-        .expect("file write should succeed");
+        write_file(dir.join("file.txt").to_string_lossy().as_ref(), "hello")
+            .expect("file write should succeed");
 
         let output = list_directory(Some(dir.to_string_lossy().as_ref()), Some(1))
             .expect("list should succeed");
         assert_eq!(output.total, 2);
-        assert!(output.entries.iter().any(|e| e.name == "file.txt" && !e.is_dir));
-        assert!(output.entries.iter().any(|e| e.name == "subdir" && e.is_dir));
+        assert!(output
+            .entries
+            .iter()
+            .any(|e| e.name == "file.txt" && !e.is_dir));
+        assert!(output
+            .entries
+            .iter()
+            .any(|e| e.name == "subdir" && e.is_dir));
         assert!(!output.truncated);
     }
 }

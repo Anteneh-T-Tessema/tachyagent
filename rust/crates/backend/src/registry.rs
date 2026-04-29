@@ -16,7 +16,7 @@ pub enum BackendKind {
     /// Another Tachy instance in the swarm.
     RemoteTachy,
     /// Anthropic Claude API — cloud fallback when local Ollama is unreachable.
-    /// Uses the Anthropic-compatible OpenAI endpoint at api.anthropic.com/v1.
+    /// Uses the Anthropic-compatible `OpenAI` endpoint at api.anthropic.com/v1.
     AnthropicCompat,
 }
 
@@ -127,9 +127,8 @@ impl BackendRegistry {
                     .base_url
                     .clone()
                     .unwrap_or_else(|| "http://localhost:11434".to_string());
-                let backend =
-                    OllamaBackend::new(model_name.to_string(), base_url, effective_tools)
-                        .map_err(|e| RuntimeError::new(e.to_string()))?;
+                let backend = OllamaBackend::new(model_name.to_string(), base_url, effective_tools)
+                    .map_err(|e| RuntimeError::new(e.to_string()))?;
                 Ok(Box::new(backend))
             }
             BackendKind::OpenAiCompat => {
@@ -150,11 +149,8 @@ impl BackendRegistry {
             BackendKind::RemoteTachy => {
                 let base_url = config.base_url.clone().unwrap_or_default();
                 let api_key = config.api_key.clone();
-                let backend = crate::RemoteTachyBackend::new(
-                    model_name.to_string(),
-                    base_url,
-                    api_key,
-                );
+                let backend =
+                    crate::RemoteTachyBackend::new(model_name.to_string(), base_url, api_key);
                 Ok(Box::new(backend))
             }
             BackendKind::AnthropicCompat => {
@@ -199,7 +195,9 @@ impl BackendRegistry {
                 backend: BackendKind::AnthropicCompat,
                 supports_tool_use: true,
                 context_window: 200_000,
-                notes: Some("Anthropic cloud fallback — active when Ollama unreachable".to_string()),
+                notes: Some(
+                    "Anthropic cloud fallback — active when Ollama unreachable".to_string(),
+                ),
                 tier: ModelTier::Standard,
             });
         }
@@ -517,11 +515,15 @@ mod tests {
     fn no_cloud_backends_registered() {
         let registry = BackendRegistry::with_defaults();
         // No Gemini or external cloud backend should exist
-        assert!(registry.configs.get("gemini").is_none());
+        assert!(!registry.configs.contains_key("gemini"));
         // Every registered model must be Ollama-backed
         for model in registry.list_models() {
-            assert_eq!(model.backend, BackendKind::Ollama,
-                "cloud model {} must not be registered", model.name);
+            assert_eq!(
+                model.backend,
+                BackendKind::Ollama,
+                "cloud model {} must not be registered",
+                model.name
+            );
         }
     }
 
@@ -538,22 +540,32 @@ mod tests {
         // When no API key is available, with_cloud_fallback behaves like with_defaults.
         // We unset the env var to ensure a clean test.
         // Safety: single-threaded test binary section.
-        let _guard = std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
         let registry = BackendRegistry::with_cloud_fallback(None);
         // All models must still be Ollama-backed (no key → no cloud registered).
         for model in registry.list_models() {
-            assert_eq!(model.backend, BackendKind::Ollama,
-                "expected only Ollama models when no cloud key provided, got: {}", model.name);
+            assert_eq!(
+                model.backend,
+                BackendKind::Ollama,
+                "expected only Ollama models when no cloud key provided, got: {}",
+                model.name
+            );
         }
     }
 
     #[test]
     fn with_cloud_fallback_with_key_registers_anthropic_model() {
         let registry = BackendRegistry::with_cloud_fallback(Some("sk-test-key".to_string()));
-        let cloud_models: Vec<_> = registry.list_models().iter()
+        let cloud_models: Vec<_> = registry
+            .list_models()
+            .iter()
             .filter(|m| m.backend == BackendKind::AnthropicCompat)
             .collect();
-        assert_eq!(cloud_models.len(), 1, "expected exactly one cloud fallback model");
+        assert_eq!(
+            cloud_models.len(),
+            1,
+            "expected exactly one cloud fallback model"
+        );
         assert_eq!(cloud_models[0].name, "claude-haiku-4-5-20251001");
         assert_eq!(cloud_models[0].context_window, 200_000);
         // The default Ollama models must still be present.

@@ -3,8 +3,8 @@
 //! Compares model performance (Base vs. Fine-tuned) using verified
 //! "Gold Standard" trajectories from the Audit log.
 
-use serde::{Deserialize, Serialize};
 use crate::finetune::FinetuneDataset;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalResult {
@@ -58,20 +58,24 @@ pub struct ModelEvaluator {
 }
 
 impl ModelEvaluator {
+    #[must_use]
     pub fn new(dataset: FinetuneDataset) -> Self {
         Self { dataset }
     }
 
     /// Run evaluation and check against promotion thresholds.
+    #[must_use]
     pub fn run_benchmark(&self) -> BenchmarkReport {
-        let mut report = BenchmarkReport::default();
-        report.total_cases = self.dataset.entries.len();
+        let mut report = BenchmarkReport {
+            total_cases: self.dataset.entries.len(),
+            ..BenchmarkReport::default()
+        };
 
         for entry in &self.dataset.entries {
             // Mock evaluation logic
-            let base_sim = 0.85; 
-            let tuned_sim = 0.92; 
-            
+            let base_sim = 0.85;
+            let tuned_sim = 0.92;
+
             let winner = if tuned_sim > base_sim + 0.01 {
                 report.tuned_wins += 1;
                 EvalWinner::Tuned
@@ -87,7 +91,7 @@ impl ModelEvaluator {
 
             let base_out = format!("Base response for: {}", entry.instruction);
             let tuned_out = format!("Fine-tuned response for: {}", entry.instruction);
-            let diff = self.compute_diff(&base_out, &tuned_out);
+            let diff = Self::compute_diff(&base_out, &tuned_out);
 
             report.results.push(EvalResult {
                 instruction: entry.instruction.clone(),
@@ -109,27 +113,31 @@ impl ModelEvaluator {
         report
     }
 
+    #[must_use]
     pub fn should_promote(&self, report: &BenchmarkReport, thresholds: &ShadowThresholds) -> bool {
-        if report.total_cases < thresholds.min_test_cases { return false; }
+        if report.total_cases < thresholds.min_test_cases {
+            return false;
+        }
         let win_ratio = report.tuned_wins as f32 / report.total_cases as f32;
-        win_ratio >= thresholds.min_win_ratio && report.avg_tuned_similarity >= thresholds.min_similarity
+        win_ratio >= thresholds.min_win_ratio
+            && report.avg_tuned_similarity >= thresholds.min_similarity
     }
 
-    fn compute_diff(&self, original: &str, follow_up: &str) -> String {
+    fn compute_diff(original: &str, follow_up: &str) -> String {
         // Simple line-based diff for the UI
         let mut diff = String::new();
         let orig_lines: Vec<&str> = original.lines().collect();
         let follow_lines: Vec<&str> = follow_up.lines().collect();
-        
+
         for (i, line) in follow_lines.iter().enumerate() {
             if i < orig_lines.len() {
-                if *line != orig_lines[i] {
-                    diff.push_str(&format!("- {}\n+ {}\n", orig_lines[i], line));
+                if *line == orig_lines[i] {
+                    diff.push_str(&format!("  {line}\n"));
                 } else {
-                    diff.push_str(&format!("  {}\n", line));
+                    diff.push_str(&format!("- {}\n+ {}\n", orig_lines[i], line));
                 }
             } else {
-                diff.push_str(&format!("+ {}\n", line));
+                diff.push_str(&format!("+ {line}\n"));
             }
         }
         diff

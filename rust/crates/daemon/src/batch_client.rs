@@ -1,6 +1,6 @@
 //! Enterprise Cloud Bridge: AWS Batch Client (Direction B).
-//! 
-//! This module provides the orchestration logic for offloading heavy agentic 
+//!
+//! This module provides the orchestration logic for offloading heavy agentic
 //! workloads to the AWS Batch ecosystem.
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,8 @@ pub struct BatchClient {
 }
 
 impl BatchClient {
-    #[must_use] pub fn new(region: &str, queue: &str) -> Self {
+    #[must_use]
+    pub fn new(region: &str, queue: &str) -> Self {
         Self {
             region: region.to_string(),
             queue: queue.to_string(),
@@ -72,7 +73,9 @@ impl BatchClient {
             .arg(".")
             .current_dir(workspace_root)
             .output()
-            .map_err(|e| format!("tar not found: {e} — install GNU tar (brew install gnu-tar on macOS)"))?;
+            .map_err(|e| {
+                format!("tar not found: {e} — install GNU tar (brew install gnu-tar on macOS)")
+            })?;
 
         if !output.status.success() {
             return Err(format!(
@@ -95,7 +98,7 @@ impl BatchClient {
     }
 
     /// Submits a new agentic workload to AWS Batch.
-    /// 
+    ///
     /// In a production environment, this would call the AWS SDK:
     /// `batch.submit_job().job_queue(...).job_definition(...)`
     pub fn submit_job(
@@ -106,9 +109,9 @@ impl BatchClient {
     ) -> Result<BatchJob, String> {
         // For Direction B implementation: implement the API call logic
         // For now, we simulate the submission success.
-        
+
         let job_id = format!("job-{}", uuid_simple());
-        
+
         Ok(BatchJob {
             id: job_id,
             name: name.to_string(),
@@ -126,10 +129,14 @@ impl BatchClient {
     pub fn get_job_status(&self, job_id: &str) -> Result<BatchJobStatus, String> {
         let output = std::process::Command::new("aws")
             .args([
-                "batch", "describe-jobs",
-                "--jobs", job_id,
-                "--region", &self.region,
-                "--output", "json",
+                "batch",
+                "describe-jobs",
+                "--jobs",
+                job_id,
+                "--region",
+                &self.region,
+                "--output",
+                "json",
             ])
             .output();
 
@@ -140,12 +147,12 @@ impl BatchClient {
                     if let Some(status_str) = v["jobs"][0]["status"].as_str() {
                         return Ok(match status_str {
                             "SUBMITTED" => BatchJobStatus::Submitted,
-                            "PENDING"   => BatchJobStatus::Pending,
-                            "RUNNABLE"  => BatchJobStatus::Runnable,
-                            "STARTING"  => BatchJobStatus::Starting,
-                            "RUNNING"   => BatchJobStatus::Running,
+                            "PENDING" => BatchJobStatus::Pending,
+                            "RUNNABLE" => BatchJobStatus::Runnable,
+                            "STARTING" => BatchJobStatus::Starting,
+                            "RUNNING" => BatchJobStatus::Running,
                             "SUCCEEDED" => BatchJobStatus::Succeeded,
-                            other       => BatchJobStatus::Failed(format!("unknown status: {other}")),
+                            other => BatchJobStatus::Failed(format!("unknown status: {other}")),
                         });
                     }
                 }

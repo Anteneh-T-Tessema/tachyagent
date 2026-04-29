@@ -64,7 +64,7 @@ impl PermissionPolicy {
         &self,
         tool_name: &str,
         input: &str,
-        mut prompter: Option<&mut dyn PermissionPrompter>,
+        prompter: Option<&mut dyn PermissionPrompter>,
         reward_score: Option<f32>,
     ) -> PermissionOutcome {
         match self.mode_for(tool_name) {
@@ -84,6 +84,7 @@ impl PermissionPolicy {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn authorize_prompt(
         &self,
         tool_name: &str,

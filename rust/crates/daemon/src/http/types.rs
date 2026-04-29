@@ -25,7 +25,9 @@ impl Response {
         Self::Full {
             status,
             content_type: "application/json".to_string(),
-            body: serde_json::to_string(&body).unwrap_or_default().into_bytes(),
+            body: serde_json::to_string(&body)
+                .unwrap_or_default()
+                .into_bytes(),
             extra_headers: Vec::new(),
         }
     }
@@ -66,6 +68,7 @@ impl Response {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn contains(&self, s: &str) -> bool {
         match self {
             Self::Full { body, .. } => String::from_utf8_lossy(body).contains(s),

@@ -1,15 +1,15 @@
 //! Agent tools for Multi-Agent Swarm Orchestration (Direction C).
-//! 
-//! This module provides the high-level "Swarm Refactor" tool that agents use 
+//!
+//! This module provides the high-level "Swarm Refactor" tool that agents use
 //! to delegate large-scale repository-level goals to parallel sub-agents.
 
-use std::path::Path;
-use crate::swarm::{SwarmRefactorInput, plan_swarm_refactor};
 use crate::indexer::CodebaseIndexer;
+use crate::swarm::{plan_swarm_refactor, SwarmRefactorInput};
+use std::path::Path;
 
 /// Execute a swarm-based development run.
-/// 
-/// This tool takes a high-level goal and a list of target files, then 
+///
+/// This tool takes a high-level goal and a list of target files, then
 /// decomposes the work into a parallel Task DAG for execution.
 pub fn execute_swarm_refactor(
     input: &SwarmRefactorInput,
@@ -31,12 +31,12 @@ pub fn execute_swarm_refactor(
 
     // 4. Return the plan to the daemon for orchestration
     // The daemon will recognize this JSON structure and spin up the Orchestrator.
-    serde_json::to_string_pretty(&plan)
-        .map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())
 }
 
 /// Returns the tool specifications for Swarm tools.
-#[must_use] pub fn swarm_tool_specs() -> Vec<tools::ToolSpec> {
+#[must_use]
+pub fn swarm_tool_specs() -> Vec<tools::ToolSpec> {
     vec![
         tools::ToolSpec {
             name: "swarm_refactor",

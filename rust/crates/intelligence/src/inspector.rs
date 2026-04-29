@@ -24,11 +24,15 @@ pub struct VisualInspector {
 }
 
 impl VisualInspector {
+    #[must_use]
     pub fn new(model: &str) -> Self {
-        Self { model: model.to_string() }
+        Self {
+            model: model.to_string(),
+        }
     }
 
     /// Audit a screenshot against a design intent.
+    #[must_use]
     pub fn audit(&self, live_screenshot: &str, design_intent: &str) -> VisualAudit {
         // Mock multi-modal reasoning logic
         // In a real implementation, this would call the LLM with images
@@ -48,7 +52,14 @@ impl VisualInspector {
         };
 
         VisualAudit {
-            id: format!("audit-{}", uuid::Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+            id: format!(
+                "audit-{}",
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect::<String>()
+            ),
             similarity_score: similarity,
             layout_shifts: vec![],
             design_violations: violations,
@@ -61,13 +72,20 @@ impl VisualInspector {
 pub struct IntentMatcher;
 
 impl IntentMatcher {
+    #[must_use]
     pub fn extract_visual_goals(prompt: &str) -> String {
         // Extract visual requirements from the agent prompt
         let mut goals = Vec::new();
-        if prompt.contains("glassmorphism") { goals.push("glassmorphism"); }
-        if prompt.contains("premium") { goals.push("premium aesthetics"); }
-        if prompt.contains("dark mode") { goals.push("dark mode"); }
-        
+        if prompt.contains("glassmorphism") {
+            goals.push("glassmorphism");
+        }
+        if prompt.contains("premium") {
+            goals.push("premium aesthetics");
+        }
+        if prompt.contains("dark mode") {
+            goals.push("dark mode");
+        }
+
         goals.join(", ")
     }
 }

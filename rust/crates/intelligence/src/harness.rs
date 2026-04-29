@@ -1,6 +1,6 @@
+use crate::planner::Plan;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use crate::planner::Plan;
 
 /// The main agentic loop lifecycle stages as documented in Claude Code.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,6 +16,7 @@ pub enum HarnessStep {
 }
 
 impl HarnessStep {
+    #[must_use]
     pub fn is_read_only(&self) -> bool {
         match self {
             HarnessStep::GatherContext | HarnessStep::Plan => true,
@@ -52,8 +53,8 @@ pub struct SubagentInstance {
     pub summary: Option<String>,
 }
 
-use std::sync::Arc;
 use backend::BackendRegistry;
+use std::sync::Arc;
 
 /// The Agentic Harness orchestrates the core Gather -> Act -> Verify loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +67,7 @@ pub struct AgenticHarness {
 }
 
 impl AgenticHarness {
+    #[must_use]
     pub fn new(registry: Arc<BackendRegistry>) -> Self {
         Self {
             current_step: HarnessStep::GatherContext,

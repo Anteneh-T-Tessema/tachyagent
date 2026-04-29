@@ -30,7 +30,9 @@ impl std::fmt::Display for EmbeddingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OllamaUnreachable => write!(f, "Ollama not reachable at {DEFAULT_BASE_URL}"),
-            Self::ModelNotFound(m) => write!(f, "embedding model '{m}' not found — run: ollama pull {m}"),
+            Self::ModelNotFound(m) => {
+                write!(f, "embedding model '{m}' not found — run: ollama pull {m}")
+            }
             Self::BadResponse(r) => write!(f, "unexpected Ollama response: {r}"),
             Self::Http(e) => write!(f, "HTTP error: {e}"),
         }
@@ -76,13 +78,19 @@ impl EmbeddingClient {
 
     /// Try to create a client, checking Ollama reachability first.
     /// Returns `None` if Ollama is not running — caller falls back to keyword scoring.
-    #[must_use] pub fn try_new() -> Option<Self> {
+    #[must_use]
+    pub fn try_new() -> Option<Self> {
         let client = Self::new();
-        if client.is_reachable() { Some(client) } else { None }
+        if client.is_reachable() {
+            Some(client)
+        } else {
+            None
+        }
     }
 
     /// Probe the Ollama health endpoint.
-    #[must_use] pub fn is_reachable(&self) -> bool {
+    #[must_use]
+    pub fn is_reachable(&self) -> bool {
         let url = format!("{}/api/tags", self.base_url);
         self.http
             .head(&url)
@@ -99,7 +107,11 @@ impl EmbeddingClient {
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         // Sanitize input — strip newlines, limit length to avoid Ollama OOM
         let text = text.replace('\n', " ");
-        let text = if text.len() > 2048 { &text[..2048] } else { &text };
+        let text = if text.len() > 2048 {
+            &text[..2048]
+        } else {
+            &text
+        };
 
         // Build JSON payload
         let payload = serde_json::json!({
@@ -109,7 +121,8 @@ impl EmbeddingClient {
 
         // Call Ollama via reqwest (blocking)
         let url = format!("{}/api/embeddings", self.base_url);
-        let response = self.http
+        let response = self
+            .http
             .post(&url)
             .json(&payload)
             .send()
@@ -119,7 +132,8 @@ impl EmbeddingClient {
             return Err(EmbeddingError::OllamaUnreachable);
         }
 
-        let parsed: serde_json::Value = response.json()
+        let parsed: serde_json::Value = response
+            .json()
             .map_err(|e| EmbeddingError::BadResponse(format!("JSON parse error: {e}")))?;
 
         // Ollama returns {"error": "..."} when the model is missing
@@ -139,7 +153,9 @@ impl EmbeddingClient {
             .collect::<Vec<f32>>();
 
         if embedding.is_empty() {
-            return Err(EmbeddingError::BadResponse("empty embedding vector".to_string()));
+            return Err(EmbeddingError::BadResponse(
+                "empty embedding vector".to_string(),
+            ));
         }
 
         Ok(embedding)
@@ -148,13 +164,12 @@ impl EmbeddingClient {
     /// Embed a batch of texts. Returns only the successful embeddings paired
     /// with their original index. Failures are silently skipped so a single
     /// bad file doesn't abort the whole index build.
-    #[must_use] pub fn embed_batch(&self, texts: &[&str]) -> Vec<(usize, Vec<f32>)> {
+    #[must_use]
+    pub fn embed_batch(&self, texts: &[&str]) -> Vec<(usize, Vec<f32>)> {
         texts
             .iter()
             .enumerate()
-            .filter_map(|(i, text)| {
-                self.embed(text).ok().map(|emb| (i, emb))
-            })
+            .filter_map(|(i, text)| self.embed(text).ok().map(|emb| (i, emb)))
             .collect()
     }
 }
@@ -208,14 +223,14 @@ mod tests {
     fn cosine_similarity_zero_vector() {
         let zero = vec![0.0f32, 0.0];
         let v = vec![1.0f32, 0.0];
-        assert_eq!(cosine_similarity(&zero, &v), 0.0);
+        assert!(cosine_similarity(&zero, &v).abs() < f32::EPSILON);
     }
 
     #[test]
     fn cosine_similarity_mismatched_lengths() {
         let a = vec![1.0f32, 0.0];
         let b = vec![1.0f32];
-        assert_eq!(cosine_similarity(&a, &b), 0.0);
+        assert!(cosine_similarity(&a, &b).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -223,6 +238,9 @@ mod tests {
         let a = vec![1.0f32, 1.0, 0.0];
         let b = vec![1.0f32, 0.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim > 0.5 && sim < 1.0, "expected partial similarity, got {sim}");
+        assert!(
+            sim > 0.5 && sim < 1.0,
+            "expected partial similarity, got {sim}"
+        );
     }
 }

@@ -121,9 +121,11 @@ fn urlencod(s: &str) -> String {
 fn curl_get(url: &str, timeout_secs: u64) -> Result<String, String> {
     let output = Command::new("curl")
         .args([
-            "-sL",                          // silent, follow redirects
-            "--max-time", &timeout_secs.to_string(),
-            "-H", "User-Agent: TachyAgent/0.1 (https://github.com/Anteneh-T-Tessema/tachyagent)",
+            "-sL", // silent, follow redirects
+            "--max-time",
+            &timeout_secs.to_string(),
+            "-H",
+            "User-Agent: TachyAgent/0.1 (https://github.com/Anteneh-T-Tessema/tachyagent)",
             url,
         ])
         .output()
@@ -153,8 +155,18 @@ fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
         };
 
         // Extract href
-        let href_start = if let Some(p) = html[..link_pos].rfind("href=\"") { p + 6 } else { pos = link_pos + link_marker.len(); continue; };
-        let href_end = if let Some(p) = html[href_start..].find('"') { href_start + p } else { pos = link_pos + link_marker.len(); continue; };
+        let href_start = if let Some(p) = html[..link_pos].rfind("href=\"") {
+            p + 6
+        } else {
+            pos = link_pos + link_marker.len();
+            continue;
+        };
+        let href_end = if let Some(p) = html[href_start..].find('"') {
+            href_start + p
+        } else {
+            pos = link_pos + link_marker.len();
+            continue;
+        };
         let url = html[href_start..href_end].to_string();
 
         // Skip DDG internal links
@@ -164,15 +176,27 @@ fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
         }
 
         // Extract link text (title)
-        let tag_end = if let Some(p) = html[link_pos..].find('>') { link_pos + p + 1 } else { pos = link_pos + link_marker.len(); continue; };
-        let close_a = if let Some(p) = html[tag_end..].find("</a>") { tag_end + p } else { pos = link_pos + link_marker.len(); continue; };
+        let tag_end = if let Some(p) = html[link_pos..].find('>') {
+            link_pos + p + 1
+        } else {
+            pos = link_pos + link_marker.len();
+            continue;
+        };
+        let close_a = if let Some(p) = html[tag_end..].find("</a>") {
+            tag_end + p
+        } else {
+            pos = link_pos + link_marker.len();
+            continue;
+        };
         let title = strip_html(&html[tag_end..close_a]).trim().to_string();
 
         // Extract snippet — look for the next <td class="result-snippet">
         let snippet_marker = "result-snippet";
         let snippet = if let Some(sp) = html[close_a..].find(snippet_marker) {
             let snippet_start = close_a + sp;
-            let td_end = html[snippet_start..].find('>').map_or(snippet_start, |p| snippet_start + p + 1);
+            let td_end = html[snippet_start..]
+                .find('>')
+                .map_or(snippet_start, |p| snippet_start + p + 1);
             let td_close = html[td_end..].find("</td>").map_or(td_end, |p| td_end + p);
             strip_html(&html[td_end..td_close]).trim().to_string()
         } else {
@@ -180,7 +204,11 @@ fn parse_ddg_lite(html: &str, max_results: usize) -> Vec<SearchResult> {
         };
 
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
 
         pos = close_a;
@@ -203,14 +231,21 @@ fn strip_html(html: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         if !in_tag && i + 7 < lower_chars.len() {
-            let ahead: String = lower_chars[i..i+7].iter().collect();
-            if ahead == "<script" { in_script = true; }
-            if ahead == "<style " || (i + 6 < lower_chars.len() && lower_chars[i..i+6].iter().collect::<String>() == "<style") {
+            let ahead: String = lower_chars[i..i + 7].iter().collect();
+            if ahead == "<script" {
+                in_script = true;
+            }
+            if ahead == "<style "
+                || (i + 6 < lower_chars.len()
+                    && lower_chars[i..i + 6].iter().collect::<String>() == "<style")
+            {
                 in_style = true;
             }
         }
         if in_script {
-            if i + 9 <= lower_chars.len() && lower_chars[i..i+9].iter().collect::<String>() == "</script>" {
+            if i + 9 <= lower_chars.len()
+                && lower_chars[i..i + 9].iter().collect::<String>() == "</script>"
+            {
                 in_script = false;
                 i += 9;
                 continue;
@@ -219,7 +254,9 @@ fn strip_html(html: &str) -> String {
             continue;
         }
         if in_style {
-            if i + 8 <= lower_chars.len() && lower_chars[i..i+8].iter().collect::<String>() == "</style>" {
+            if i + 8 <= lower_chars.len()
+                && lower_chars[i..i + 8].iter().collect::<String>() == "</style>"
+            {
                 in_style = false;
                 i += 8;
                 continue;
@@ -231,7 +268,7 @@ fn strip_html(html: &str) -> String {
             in_tag = true;
             // Add space for block elements
             if i + 1 < chars.len() {
-                let next = lower_chars[i+1];
+                let next = lower_chars[i + 1];
                 if matches!(next, 'p' | 'd' | 'h' | 'l' | 'b' | 't') {
                     out.push(' ');
                 }
@@ -246,11 +283,11 @@ fn strip_html(html: &str) -> String {
 
     // Decode common HTML entities
     out.replace("&amp;", "&")
-       .replace("&lt;", "<")
-       .replace("&gt;", ">")
-       .replace("&quot;", "\"")
-       .replace("&#39;", "'")
-       .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
 }
 
 /// Collapse multiple whitespace characters into single spaces.
@@ -308,7 +345,10 @@ mod tests {
 
     #[test]
     fn web_fetch_rejects_bad_urls() {
-        let input = WebFetchInput { url: "ftp://bad".to_string(), max_length: None };
+        let input = WebFetchInput {
+            url: "ftp://bad".to_string(),
+            max_length: None,
+        };
         let err = web_fetch(&input).unwrap_err();
         assert!(err.contains("http"));
     }

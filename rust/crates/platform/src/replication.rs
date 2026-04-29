@@ -18,12 +18,22 @@ impl DaemonSpawner {
     pub fn spawn_instance(&self, node_id: &str, target_addr: &str) -> Result<SwarmNode, String> {
         // Mock autonomous deployment logic
         // In a real scenario, this would use SSH or a container orchestration API
-        
+
         Ok(SwarmNode {
-            id: format!("daemon-{}", uuid::Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+            id: format!(
+                "daemon-{node_id}-{}",
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect::<String>()
+            ),
             address: target_addr.to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            last_seen: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            last_seen: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             load_factor: 0.0,
         })
     }
@@ -44,11 +54,16 @@ pub struct HealthMonitor;
 
 impl HealthMonitor {
     /// Detect offline nodes and trigger replication if necessary.
+    #[must_use]
     pub fn monitor_swarm(nodes: &[SwarmNode]) -> Vec<String> {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let timeout = 300; // 5 minutes
 
-        nodes.iter()
+        nodes
+            .iter()
             .filter(|n| now - n.last_seen > timeout)
             .map(|n| n.id.clone())
             .collect()

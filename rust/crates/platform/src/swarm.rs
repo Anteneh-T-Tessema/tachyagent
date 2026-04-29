@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use crate::crypto::EncryptedPayload;
 
 /// Information about a peer node in the sovereign swarm.
 #[derive(Debug, Clone, Serialize, Deserialize)]

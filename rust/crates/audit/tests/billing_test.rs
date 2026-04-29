@@ -11,6 +11,7 @@ use audit::{
     AuditLogger, BillingError, MeteringService, StripeBillingConnector, UsageEvent, UsageEventType,
     billing::{BillingBackend, SubscriptionInfo},
 };
+use audit::cost_model::CostModelRegistry;
 
 // ---------------------------------------------------------------------------
 // Mock billing backend
@@ -87,7 +88,7 @@ fn make_event(user_id: &str, input: u64, output: u64, tools: u32, ts: u64) -> Us
 #[test]
 fn flush_period_reports_correct_totals() {
     // Feature: product-hardening-v3, Property 4: Billing aggregation reports correct totals
-    let mut metering = MeteringService::new(AuditLogger::new());
+    let mut metering = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
 
     // Record 3 events: (100+50) + (200+100) + (300+150) = 150 + 300 + 450 = 900
     metering.record_event(make_event("user-a", 100, 50, 0, 1)).unwrap();
@@ -121,7 +122,7 @@ proptest! {
             1..8usize,
         )
     ) {
-        let mut metering = MeteringService::new(AuditLogger::new());
+        let mut metering = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
 
         let mut expected_tokens = 0u64;
         for (i, (input, output, tools)) in events.iter().enumerate() {
@@ -148,7 +149,7 @@ proptest! {
         )
     ) {
         // Feature: product-hardening-v3, Property 4: Billing aggregation reports correct totals
-        let mut metering = MeteringService::new(AuditLogger::new());
+        let mut metering = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
 
         for (i, (input, output, tools)) in events.iter().enumerate() {
             metering.record_event(make_event("unmapped-user", *input, *output, *tools, i as u64 + 1)).unwrap();

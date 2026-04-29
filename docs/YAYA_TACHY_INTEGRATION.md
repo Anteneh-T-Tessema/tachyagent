@@ -4,7 +4,7 @@
 
 This document defines the cleanest integration model between:
 
-- `Tachy / Claw-Code` as the execution and governance plane
+- `TachyCode / Tachy` as the execution and governance plane
 - `Yaya / FinetuningLLMs` as the expert intelligence plane
 
 The goal is not to merge the two systems into one monolith. The goal is to compose them into a sovereign AI stack where each product remains strong in its natural domain.

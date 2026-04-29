@@ -30,6 +30,7 @@ pub(super) fn run_with_planning(
     registry: &BackendRegistry,
     file_locks: Option<runtime::FileLockManager>,
     daemon_state: Option<Arc<Mutex<crate::state::DaemonState>>>,
+    agent_identity: Option<platform::crypto::AgentIdentity>,
 ) -> AgentRunResult {
     let model = &config.template.model;
 
@@ -125,6 +126,18 @@ pub(super) fn run_with_planning(
             .with_agent(agent_id),
         );
 
+        // Snapshot every expected file before the step so we can roll back if
+        // the step fails and leaves the workspace in a broken state.
+        let step_snapshots: Vec<(std::path::PathBuf, Option<String>)> = step
+            .expected_files
+            .iter()
+            .map(|f| {
+                let path = workspace_root.join(f);
+                let content = std::fs::read_to_string(&path).ok();
+                (path, content)
+            })
+            .collect();
+
         let step_system_prompt = build_step_system_prompt(
             config, step, index, workspace_root, intelligence_config, model,
         );
@@ -153,8 +166,12 @@ pub(super) fn run_with_planning(
             audit_logger: Some(Arc::new(AuditLogger::new())),
             intelligence_config: Some(intelligence_config.clone()),
             file_locks: file_locks.clone(),
-            agent_id: format!("{agent_id}-step{}", step.number),
+            agent_id: agent_id.to_string(),
             daemon_state: daemon_state.clone(),
+            agent_identity: agent_identity.clone(),
+            is_simulation: false,
+            sentinel: None,
+            inspector: None,
         };
 
         let permission_policy = build_permission_policy(&config.template.allowed_tools);
@@ -200,10 +217,45 @@ pub(super) fn run_with_planning(
 
                         match check {
                             intelligence::CycleCheckResult::Passed => {
-                                audit_logger.log(
-                                    &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                        "diagnostics clean, tests passed").with_agent(agent_id),
-                                );
+                                // Visual check (Phase 26)
+                                if let (Some(url), Some(baseline)) = (&step.url, &step.visual_baseline) {
+                                    if let Ok(report) = intelligence::EditTestFix::run_visual_check(url, baseline, workspace_root) {
+                                        let diff_summary = report.diff_report.as_deref().unwrap_or("No diff summary available");
+                                        if diff_summary.contains("FAILURE") {
+                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::VisualSnapshot,
+                                                format!("visual failure at {url}: {}", diff_summary))
+                                                .with_severity(audit::AuditSeverity::Warning)
+                                                .with_agent(agent_id)
+                                                .with_visual_anchor(&report.screenshot_path)
+                                                .with_visual_metadata(serde_json::json!({
+                                                    "url": url,
+                                                    "baseline": baseline,
+                                                    "diff": diff_summary,
+                                                })));
+                                            
+                                            let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &intelligence::TestResult {
+                                                exit_code: 1,
+                                                stdout: String::new(),
+                                                stderr: format!("Visual Regression detected: {}", diff_summary),
+                                            }, &step.expected_files, Some(&report));
+                                            
+                                            if let Ok(s) = step_runtime.run_turn(&fix, None) {
+                                                total_iterations += s.iterations;
+                                                total_tool_invocations += s.tool_results.len() as u32;
+                                            }
+                                        } else {
+                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::VisualSnapshot,
+                                                format!("visual verification passed for {url}"))
+                                                .with_agent(agent_id)
+                                                .with_visual_anchor(&report.screenshot_path)
+                                                .with_visual_metadata(serde_json::json!({
+                                                    "url": url,
+                                                    "baseline": baseline,
+                                                    "diff": diff_summary,
+                                                })));
+                                        }
+                                    }
+                                }
                             }
                             intelligence::CycleCheckResult::DiagnosticErrors(diag_result) => {
                                 audit_logger.log(
@@ -229,7 +281,7 @@ pub(super) fn run_with_planning(
                                             break;
                                         }
                                         intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                            let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files);
+                                            let fix = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files, None);
                                             if let Ok(s) = step_runtime.run_turn(&fix, None) {
                                                 total_iterations += s.iterations;
                                                 total_tool_invocations += s.tool_results.len() as u32;
@@ -241,9 +293,9 @@ pub(super) fn run_with_planning(
                                 }
                             }
                             intelligence::CycleCheckResult::TestFailure(test_result) => {
-                                let fix_prompt = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files);
-                                audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
-                                    "tests failed, attempting fix").with_agent(agent_id));
+                                let fix_prompt = intelligence::EditTestFix::build_fix_prompt(&targeted, &test_result, &step.expected_files, None);
+                                audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SelfRepair,
+                                    format!("tests failed for step {}, attempting autonomous repair", step.number)).with_agent(agent_id));
                                 for retry in 0..intelligence_config.edit_test_fix.max_retries {
                                     if let Ok(s) = step_runtime.run_turn(&fix_prompt, None) {
                                         total_iterations += s.iterations;
@@ -254,13 +306,58 @@ pub(super) fn run_with_planning(
                                         intelligence_config.edit_test_fix.test_timeout_secs, lsp_enabled,
                                     );
                                     if matches!(recheck, intelligence::CycleCheckResult::Passed) {
-                                        audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                                            format!("tests fixed after {} retries", retry + 1)).with_agent(agent_id));
-                                        break;
+                                        // Phase 27: Swarm Governance Review
+                                        let consensus = intelligence::ConsensusEngine::review_repair(
+                                            &registry,
+                                            "Autonomous Repair Delta",
+                                            "Tests Passed",
+                                            None,
+                                        );
+
+                                        if consensus.is_approved {
+                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::ConsensusSeal,
+                                                format!("autonomous repair approved (score: {:.2})", consensus.aggregate_score))
+                                                .with_agent(agent_id)
+                                                .with_consensus_report(serde_json::to_value(&consensus).unwrap_or_default()));
+                                            
+                                            // Phase 29: Broadcast Consensus Event
+                                            if let Some(ref ds) = daemon_state {
+                                                let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                                let event = crate::internal_bus::MissionEvent::ConsensusFormed {
+                                                    agent_id: agent_id.to_string(),
+                                                    report: consensus.clone(),
+                                                };
+                                                let _ = s.swarm.mission_control.broadcast(event.clone());
+                                                {
+                                                    let mut feed = s.swarm.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                                    feed.push_front(event.clone());
+                                                    if feed.len() > 100 { feed.pop_back(); }
+                                                }
+                                                s.publish_event("mission_event", serde_json::to_value(event).unwrap_or_default());
+                                            }
+                                            break;
+                                        } else {
+                                            audit_logger.log(&AuditEvent::new(&config.session_id, AuditEventKind::GovernanceViolation,
+                                                format!("repair VETOED by consensus (score: {:.2})", consensus.aggregate_score))
+                                                .with_severity(audit::AuditSeverity::Warning)
+                                                .with_agent(agent_id)
+                                                .with_consensus_report(serde_json::to_value(&consensus).unwrap_or_default()));
+                                            
+                                            // Phase 29: Broadcast Veto
+                                            if let Some(ref ds) = daemon_state {
+                                                let s = ds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                                let event = crate::internal_bus::MissionEvent::ConsensusFormed {
+                                                    agent_id: agent_id.to_string(),
+                                                    report: consensus.clone(),
+                                                };
+                                                let _ = s.swarm.mission_control.broadcast(event.clone());
+                                                s.publish_event("mission_event", serde_json::to_value(event).unwrap_or_default());
+                                            }
+                                        }
                                     }
                                 }
                             }
-                            intelligence::CycleCheckResult::TestExecutionError => {}
+                            _ => {}
                         }
                     }
                 }
@@ -276,13 +373,30 @@ pub(super) fn run_with_planning(
                     }
             }
             Err(error) => {
+                // Roll back every file this step was expected to touch so the
+                // workspace is not left in a broken mid-plan state.
+                let mut rolled_back = 0usize;
+                for (path, maybe_original) in &step_snapshots {
+                    match maybe_original {
+                        Some(original) => {
+                            if std::fs::write(path, original).is_ok() {
+                                rolled_back += 1;
+                            }
+                        }
+                        None => {
+                            // File did not exist before this step — remove it.
+                            let _ = std::fs::remove_file(path);
+                            rolled_back += 1;
+                        }
+                    }
+                }
                 audit_logger.log(
                     &AuditEvent::new(&config.session_id, AuditEventKind::SessionEnd,
-                        format!("step {} failed: {error}", step.number))
+                        format!("step {} failed: {error} — rolled back {rolled_back} file(s)", step.number))
                         .with_severity(AuditSeverity::Warning)
                         .with_agent(agent_id),
                 );
-                all_results.push(format!("Step {} FAILED: {}", step.number, error));
+                all_results.push(format!("Step {} FAILED (rolled back {rolled_back} files): {}", step.number, error));
                 break;
             }
         }

@@ -28,6 +28,11 @@ pub struct AgentTemplate {
     /// Whether to inject local workspace intelligence such as codebase context.
     #[serde(default = "default_true")]
     pub use_workspace_context: bool,
+    /// Optional Expert Adapter id (from the AdapterRegistry) to use when this
+    /// template runs.  If set and the adapter is `Active`, its model overrides
+    /// the `model` field at dispatch time.
+    #[serde(default)]
+    pub preferred_adapter: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -59,6 +64,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -88,6 +94,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -117,6 +124,7 @@ impl AgentTemplate {
             requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -151,6 +159,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: false,
             use_workspace_context: false,
+            preferred_adapter: None,
         }
     }
 
@@ -184,6 +193,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: false,
             use_workspace_context: false,
+            preferred_adapter: None,
         }
     }
 
@@ -228,6 +238,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: false, // Chat uses simple execution, not planning
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -235,26 +246,49 @@ impl AgentTemplate {
     pub fn test_runner() -> Self {
         Self {
             name: "test-runner".to_string(),
-            description: "Runs tests, analyzes failures, and suggests fixes".to_string(),
-            system_prompt: concat!(
-                "You are a QA engineer. Your job is to:\n",
-                "1. Run the project's test suite\n",
-                "2. Analyze any failures\n",
-                "3. Read the failing code to understand the root cause\n",
-                "4. Suggest specific fixes\n",
-                "Always run tests first, then investigate failures."
-            ).to_string(),
+            description: "Runs tests, analyzes failures, and applies autonomous fixes".to_string(),
+            system_prompt: "You are the Tachy TestEngineer. Your goal is to ensure the codebase remains in a green state. \
+                            Run tests using the detected test command. If tests fail, analyze the logs, \
+                                identify the root cause, and apply specific code fixes to resolve the issue. \
+                                Verify your fixes by re-running the tests.".to_string(),
             allowed_tools: vec![
                 "list_directory".to_string(),
                 "bash".to_string(),
                 "read_file".to_string(),
+                "edit_file".to_string(),
+                "write_file".to_string(),
                 "grep_search".to_string(),
             ],
-            model: "gemma4:26b".to_string(),
-            max_iterations: 10,
-            requires_approval: false,
+            model: "qwen2.5-coder:7b".to_string(),
+            max_iterations: 15, // Increased budget for fix-test loop
+            requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
+        }
+    }
+
+    #[must_use]
+    pub fn healer() -> Self {
+        Self {
+            name: "healer".to_string(),
+            description: "Specialized autonomous self-repair agent for complex bug fixing and UI reconciliation".to_string(),
+            system_prompt: "You are the Tachy Healer. Your mission is to fix broken systems autonomously. \
+                            You have access to both codebase tools and the Visual Observer. \
+                            When a test or visual verification fails, perform a deep-dive analysis, \
+                            use visual snapshots to understand UI regressions, and apply precise repairs. \
+                            Your goal is a 'Passed' state with zero regressions.".to_string(),
+            allowed_tools: vec![
+                "bash".to_string(), "read_file".to_string(), "edit_file".to_string(), "write_file".to_string(),
+                "capture_screenshot".to_string(), "get_accessibility_tree".to_string(), "visual_diff".to_string(),
+                "list_directory".to_string(), "grep_search".to_string()
+            ],
+            model: "qwen2.5-coder:14b".to_string(), // Stronger model for repair
+            max_iterations: 20, // Higher budget for repair cycles
+            requires_approval: true,
+            use_planning: true,
+            use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -291,6 +325,7 @@ impl AgentTemplate {
             requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -327,6 +362,7 @@ impl AgentTemplate {
             requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -364,6 +400,7 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -400,6 +437,7 @@ impl AgentTemplate {
             requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -440,6 +478,7 @@ impl AgentTemplate {
             requires_approval: true,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 
@@ -480,6 +519,71 @@ impl AgentTemplate {
             requires_approval: false,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
+        }
+    }
+
+    /// High-speed discovery agent for mapping codebases.
+    #[must_use]
+    pub fn scout() -> Self {
+        Self {
+            name: "scout".to_string(),
+            description: "High-speed discovery agent for mapping codebases and finding relevant files".to_string(),
+            system_prompt: concat!(
+                "You are a Scout. Your ONLY job is to explore the codebase and find files relevant to a task.\n\n",
+                "APPROACH:\n",
+                "1. Start by listing the root directory to understand the project structure.\n",
+                "2. Use grep_search and glob_search to find keywords related to the user's goal.\n",
+                "3. Read the first few lines of files to confirm relevance.\n",
+                "4. Build a list of 'Relevant Files' with a brief note on why each is included.\n\n",
+                "RULES:\n",
+                "- Do NOT attempt to fix, refactor, or edit code.\n",
+                "- Do NOT run tests.\n",
+                "- Your goal is speed and coverage. Stop as soon as you have a clear map of the target area.\n",
+                "- Provide your final output as a structured list of files and their roles."
+            ).to_string(),
+            allowed_tools: vec![
+                "list_directory".to_string(),
+                "read_file".to_string(),
+                "grep_search".to_string(),
+                "glob_search".to_string(),
+            ],
+            model: "llama3.2:1b".to_string(), // Ultra-fast model
+            max_iterations: 8,
+            requires_approval: false,
+            use_planning: false,
+            use_workspace_context: true,
+            preferred_adapter: None,
+        }
+    }
+
+    #[must_use]
+    pub fn reconciliation_expert() -> Self {
+        Self {
+            name: "reconciliation-expert".to_string(),
+            description: "Performs autonomous bank reconciliation and financial audit".to_string(),
+            system_prompt: concat!(
+                "You are an autonomous CFO. Your mission is to reconcile bank transactions with internal records.\n",
+                "1. Fetch transactions from bank feeds\n",
+                "2. Match transactions to invoices, expenses, or payroll records\n",
+                "3. Identify discrepancies and missing entries\n",
+                "4. Generate a cryptographically verifiable reconciliation report\n",
+                "Be precise. Every match must be mathematically justified."
+            ).to_string(),
+            allowed_tools: vec![
+                "get_bank_accounts".to_string(),
+                "get_bank_transactions".to_string(),
+                "match_transaction".to_string(),
+                "read_file".to_string(),
+                "write_file".to_string(),
+                "bash".to_string(),
+            ],
+            model: "gemma4:26b".to_string(),
+            max_iterations: 15,
+            requires_approval: true,
+            use_planning: true,
+            use_workspace_context: false,
+            preferred_adapter: None,
         }
     }
 }
@@ -491,6 +595,9 @@ pub struct AgentConfig {
     pub session_id: String,
     pub working_directory: String,
     pub environment: std::collections::BTreeMap<String, String>,
+    /// The team workspace this agent belongs to.
+    #[serde(default)]
+    pub team_id: Option<String>,
 }
 
 /// A running or completed agent instance.
@@ -504,6 +611,9 @@ pub struct AgentInstance {
     pub created_at: String,
     pub completed_at: Option<String>,
     pub result_summary: Option<String>,
+    /// The team workspace this agent belongs to.
+    #[serde(default)]
+    pub team_id: Option<String>,
 }
 
 impl AgentInstance {
@@ -518,6 +628,7 @@ impl AgentInstance {
             created_at: timestamp(),
             completed_at: None,
             result_summary: None,
+            team_id: None,
         }
     }
 
@@ -580,6 +691,7 @@ mod tests {
             session_id: "sess-1".to_string(),
             working_directory: "/tmp/project".to_string(),
             environment: Default::default(),
+            team_id: None,
         };
         let mut agent = AgentInstance::new("agent-1", config);
         assert_eq!(agent.status, AgentStatus::Idle);
@@ -666,3 +778,4 @@ mod tests {
         assert_eq!(prompts.len(), unique.len(), "templates share identical system prompts");
     }
 }
+

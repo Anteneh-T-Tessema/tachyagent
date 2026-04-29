@@ -1,12 +1,14 @@
 //! Protocol types, traits, and errors shared across the conversation subsystem.
 
 use std::fmt::{Display, Formatter};
+use serde::{Deserialize, Serialize};
 
 use crate::session::ConversationMessage;
 use crate::usage::TokenUsage;
 
 /// Constrain the model's output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResponseFormat {
     /// No constraint — free-form text (default).
     Text,
@@ -20,7 +22,7 @@ impl Default for ResponseFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiRequest {
     pub system_prompt: Vec<String>,
     pub messages: Vec<ConversationMessage>,
@@ -29,7 +31,8 @@ pub struct ApiRequest {
     pub format: ResponseFormat,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantEvent {
     TextDelta(String),
     ToolUse {
@@ -41,12 +44,14 @@ pub enum AssistantEvent {
     MessageStop,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
     TextDelta(String),
     ToolUse { id: String, name: String, input: String },
     ToolResult { tool_name: String, output: String, is_error: bool },
     Usage(TokenUsage),
+    SessionCompacted { removed_count: usize, summary: String },
     Finished(TurnSummary),
 }
 
@@ -102,7 +107,7 @@ impl Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnSummary {
     pub assistant_messages: Vec<ConversationMessage>,
     pub tool_results: Vec<ConversationMessage>,

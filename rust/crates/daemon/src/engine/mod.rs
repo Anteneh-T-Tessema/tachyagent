@@ -6,8 +6,13 @@
 //!   executor  — `IntelligentToolExecutor` (tool dispatch, governance, MCP)
 
 mod executor;
+mod optimizer;
 mod planning;
 mod simple;
+mod simulator;
+
+pub use self::optimizer::{EvolutionManager, OptimizationProposal, OptimizationStatus};
+pub use self::simulator::{SimulationResult, SimulatedToolCall, SimulationExecutor, SimulationJudge};
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -64,6 +69,7 @@ impl AgentEngine {
         workspace_root: &Path,
         file_locks: Option<runtime::FileLockManager>,
         daemon_state: Option<Arc<Mutex<crate::state::DaemonState>>>,
+        is_simulation: bool,
     ) -> AgentRunResult {
         let model = &config.template.model;
         let enable_tools = !config.template.allowed_tools.is_empty();
@@ -89,7 +95,7 @@ impl AgentEngine {
         let client = match registry.create_client(model, enable_tools) {
             Ok(c) => c,
             Err(e) => {
-                audit_logger.log(
+                audit_logger.log_signed(
                     &AuditEvent::new(
                         &config.session_id,
                         AuditEventKind::SessionEnd,
@@ -97,16 +103,21 @@ impl AgentEngine {
                     )
                     .with_severity(AuditSeverity::Critical)
                     .with_agent(agent_id),
+                    None,
                 );
                 return AgentRunResult {
                     agent_id: agent_id.to_string(),
                     success: false,
                     iterations: 0,
                     tool_invocations: 0,
-                    summary: format!("failed to create backend for model {model}: {e}"),
+                    summary: format!("backend creation failed: {e}"),
                 };
             }
         };
+
+        // Load Agent Identity for signing
+        let identity_mgr = platform::IdentityManager::new(&workspace_root.join(".tachy"));
+        let agent_identity = identity_mgr.get_or_create_identity(agent_id).ok();
 
         let backend = backend::DynBackend::new(client);
 
@@ -116,24 +127,26 @@ impl AgentEngine {
         let index: Option<CodebaseIndex> = if intelligence_config.indexing_enabled && use_workspace_context {
             match load_or_build_index(workspace_root, &intelligence_config.indexer) {
                 Ok(idx) => {
-                    audit_logger.log(
+                    audit_logger.log_signed(
                         &AuditEvent::new(
                             &config.session_id,
                             AuditEventKind::SessionStart,
                             format!("indexed {} files", idx.project.total_files),
                         )
                         .with_agent(agent_id),
+                        agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
                     );
                     Some(idx)
                 }
                 Err(e) => {
-                    audit_logger.log(
+                    audit_logger.log_signed(
                         &AuditEvent::new(
                             &config.session_id,
                             AuditEventKind::SessionStart,
                             format!("indexing failed (continuing without): {e}"),
                         )
                         .with_agent(agent_id),
+                        agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
                     );
                     None
                 }
@@ -154,7 +167,7 @@ impl AgentEngine {
                 ) {
                     Ok(injection) => {
                         let rendered = ContextSelector::render_injection(&injection, idx);
-                        audit_logger.log(
+                        audit_logger.log_signed(
                             &AuditEvent::new(
                                 &config.session_id,
                                 AuditEventKind::SessionStart,
@@ -166,6 +179,7 @@ impl AgentEngine {
                                 ),
                             )
                             .with_agent(agent_id),
+                            agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
                         );
                         Some(rendered)
                     }
@@ -185,15 +199,21 @@ impl AgentEngine {
             context_text.as_deref(),
         );
 
+        // --- Intelligence: Inject Project DNA (TACHY.md) ---
+        let dna_manager = intelligence::project_dna::ProjectDnaManager::new(workspace_root);
+        let dna_context = dna_manager.as_system_context();
+        system_prompt.push(dna_context);
+
         // --- Intelligence: Inject persistent memory ---
         let tachy_dir = workspace_root.join(".tachy");
         let memory = intelligence::AgentMemory::load(&tachy_dir);
         if let Some(memory_context) = memory.as_system_context() {
             system_prompt.push(memory_context);
-            audit_logger.log(
+            audit_logger.log_signed(
                 &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
                     format!("memory injected: {} entries", memory.entries().len()))
                     .with_agent(agent_id),
+                agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
             );
         }
 
@@ -229,10 +249,11 @@ impl AgentEngine {
                         }
                     }
                     system_prompt.push(dep_ctx);
-                    audit_logger.log(
+                    audit_logger.log_signed(
                         &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
                             format!("dep graph injected: {} files referenced", mentioned.len()))
                             .with_agent(agent_id),
+                        agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
                     );
                 }
             }
@@ -241,10 +262,11 @@ impl AgentEngine {
         // --- Load custom tools ---
         let custom_tools = tools::CustomToolRegistry::load(&tachy_dir);
         if !custom_tools.tools().is_empty() {
-            audit_logger.log(
+            audit_logger.log_signed(
                 &AuditEvent::new(&config.session_id, AuditEventKind::SessionStart,
                     format!("custom tools loaded: {}", custom_tools.tools().len()))
                     .with_agent(agent_id),
+                agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
             );
         }
 
@@ -272,6 +294,11 @@ impl AgentEngine {
                 }
             }
         }
+        if intelligence_config.vision_enabled {
+            if !allowed.contains(&"capture_screenshot".to_string()) {
+                allowed.push("capture_screenshot".to_string());
+            }
+        }
         let permission_policy: PermissionPolicy = build_permission_policy(&allowed);
 
         let tool_executor = IntelligentToolExecutor {
@@ -286,10 +313,17 @@ impl AgentEngine {
             file_locks: file_locks.clone(),
             agent_id: agent_id.to_string(),
             daemon_state: daemon_state.clone(),
+            agent_identity: agent_identity.clone(),
+            is_simulation,
+            sentinel: Some(Arc::new(audit::ComplianceSentinel::new())),
+            inspector: Some(Arc::new(intelligence::VisualInspector::new(&config.template.model))),
         };
 
+        let mut session = Session::new();
+        session.team_id = config.team_id.clone();
+
         let mut runtime = ConversationRuntime::new(
-            Session::new(),
+            session,
             backend,
             tool_executor,
             permission_policy,
@@ -298,7 +332,13 @@ impl AgentEngine {
         .with_required_write_file_path(required_write_file_path(prompt, &config.template.allowed_tools))
         .with_max_iterations(config.template.max_iterations);
 
-        audit_logger.log(
+        if let Some(state_mutex) = &daemon_state {
+            let s = state_mutex.lock().unwrap();
+            runtime = runtime.with_semantic_cache(s.semantic_cache.clone())
+                             .with_embedder(s.embedding_client.clone());
+        }
+
+        audit_logger.log_signed(
             &AuditEvent::new(
                 &config.session_id,
                 AuditEventKind::SessionStart,
@@ -306,6 +346,7 @@ impl AgentEngine {
             )
             .with_agent(agent_id)
             .with_model(model),
+            agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
         );
 
         // --- Intelligence: Plan-and-Execute or simple run ---
@@ -314,11 +355,41 @@ impl AgentEngine {
             run_with_planning(
                 agent_id, config, prompt, &mut runtime, intelligence_config,
                 workspace_root, &index, governance, audit_logger.as_ref(), registry,
-                file_locks, daemon_state.clone(),
+                file_locks, daemon_state.clone(), agent_identity.clone(),
             )
         } else {
             run_simple(agent_id, config, prompt, &mut runtime, governance, audit_logger.as_ref())
         };
+
+        // Visual Verification Audit (Phase 36)
+        let mut final_result = result;
+        if final_result.success && intelligence_config.vision_enabled {
+            let inspector = intelligence::VisualInspector::new(&config.template.model);
+            let design_intent = intelligence::IntentMatcher::extract_visual_goals(prompt);
+            
+            // Capture latest screenshot for audit
+            let screenshot_dir = workspace_root.join(".tachy").join("vision");
+            let screenshots = std::fs::read_dir(&screenshot_dir).ok().map(|rd| {
+                rd.filter_map(|e| e.ok()).collect::<Vec<_>>()
+            }).unwrap_or_default();
+            
+            if let Some(latest) = screenshots.iter().max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok()) {
+                if let Ok(content) = std::fs::read_to_string(latest.path()) {
+                    let audit = inspector.audit(&content, &design_intent);
+                    if audit.status == intelligence::VisualStatus::Fail {
+                        final_result.success = false;
+                        final_result.summary = format!("VISUAL VETO: {} Audit Score: {:.2}", audit.design_violations.join(", "), audit.similarity_score);
+                        
+                        audit_logger.log_signed(
+                            &AuditEvent::new(&config.session_id, AuditEventKind::GovernanceViolation, format!("Visual Inspector VETO: {}", final_result.summary))
+                                .with_severity(audit::AuditSeverity::Warning),
+                            agent_identity.as_ref().map(|i| i as &dyn audit::AsymmetricSigner),
+                        );
+                    }
+                }
+            }
+        }
+        let result = final_result;
 
         // ── Fire webhooks on agent completion ────────────────────────────────
         if let Some(ref ds) = daemon_state {
@@ -332,6 +403,25 @@ impl AgentEngine {
                 });
                 let event = if result.success { "agent.completed" } else { "agent.failed" };
                 state.fire_webhooks(event, &payload);
+            }
+        }
+
+        // --- Persist the session for Gold Standard / intelligence extraction ---
+        let session_dir = workspace_root.join(".tachy").join("sessions");
+        if let Ok(_) = std::fs::create_dir_all(&session_dir) {
+            let session_path = session_dir.join(format!("{}.json", config.session_id));
+            let _ = runtime.into_session().save_to_path(&session_path);
+
+            // Trigger check for fine-tuning
+            if intelligence_config.finetune.auto_collect && intelligence::FinetuneDataset::should_trigger(&session_dir, intelligence_config.finetune.threshold) {
+                if let Some(ref ds) = daemon_state {
+                    if let Ok(state) = ds.lock() {
+                        state.publish_event("finetune_suggested", serde_json::json!({
+                            "reason": "Gold Standard threshold reached",
+                            "count": intelligence_config.finetune.threshold,
+                        }));
+                    }
+                }
             }
         }
 

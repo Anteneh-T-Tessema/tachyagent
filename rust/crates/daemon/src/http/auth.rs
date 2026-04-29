@@ -11,53 +11,54 @@ use super::{Response, ErrorResponse};
 // SSO / SAML
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_sso_login(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_sso_login(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !s.sso_manager.is_enabled() {
+    if !s.identity.sso_manager.is_enabled() {
         return Response::json(400, &ErrorResponse { error: "SSO disabled".to_string() });
     }
     Response::Full {
         status: 302,
         content_type: "text/plain".to_string(),
-        body: format!("Redirecting to {}", s.sso_manager.build_login_url(Some("/"))),
+        body: format!("Redirecting to {}", s.identity.sso_manager.build_login_url(Some("/"))).into_bytes(),
+        extra_headers: Vec::new(),
     }
 }
 
-pub(super) fn handle_sso_callback(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_sso_callback(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let saml = body.split("SAMLResponse=").nth(1)
         .and_then(|s| s.split('&').next())
         .unwrap_or("");
-    let mut user_store = std::mem::take(&mut s.user_store);
-    let res = s.sso_manager.process_callback(saml, &mut user_store);
-    s.user_store = user_store;
+    let mut user_store = std::mem::take(&mut s.identity.user_store);
+    let res = s.identity.sso_manager.process_callback(saml, &mut user_store);
+    s.identity.user_store = user_store;
     match res {
         Ok(sess) => Response::json(200, serde_json::json!({ "token": sess.token, "email": sess.email })),
         Err(e) => Response::json(401, &ErrorResponse { error: e }),
     }
 }
 
-pub(super) fn handle_sso_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_sso_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { token: String }
     let req: Req = serde_json::from_str(body).unwrap_or(Req { token: String::new() });
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    s.sso_manager.invalidate_session(&req.token);
+    s.identity.sso_manager.invalidate_session(&req.token);
     Response::json(200, serde_json::json!({ "ok": true }))
 }
 
-pub(super) fn handle_sso_sessions(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_sso_sessions(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    Response::json(200, s.sso_manager.active_sessions())
+    Response::json(200, s.identity.sso_manager.active_sessions())
 }
 
-pub(super) fn handle_sso_config(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_sso_config(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let config: audit::SsoConfig = match serde_json::from_str(body) {
         Ok(c) => c,
         Err(_) => return Response::json(400, &ErrorResponse { error: "invalid config".to_string() }),
     };
-    s.sso_manager = audit::SsoManager::new(config);
+    s.identity.sso_manager = audit::SsoManager::new(config);
     Response::json(200, serde_json::json!({ "status": "updated" }))
 }
 
@@ -66,7 +67,7 @@ pub(super) fn handle_sso_config(body: &str, state: &Arc<Mutex<DaemonState>>) -> 
 // ---------------------------------------------------------------------------
 
 /// GET /api/auth/oauth/{provider}/login → redirect to authorization URL.
-pub(super) fn handle_oauth_login(provider_str: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_oauth_login(provider_str: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     use audit::{OAuthClientConfig, OAuthProvider};
     let provider = match OAuthProvider::from_str(provider_str) {
         Some(p) => p,
@@ -83,13 +84,13 @@ pub(super) fn handle_oauth_login(provider_str: &str, state: &Arc<Mutex<DaemonSta
     };
     let (url, _state_token) = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        s.oauth_manager.authorization_url(&config)
+        s.identity.oauth_manager.authorization_url(&config)
     };
-    Response::Full { status: 302, content_type: "text/plain".to_string(), body: format!("Location: {url}\r\n") }
+    Response::Full { status: 302, content_type: "text/plain".to_string(), body: format!("Location: {url}\r\n").into_bytes(), extra_headers: Vec::new() }
 }
 
 /// GET /api/auth/oauth/{provider}/callback?code=...&state=...
-pub(super) fn handle_oauth_callback(provider_str: &str, query: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_oauth_callback(provider_str: &str, query: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     use audit::{OAuthClientConfig, OAuthProvider};
     let provider = match OAuthProvider::from_str(provider_str) {
         Some(p) => p,
@@ -111,7 +112,7 @@ pub(super) fn handle_oauth_callback(provider_str: &str, query: &str, state: &Arc
     }
     let result = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        s.oauth_manager.handle_callback(&config, &code, &oauth_state)
+        s.identity.oauth_manager.handle_callback(&config, &code, &oauth_state)
     };
     match result {
         Ok(session) => Response::json(200, serde_json::json!({
@@ -127,7 +128,7 @@ pub(super) fn handle_oauth_callback(provider_str: &str, query: &str, state: &Arc
     }
 }
 
-pub(super) fn handle_oauth_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_oauth_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     #[allow(dead_code)]
     struct Req { token: String }
@@ -136,20 +137,20 @@ pub(super) fn handle_oauth_logout(body: &str, state: &Arc<Mutex<DaemonState>>) -
         Err(_) => return Response::json(400, &ErrorResponse { error: "missing token".to_string() }),
     };
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    s.oauth_manager.revoke_session(&req.token);
+    s.identity.oauth_manager.revoke_session(&req.token);
     Response::json(200, serde_json::json!({ "revoked": true }))
 }
 
-pub(super) fn handle_oauth_sessions(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_oauth_sessions(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    Response::json(200, serde_json::json!({ "active_sessions": s.oauth_manager.active_session_count() }))
+    Response::json(200, serde_json::json!({ "active_sessions": s.identity.oauth_manager.active_session_count() }))
 }
 
 // ---------------------------------------------------------------------------
 // License + billing
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_license_status(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_license_status(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let license = audit::LicenseFile::load_or_create(&s.workspace_root.join(".tachy"));
     Response::json(200, serde_json::json!({
@@ -158,15 +159,15 @@ pub(super) fn handle_license_status(state: &Arc<Mutex<DaemonState>>) -> Response
     }))
 }
 
-pub(super) fn handle_billing_status(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_billing_status(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    match &s.billing {
+    match &s.commerce.billing {
         Some(b) => Response::json(200, b.status()),
         None => Response::json(200, serde_json::json!({ "enabled": false })),
     }
 }
 
-pub(super) fn handle_license_activate(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_license_activate(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { key: String, secret: String }
     let req: Req = match serde_json::from_str(body) {
@@ -197,9 +198,9 @@ pub(super) fn handle_license_activate(body: &str, state: &Arc<Mutex<DaemonState>
 // Usage
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_usage(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_usage(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let counters = s.metering.counters();
+    let counters = s.commerce.metering.counters();
     let users: Vec<serde_json::Value> = counters.values().map(|a| serde_json::json!({
         "user_id": a.user_id,
         "team_id": a.team_id,

@@ -11,3 +11,8 @@ rust/.tachy/
 sdk/python/.venv/
 sdk/python/tachy_agent.egg-info/
 *.proptest-regressions
+.claude/
+.port_sessions/
+.tachy/
+.vscode/settings *.json
+rust/scratch/

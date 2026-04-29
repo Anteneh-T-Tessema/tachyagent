@@ -233,7 +233,8 @@
           "200": {
             "description": "Daemon health status"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/models": {
@@ -243,7 +244,8 @@
           "200": {
             "description": "Array of model objects"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/templates": {
@@ -253,7 +255,8 @@
           "200": {
             "description": "Array of template objects"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/agents": {
@@ -263,7 +266,8 @@
           "200": {
             "description": "Array of agent objects"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/agents/{id}": {
@@ -290,7 +294,8 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       },
       "delete": {
         "summary": "Delete an agent by ID",
@@ -315,7 +320,8 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/agents/run": {
@@ -337,7 +343,8 @@
           "400": {
             "description": "Invalid request"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/complete": {
@@ -362,7 +369,8 @@
           "502": {
             "description": "Backend unavailable"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/search": {
@@ -395,7 +403,8 @@
           "400": {
             "description": "Missing query parameter"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/policy": {
@@ -405,7 +414,8 @@
           "200": {
             "description": "PolicyFile JSON"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       },
       "post": {
         "summary": "Update governance policy",
@@ -428,7 +438,8 @@
           "500": {
             "description": "Save failed"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/complete/stream": {
@@ -447,7 +458,8 @@
           "200": {
             "description": "SSE token stream"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/parallel/run": {
@@ -466,7 +478,8 @@
           "202": {
             "description": "Run started"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/parallel/runs": {
@@ -476,7 +489,8 @@
           "200": {
             "description": "Array of runs"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/parallel/runs/{id}": {
@@ -496,7 +510,8 @@
           "200": {
             "description": "Run details"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/parallel/runs/{id}/cancel": {
@@ -519,7 +534,8 @@
           "404": {
             "description": "Run not found"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/pending-approvals": {
@@ -529,7 +545,8 @@
           "200": {
             "description": "Pending patches and agents"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/approve": {
@@ -559,7 +576,8 @@
           "200": {
             "description": "Approval result"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/file-locks": {
@@ -569,7 +587,8 @@
           "200": {
             "description": "Active locks"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/auth/sso/login": {
@@ -579,7 +598,8 @@
           "302": {
             "description": "Redirect to SAML IdP"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/auth/sso/callback": {
@@ -592,7 +612,8 @@
           "401": {
             "description": "Auth failed"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/auth/sso/logout": {
@@ -602,7 +623,8 @@
           "200": {
             "description": "Logged out"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/auth/sso/sessions": {
@@ -612,7 +634,8 @@
           "200": {
             "description": "Active sessions"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/license/activate": {
@@ -637,7 +660,8 @@
           "500": {
             "description": "Save failed"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/license/status": {
@@ -647,7 +671,8 @@
           "200": {
             "description": "License info"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/audit": {
@@ -657,7 +682,8 @@
           "200": {
             "description": "Audit events"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/metrics": {
@@ -667,7 +693,8 @@
           "200": {
             "description": "Metrics text"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/webhooks": {
@@ -677,7 +704,8 @@
           "200": {
             "description": "Webhook list"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       },
       "post": {
         "summary": "Register a new webhook",
@@ -697,7 +725,8 @@
           "400": {
             "description": "Invalid URL"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/tasks": {
@@ -707,7 +736,8 @@
           "200": {
             "description": "Task list"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/tasks/schedule": {
@@ -729,7 +759,8 @@
           "400": {
             "description": "Unknown template or invalid request"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/conversations": {
@@ -758,7 +789,8 @@
               }
             }
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       },
       "post": {
         "summary": "Create a new conversation",
@@ -795,7 +827,8 @@
               }
             }
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/conversations/{id}": {
@@ -829,7 +862,8 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       },
       "delete": {
         "summary": "Delete a conversation by ID",
@@ -854,7 +888,8 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "x-tachy-stability": "stable"
       }
     },
     "/api/conversations/message": {
@@ -894,7 +929,8 @@
           "200": {
             "description": "Message appended"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/agents/{id}/cancel": {
@@ -936,7 +972,8 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/inference/stats": {
@@ -950,7 +987,8 @@
           "200": {
             "description": "Inference stats (ttft, tps, total tokens)"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/models/pull": {
@@ -982,7 +1020,8 @@
           "200": {
             "description": "Pull result"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/chat/stream": {
@@ -1017,7 +1056,8 @@
           "200": {
             "description": "Server-sent event stream of tokens"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/billing/status": {
@@ -1031,7 +1071,8 @@
           "200": {
             "description": "Billing status and tier"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/teams": {
@@ -1063,7 +1104,8 @@
           "201": {
             "description": "Team created"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/teams/join": {
@@ -1095,7 +1137,8 @@
           "200": {
             "description": "Joined team"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/marketplace": {
@@ -1109,7 +1152,8 @@
           "200": {
             "description": "Marketplace extension list"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/marketplace/install": {
@@ -1141,7 +1185,8 @@
           "200": {
             "description": "Install result"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/cloud/jobs": {
@@ -1155,7 +1200,8 @@
           "200": {
             "description": "List of cloud jobs"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/swarm/runs": {
@@ -1169,7 +1215,8 @@
           "200": {
             "description": "List of swarm runs"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/auth/sso/config": {
@@ -1193,7 +1240,8 @@
           "200": {
             "description": "SSO config updated"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/mission/feed": {
@@ -1207,7 +1255,8 @@
           "200": {
             "description": "Activity feed items"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     },
     "/api/index": {
@@ -1221,7 +1270,8 @@
           "200": {
             "description": "Index status and file count"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       },
       "post": {
         "summary": "Trigger a codebase index (re)build",
@@ -1233,7 +1283,8 @@
           "202": {
             "description": "Index build result"
           }
-        }
+        },
+        "x-tachy-stability": "experimental"
       }
     }
   }

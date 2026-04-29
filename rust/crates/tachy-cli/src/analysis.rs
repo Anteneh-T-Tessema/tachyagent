@@ -329,86 +329,107 @@ pub(crate) fn run_policy(subcommand: &str, file: Option<&str>) -> Result<(), Box
     Ok(())
 }
 
-pub(crate) fn run_swarm(goal: &str, files: &[String], model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
+pub(crate) fn run_swarm(
+    subcommand: &str,
+    goal: Option<&str>,
+    url: Option<&str>,
+    files: &[String],
+    model: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let daemon_url = "http://127.0.0.1:7777";
 
-    let resolved_files: Vec<String> = if files.is_empty() {
-        let mut found = Vec::new();
-        fn collect(dir: &std::path::Path, out: &mut Vec<String>) {
-            if let Ok(rd) = std::fs::read_dir(dir) {
-                for entry in rd.flatten() {
-                    let p = entry.path();
-                    if p.is_dir() {
-                        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                        if !matches!(name.as_str(), "target" | "node_modules" | ".git" | ".tachy") {
-                            collect(&p, out);
-                        }
-                    } else if let Some(ext) = p.extension() {
-                        if matches!(ext.to_str().unwrap_or(""), "rs" | "ts" | "tsx" | "js" | "py" | "go") {
-                            if let Ok(rel) = p.strip_prefix(std::env::current_dir().unwrap_or_default()) {
-                                out.push(rel.to_string_lossy().to_string());
+    match subcommand {
+        "register" => {
+            let node_url = url.ok_or("usage: swarm register <url>")?;
+            let body = serde_json::json!({ "url": node_url });
+            let out = std::process::Command::new("curl")
+                .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body.to_string(),
+                       &format!("{daemon_url}/api/swarm/register")])
+                .output();
+            match out {
+                Ok(o) if o.status.success() => println!("✓ Node {node_url} registered successfully."),
+                Ok(o) => eprintln!("✗ Failed to register node: {}", String::from_utf8_lossy(&o.stderr)),
+                Err(_) => eprintln!("⚠ Daemon not running — start with: tachy serve"),
+            }
+        }
+        "list" | "status" => {
+            let out = std::process::Command::new("curl")
+                .args(["-sf", &format!("{daemon_url}/api/swarm/nodes")])
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    let resp = String::from_utf8_lossy(&o.stdout);
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
+                        println!("⚡ Tachy Swarm Nodes:");
+                        if let Some(nodes) = v.as_array() {
+                            for n in nodes {
+                                let id = n["id"].as_str().unwrap_or("?");
+                                let status = n["status"].as_str().unwrap_or("unknown");
+                                let url = n["url"].as_str().unwrap_or("");
+                                println!("  - [{id}] {status:10} {url}");
                             }
                         }
                     }
                 }
+                _ => eprintln!("⚠ Daemon not running — start with: tachy serve"),
             }
         }
-        collect(&cwd, &mut found);
-        found
-    } else {
-        files.to_vec()
-    };
+        "run" => {
+            let goal_text = goal.ok_or("usage: swarm run --goal \"...\" [files]")?;
+            let cwd = env::current_dir()?;
 
-    if resolved_files.is_empty() {
-        return Err("no source files found — pass file paths explicitly or run from a project root".into());
-    }
+            let resolved_files: Vec<String> = if files.is_empty() {
+                let mut found = Vec::new();
+                fn collect(dir: &std::path::Path, out: &mut Vec<String>) {
+                    if let Ok(rd) = std::fs::read_dir(dir) {
+                        for entry in rd.flatten() {
+                            let p = entry.path();
+                            if p.is_dir() {
+                                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                if !matches!(name.as_str(), "target" | "node_modules" | ".git" | ".tachy") {
+                                    collect(&p, out);
+                                }
+                            } else if let Some(ext) = p.extension() {
+                                if matches!(ext.to_str().unwrap_or(""), "rs" | "ts" | "tsx" | "js" | "py" | "go") {
+                                    if let Ok(rel) = p.strip_prefix(std::env::current_dir().unwrap_or_default()) {
+                                        out.push(rel.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                collect(&cwd, &mut found);
+                found
+            } else {
+                files.to_vec()
+            };
 
-    let planner_model = model.unwrap_or("gemma4:26b").to_string();
-    let input = intelligence::SwarmRefactorInput {
-        goal: goal.to_string(),
-        files: resolved_files.clone(),
-        use_llm_planner: true,
-        planner_model: planner_model.clone(),
-        coordinator: Some(backend::CoordinatorConfig::from_env()),
-    };
+            let planner_model = model.unwrap_or(DEFAULT_MODEL).to_string();
+            let body = serde_json::json!({
+                "goal": goal_text,
+                "files": resolved_files,
+                "use_llm_planner": true,
+                "planner_model": planner_model,
+            });
 
-    let plan = intelligence::plan_swarm_refactor(&input);
-    println!("Swarm Plan ({:?}, {} tasks):", plan.planner, plan.tasks.len());
-    for task in &plan.tasks {
-        let deps = if task.deps.is_empty() {
-            String::new()
-        } else {
-            format!(" [after: {}]", task.deps.join(", "))
-        };
-        println!("  [{}] template={}{}", task.id, task.template, deps);
-        let preview = task.prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>();
-        println!("      {preview}…");
-    }
-    println!();
+            let out = std::process::Command::new("curl")
+                .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body.to_string(),
+                       &format!("{daemon_url}/api/swarm/runs")])
+                .output();
 
-    let body = serde_json::to_string(&serde_json::json!({
-        "goal": goal,
-        "files": resolved_files,
-        "use_llm_planner": true,
-        "planner_model": planner_model,
-    }))?;
-
-    let out = std::process::Command::new("curl")
-        .args(["-sf", "-X", "POST", "-H", "Content-Type: application/json", "-d", &body,
-               "http://127.0.0.1:7777/api/swarm/runs"])
-        .output();
-
-    match out {
-        Ok(o) if o.status.success() => {
-            let resp = String::from_utf8_lossy(&o.stdout);
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
-                println!("Swarm run submitted: run_id={}", v["run_id"].as_str().unwrap_or("?"));
-                println!("  Poll status: tachy dashboard (or GET http://127.0.0.1:7777/api/swarm/runs)");
+            match out {
+                Ok(o) if o.status.success() => {
+                    let resp = String::from_utf8_lossy(&o.stdout);
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
+                        println!("✓ Swarm run submitted: run_id={}", v["run_id"].as_str().unwrap_or("?"));
+                        println!("  Nodes will coordinate implementation steps asynchronously.");
+                    }
+                }
+                _ => eprintln!("⚠ Daemon not running — swarm requires an active coordinator node."),
             }
         }
-        _ => {
-            println!("Daemon not running — plan printed above. Start the daemon with: tachy serve");
-        }
+        other => eprintln!("Unknown swarm subcommand: {other}\nUsage: tachy swarm register|list|status|run"),
     }
 
     Ok(())
@@ -422,7 +443,7 @@ pub(crate) fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Re
         return Err("no session history found in .tachy/sessions/ — chat with tachy first to generate training data".into());
     }
 
-    let dataset = intelligence::FinetuneDataset::from_sessions(&sessions_dir);
+    let dataset = intelligence::FinetuneDataset::from_sessions_isolated(&sessions_dir, false, None, None);
     if dataset.entries.is_empty() {
         println!("⚠ No (user, assistant) pairs found in session history.");
         return Ok(());
@@ -459,6 +480,28 @@ pub(crate) fn run_finetune(output: Option<&str>, base_model: Option<&str>) -> Re
     println!("  4. tachy --model my-tachy");
 
     Ok(())
+}
+
+pub(crate) fn run_optimize_brain() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let sessions_dir = cwd.join(".tachy").join("sessions");
+    let output_dir = cwd.join(".tachy").join("finetune");
+    let base_model = DEFAULT_MODEL;
+
+    println!("⚡ Tachy Autonomous Optimization");
+    println!("  Analyzing session history for Gold Standard candidates...");
+
+    match intelligence::FinetuneDataset::prepare_training_bundle(&sessions_dir, &output_dir, base_model) {
+        Ok(path) => {
+            println!("✓ Optimization bundle ready at {path}");
+            println!();
+            println!("Next steps:");
+            println!("  1. bash {}/train.sh", path);
+            println!("  2. ollama create my-tachy-model -f {}/Modelfile", path);
+            Ok(())
+        }
+        Err(e) => Err(format!("Optimization failed: {e}").into()),
+    }
 }
 
 pub(crate) fn print_help() {

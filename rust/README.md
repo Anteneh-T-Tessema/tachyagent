@@ -116,29 +116,29 @@ tachy serve [ADDR]                      Start HTTP daemon
 ## HTTP API
 
 ```
-GET  /health                    → daemon health, model count
-GET  /api/models                → available LLM models
-GET  /api/templates             → agent templates
-GET  /api/agents                → list all agents
-GET  /api/agents/:id            → agent status and results
-POST /api/agents/run            → start an agent (async, 202)
-POST /api/complete              → synchronous code completion (for VS Code)
-POST /api/parallel/run          → submit parallel agent DAG
-GET  /api/parallel/runs         → list parallel runs
-GET  /api/parallel/runs/:id     → parallel run status
-POST /api/parallel/runs/:id/cancel → cancel a run
-GET  /api/pending-approvals     → patches + agents awaiting approval
-POST /api/approve               → approve/reject a patch or agent
-GET  /api/file-locks            → active file locks
-GET  /api/auth/sso/login        → redirect to IdP
-POST /api/auth/sso/callback     → process SAML response
-POST /api/auth/sso/logout       → invalidate SSO session
-GET  /api/auth/sso/sessions     → active SSO sessions
-GET  /api/audit                 → audit log
-GET  /api/metrics               → Prometheus metrics
-POST /api/webhooks              → register webhook
-POST /api/tasks/schedule        → schedule an agent
-POST /api/chat/stream           → SSE streaming chat
+GET  /health                    → (Stable) daemon health, model count
+GET  /api/models                → (Stable) available LLM models
+GET  /api/templates             → (Stable) agent templates
+GET  /api/agents                → (Stable) list all agents
+GET  /api/agents/:id            → (Stable) agent status and results
+POST /api/agents/run            → (Stable) start an agent (async, 202)
+POST /api/complete              → (Stable) synchronous code completion
+POST /api/parallel/run          → (Experimental) submit parallel agent DAG
+GET  /api/parallel/runs         → (Experimental) list parallel runs
+GET  /api/parallel/runs/:id     → (Experimental) parallel run status
+POST /api/parallel/runs/:id/cancel → (Experimental) cancel a run
+GET  /api/pending-approvals     → (Stable) patches + agents awaiting approval
+POST /api/approve               → (Stable) approve/reject a patch or agent
+GET  /api/file-locks            → (Stable) active file locks
+GET  /api/auth/sso/login        → (Stable) redirect to IdP
+POST /api/auth/sso/callback     → (Stable) process SAML response
+POST /api/auth/sso/logout       → (Stable) invalidate SSO session
+GET  /api/auth/sso/sessions     → (Stable) active SSO sessions
+GET  /api/audit                 → (Stable) audit log
+GET  /api/metrics               → (Stable) Prometheus metrics
+POST /api/webhooks              → (Experimental) register webhook
+POST /api/tasks/schedule        → (Experimental) schedule an agent
+POST /api/chat/stream           → (Experimental) SSE streaming chat
 ```
 
 ## Configuration

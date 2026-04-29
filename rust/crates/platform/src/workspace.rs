@@ -132,6 +132,22 @@ pub struct PlatformWorkspace {
     pub root: PathBuf,
 }
 
+/// A temporary clone of a workspace for simulation and "Dreaming".
+pub struct SandboxWorkspace {
+    pub root: PathBuf,
+    pub parent_root: PathBuf,
+    /// Whether to use containerized isolation for this sandbox.
+    pub use_docker_isolation: bool,
+    pub docker_image: String,
+}
+
+impl Drop for SandboxWorkspace {
+    fn drop(&mut self) {
+        // Automatically clean up the sandbox when it goes out of scope.
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 impl PlatformWorkspace {
     /// Initialize a workspace at the given root directory.
     pub fn init(root: impl Into<PathBuf>) -> Result<Self, String> {
@@ -167,6 +183,44 @@ impl PlatformWorkspace {
     #[must_use]
     pub fn sessions_dir(&self) -> PathBuf {
         self.root.join(&self.config.sessions_dir)
+    }
+
+    /// Create a high-speed temporary clone of this workspace for Dreaming/Simulation.
+    pub fn create_sandbox(&self) -> Result<SandboxWorkspace, String> {
+        let sandbox_id = format!("dream-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis());
+        
+        let sandbox_root = std::env::temp_dir().join(sandbox_id);
+        
+        // Ensure parent exists
+        std::fs::create_dir_all(&sandbox_root)
+            .map_err(|e| format!("failed to create sandbox dir: {e}"))?;
+
+        // Perform a shallow clone (copy only tracked files if possible, or just copy everything)
+        // For now, we'll do a simple recursive copy excluding .git and .tachy
+        let status = std::process::Command::new("rsync")
+            .arg("-a")
+            .arg("--exclude").arg(".git")
+            .arg("--exclude").arg(".tachy")
+            .arg("--exclude").arg("target")
+            .arg("--exclude").arg("node_modules")
+            .arg(format!("{}/", self.root.display()))
+            .arg(format!("{}/", sandbox_root.display()))
+            .status()
+            .map_err(|e| format!("failed to run rsync: {e}"))?;
+
+        if !status.success() {
+            return Err("rsync failed to clone workspace".to_string());
+        }
+
+        Ok(SandboxWorkspace {
+            root: sandbox_root,
+            parent_root: self.root.clone(),
+            use_docker_isolation: true,
+            docker_image: "rust:1.80-slim".to_string(),
+        })
     }
 }
 

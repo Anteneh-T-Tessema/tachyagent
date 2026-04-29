@@ -152,8 +152,17 @@ impl ApiClient for OllamaBackend {
             Ok(events)
         } else {
             let future = self.send_with_retry(body);
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| RuntimeError::new(e.to_string()))?;
-            rt.block_on(future)
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                // If we are already in a tokio runtime, we can't build a new one.
+                // We use block_in_place if we are on a multi-threaded runtime, or just block if single-threaded.
+                tokio::task::block_in_place(|| handle.block_on(future))
+            } else {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| RuntimeError::new(e.to_string()))?;
+                rt.block_on(future)
+            }
         }
     }
 }
@@ -194,8 +203,15 @@ impl OllamaBackend {
         };
 
         let future = self.send_streaming_generate(body);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| RuntimeError::new(e.to_string()))?;
-        rt.block_on(future)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| RuntimeError::new(e.to_string()))?;
+            rt.block_on(future)
+        }
     }
 
     fn stream_internal(
@@ -203,8 +219,15 @@ impl OllamaBackend {
         body: OllamaChatRequest,
     ) -> Result<(Vec<AssistantEvent>, InferenceMetrics), RuntimeError> {
         let future = self.send_streaming(body);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| RuntimeError::new(e.to_string()))?;
-        rt.block_on(future)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| RuntimeError::new(e.to_string()))?;
+            rt.block_on(future)
+        }
     }
 
     async fn send_with_retry(

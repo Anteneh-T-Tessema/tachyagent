@@ -184,6 +184,7 @@ impl SsoManager {
             api_key_hash: hash_api_key(&token),
             created_at: format!("{now}s"),
             enabled: true,
+            active_team_id: None,
         };
         user_store.add_user(user);
 

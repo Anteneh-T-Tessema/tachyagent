@@ -159,6 +159,12 @@ impl EmbeddingClient {
     }
 }
 
+impl runtime::Embedder for EmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.embed(text).map_err(|e| e.to_string())
+    }
+}
+
 impl Default for EmbeddingClient {
     fn default() -> Self {
         Self::new()

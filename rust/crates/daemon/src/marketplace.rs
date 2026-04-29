@@ -338,6 +338,7 @@ mod tests {
             requires_approval: false,
             use_planning: true,
             use_workspace_context: true,
+            preferred_adapter: None,
         }
     }
 

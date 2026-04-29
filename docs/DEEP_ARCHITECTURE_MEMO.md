@@ -1,8 +1,8 @@
-# Claw-Code Deep Architecture Memo
+# TachyCode Deep Architecture Memo
 
 ## Executive Summary
 
-Claw-Code has evolved into a substantial local-first AI runtime platform whose center of gravity is the Rust workspace under `rust/crates/*`. The Python `src/` tree remains useful, but primarily as a porting, compatibility, and metadata layer rather than the main production runtime.
+TachyCode has evolved into a substantial local-first AI runtime platform whose center of gravity is the Rust workspace under `rust/crates/*`. The Python `src/` tree remains useful, but primarily as a porting, compatibility, and metadata layer rather than the main production runtime.
 
 The clearest architectural truth in the current codebase is this:
 
@@ -18,7 +18,7 @@ This subsystem split is one of the strongest parts of the codebase and should be
 
 ## System Shape
 
-At a high level, Claw-Code operates as a local-first agent operating layer:
+At a high level, TachyCode operates as a local-first agent operating layer:
 
 1. A user or client hits the HTTP daemon.
 2. The daemon authenticates, rate-limits, and routes the request.
@@ -358,7 +358,7 @@ Recommendation:
 
 ## Strategic Conclusion
 
-Claw-Code is best understood as a governed local agent operating layer. Its strongest comparative advantage is not just “coding with local models.” It is the combination of:
+TachyCode is best understood as a governed local agent operating layer. Its strongest comparative advantage is not just “coding with local models.” It is the combination of:
 
 - local-first execution
 - policy-mediated action

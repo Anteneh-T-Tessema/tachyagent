@@ -12,5 +12,6 @@ pub use discovery::{
 pub use embeddings::{cosine_similarity, EmbeddingClient, EmbeddingError};
 pub use frontier::{CoordinatorConfig, CoordinatorProvider, FrontierPlanner};
 pub use ollama::{OllamaBackend, OllamaChatRequest, OllamaGenerateRequest, OllamaMessage, BackendEvent};
-pub use openai_compat::OpenAiCompatBackend;
-pub use registry::{BackendConfig, BackendKind, BackendRegistry, DynBackend, ModelEntry, ModelTier};
+mod remote_tachy;
+pub use remote_tachy::RemoteTachyBackend;
+pub use registry::{BackendConfig, BackendKind, BackendRegistry, DynBackend, FallbackApiClient, ModelEntry, ModelTier};

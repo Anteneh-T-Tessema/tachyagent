@@ -10,12 +10,16 @@
 
 mod agent;
 mod auth;
+mod feedback;
 mod governance;
 mod intel;
 mod runs;
 mod webhooks;
 mod workers;
 mod yaya;
+mod swarm;
+mod sync;
+mod vision;
 
 mod types;
 mod utils;
@@ -38,12 +42,14 @@ pub(crate) use utils::{
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use audit::RateLimiter;
+    use audit::TieredRateLimiter;
 
     use crate::state::DaemonState;
     use super::router::handle_request;
     use super::types::Response;
     use super::utils::chrono_now_secs;
+    use audit::{User, Role, hash_api_key};
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn health_endpoint_works() {
@@ -52,9 +58,10 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request("GET /health HTTP/1.1\r\n\r\n", &state, &limiter, "127.0.0.1").await;
         if let Response::Full { body, .. } = res {
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("\"status\":\"ok\"") || body.contains("\"status\": \"ok\""));
         } else {
             panic!("not full");
@@ -100,13 +107,14 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "GET /api/search HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 400);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("missing query"));
         } else {
             panic!("expected Full response");
@@ -116,18 +124,27 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn get_policy_returns_200_with_defaults() {
         let root = std::env::temp_dir().join(format!("tachy-policy-test-{}", chrono_now_secs()));
-        let state = tokio::task::spawn_blocking(move || {
+        let mut state = tokio::task::spawn_blocking(move || {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
+        let admin_key = "admin-key";
+        state.identity.user_store.add_user(User {
+            id: "admin".to_string(),
+            name: "Admin".to_string(),
+            role: Role::Admin,
+            api_key_hash: hash_api_key(admin_key),
+            created_at: "now".to_string(),
+            enabled: true, active_team_id: None,
+        });
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
-            "GET /api/policy HTTP/1.1\r\n\r\n",
+            &format!("GET /api/policy HTTP/1.1\r\nAuthorization: Bearer {admin_key}\r\n\r\n"),
             &state, &limiter, "127.0.0.1",
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
-            assert!(serde_json::from_str::<serde_json::Value>(&body).is_ok());
+            assert!(serde_json::from_slice::<serde_json::Value>(&body).is_ok());
         } else {
             panic!("expected Full response");
         }
@@ -136,13 +153,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn set_policy_invalid_json_returns_400() {
         let root = std::env::temp_dir().join(format!("tachy-set-policy-test-{}", chrono_now_secs()));
-        let state = tokio::task::spawn_blocking(move || {
+        let mut state = tokio::task::spawn_blocking(move || {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
+        let admin_key = "admin-key";
+        state.identity.user_store.add_user(User {
+            id: "admin".to_string(),
+            name: "Admin".to_string(),
+            role: Role::Admin,
+            api_key_hash: hash_api_key(admin_key),
+            created_at: "now".to_string(),
+            enabled: true, active_team_id: None,
+        });
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
-        let raw = "POST /api/policy HTTP/1.1\r\nContent-Length: 11\r\n\r\nnot-valid{{";
-        let res = handle_request(raw, &state, &limiter, "127.0.0.1").await;
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
+        let raw = format!("POST /api/policy HTTP/1.1\r\nAuthorization: Bearer {admin_key}\r\nContent-Length: 11\r\n\r\nnot-valid{{");
+        let res = handle_request(&raw, &state, &limiter, "127.0.0.1").await;
         if let Response::Full { status, .. } = res {
             assert_eq!(status, 400);
         } else {
@@ -157,7 +183,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "GET /api/conversations/conv-999 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -178,13 +204,14 @@ mod tests {
             s
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "GET /api/conversations/conv-1 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("conv-1") || body.contains("test conv"));
         } else {
             panic!("expected Full response");
@@ -198,7 +225,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "DELETE /api/conversations/conv-999 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -219,7 +246,7 @@ mod tests {
             s
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "DELETE /api/conversations/conv-1 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -238,7 +265,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "DELETE /api/agents/agent-999 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -259,7 +286,7 @@ mod tests {
             s
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "DELETE /api/agents/agent-1 HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -278,7 +305,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "POST /api/agents/agent-999/cancel HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -299,13 +326,14 @@ mod tests {
             s
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "POST /api/agents/agent-1/cancel HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("Failed") || body.contains("agent-1"));
         } else {
             panic!("expected Full response");
@@ -319,13 +347,14 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "GET /api/index HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("status"));
         } else {
             panic!("expected Full response");
@@ -339,7 +368,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let res = handle_request(
             "GET /api/events HTTP/1.1\r\n\r\n",
             &state, &limiter, "127.0.0.1",
@@ -373,7 +402,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
 
         let body = r#"{"name":"refactor","description":"Standard refactor","tasks":[{"template":"chat","prompt":"refactor src/lib.rs"}],"max_concurrency":2}"#;
         let res = handle_request(
@@ -382,6 +411,7 @@ mod tests {
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 201);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("refactor"));
         } else { panic!("expected Full response"); }
 
@@ -391,6 +421,7 @@ mod tests {
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("refactor"));
             assert!(body.contains("\"count\":1"));
         } else { panic!("expected Full response"); }
@@ -403,7 +434,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
 
         let body = r#"{"name":"myflow","tasks":[{"template":"chat","prompt":"do x"}]}"#;
         handle_request(
@@ -417,6 +448,7 @@ mod tests {
         ).await;
         if let Response::Full { status, body, .. } = res {
             assert_eq!(status, 200);
+            let body = String::from_utf8_lossy(&body);
             assert!(body.contains("myflow"));
         } else { panic!("expected Full"); }
 
@@ -442,7 +474,7 @@ mod tests {
             DaemonState::init(root).expect("init")
         }).await.expect("spawn_blocking");
         let state = Arc::new(Mutex::new(state));
-        let limiter = Arc::new(Mutex::new(RateLimiter::new(100, 60)));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
         let body = r#"{"name":"","tasks":[{"template":"chat","prompt":"x"}]}"#;
         let res = handle_request(
             &format!("POST /api/run-templates HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
@@ -450,5 +482,54 @@ mod tests {
         ).await;
         if let Response::Full { status, .. } = res { assert_eq!(status, 400); }
         else { panic!("expected Full"); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn high_risk_operations_are_gated() {
+        let root = std::env::temp_dir().join(format!("tachy-gov-gate-{}", chrono_now_secs()));
+        let mut state = tokio::task::spawn_blocking(move || {
+            DaemonState::init(root).expect("init")
+        }).await.expect("spawn_blocking");
+        
+        let viewer_key = "viewer-key";
+        state.identity.user_store.add_user(User {
+            id: "viewer".to_string(),
+            name: "Viewer".to_string(),
+            role: Role::Viewer,
+            api_key_hash: hash_api_key(viewer_key),
+            created_at: "now".to_string(),
+            enabled: true, active_team_id: None,
+        });
+        
+        let state = Arc::new(Mutex::new(state));
+        let limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
+        let client_ip = "127.0.0.1";
+
+        // 1. /api/policy (ManageGovernance)
+        let req = format!("GET /api/policy HTTP/1.1\r\nAuthorization: Bearer {viewer_key}\r\n\r\n");
+        let res = handle_request(&req, &state, &limiter, client_ip).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 403);
+            let body = String::from_utf8_lossy(&body);
+            assert!(body.contains("Viewer cannot perform ManageGovernance"));
+        } else { panic!("not full"); }
+
+        // 2. /api/models/pull (ManageModels)
+        let req = format!("POST /api/models/pull HTTP/1.1\r\nAuthorization: Bearer {viewer_key}\r\n\r\n{{}}");
+        let res = handle_request(&req, &state, &limiter, client_ip).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 403);
+            let body = String::from_utf8_lossy(&body);
+            assert!(body.contains("Viewer cannot perform ManageModels"));
+        } else { panic!("not full"); }
+
+        // 3. /api/webhooks (ManageWebhooks)
+        let req = format!("GET /api/webhooks HTTP/1.1\r\nAuthorization: Bearer {viewer_key}\r\n\r\n");
+        let res = handle_request(&req, &state, &limiter, client_ip).await;
+        if let Response::Full { status, body, .. } = res {
+            assert_eq!(status, 403);
+            let body = String::from_utf8_lossy(&body);
+            assert!(body.contains("Viewer cannot perform ManageWebhooks"));
+        } else { panic!("not full"); }
     }
 }

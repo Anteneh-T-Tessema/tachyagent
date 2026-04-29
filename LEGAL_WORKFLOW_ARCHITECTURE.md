@@ -20,7 +20,7 @@ This document provides a comprehensive architecture for building an end-to-end l
 
 ## Executive Summary
 
-This architecture outlines a multi-agent system designed specifically for legal workflow automation. The system leverages the Claw Code harness as its foundation, extending it with legal-specific agents, compliance controls, and secure deployment options.
+This architecture outlines a multi-agent system designed specifically for legal workflow automation. The system leverages the TachyCode harness as its foundation, extending it with legal-specific agents, compliance controls, and secure deployment options.
 
 **Key Features:**
 - End-to-end legal workflow automation
@@ -865,7 +865,7 @@ graph TB
         WF[Workflow Agents]
     end
 
-    subgraph "Claw Code Harness"
+    subgraph "TachyCode Harness"
         PR[PortRuntime]
         QE[QueryEnginePort]
         TR[ToolRegistry]

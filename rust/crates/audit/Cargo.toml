@@ -9,10 +9,12 @@ description = "Enterprise audit trail, compliance logging, and governance for ag
 [dependencies]
 runtime = { path = "../runtime" }
 regex = "1"
+wasmtime = "20"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+ed25519-dalek = "2"
 
 [dev-dependencies]
 proptest = "1"

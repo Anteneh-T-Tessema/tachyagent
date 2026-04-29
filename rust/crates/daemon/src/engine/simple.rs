@@ -61,6 +61,9 @@ pub(super) fn run_simple(
                 .with_agent(agent_id)
                 .with_model(model),
             );
+            
+            runtime.session_mut().success = true;
+            runtime.session_mut().human_override = false;
 
             AgentRunResult {
                 agent_id: agent_id.to_string(),
@@ -78,6 +81,7 @@ pub(super) fn run_simple(
                     .with_agent(agent_id)
                     .with_model(model),
             );
+            runtime.session_mut().success = false;
             AgentRunResult {
                 agent_id: agent_id.to_string(),
                 success: false,

@@ -11,14 +11,14 @@ use super::{Response, ErrorResponse, chrono_now_secs, chrono_now_str, csv_respon
 // Policy
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_get_policy(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_policy(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let policy_path = s.workspace_root.join("tachy-policy.yaml");
     let pf = audit::PolicyFile::load(&policy_path).unwrap_or_else(|_| audit::PolicyFile::enterprise_default());
     Response::json(200, &pf)
 }
 
-pub(super) fn handle_set_policy(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_set_policy(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let pf: audit::PolicyFile = match serde_json::from_str(body) {
         Ok(p) => p,
         Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid policy JSON: {e}") }),
@@ -31,9 +31,9 @@ pub(super) fn handle_set_policy(body: &str, state: &Arc<Mutex<DaemonState>>) -> 
     }
 }
 
-pub(super) fn handle_get_mission_feed(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_mission_feed(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let feed = s.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let feed = s.swarm.mission_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Response::json(200, &*feed)
 }
 
@@ -41,12 +41,12 @@ pub(super) fn handle_get_mission_feed(state: &Arc<Mutex<DaemonState>>) -> Respon
 // Patch approvals
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_list_pending_approvals(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_pending_approvals(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Response::json(200, serde_json::json!({ "pending": s.pending_patches }))
 }
 
-pub(super) fn handle_approve_patch(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_approve_patch(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { patch_id: String, approved: bool }
     let req: Req = match serde_json::from_str(body) {
@@ -67,7 +67,7 @@ pub(super) fn handle_approve_patch(body: &str, state: &Arc<Mutex<DaemonState>>) 
     }
 }
 
-pub(super) fn handle_list_file_locks(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_file_locks(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Response::json(200, serde_json::json!({ "locks": s.file_locks.list_locks() }))
 }
@@ -76,7 +76,7 @@ pub(super) fn handle_list_file_locks(state: &Arc<Mutex<DaemonState>>) -> Respons
 // Task scheduling
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_schedule_task(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_schedule_task(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { template: String, name: String, #[serde(default)] interval_seconds: Option<u64> }
     let req: Req = match serde_json::from_str(body) {
@@ -101,13 +101,13 @@ pub(super) fn handle_schedule_task(body: &str, state: &Arc<Mutex<DaemonState>>) 
 // Teams
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_list_teams(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_teams(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let teams: Vec<&crate::teams::Team> = s.team_manager.teams().values().collect();
     Response::json(200, &teams)
 }
 
-pub(super) fn handle_get_team(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_team(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.team_manager.teams().get(team_id) {
         Some(team) => Response::json(200, team),
@@ -115,7 +115,7 @@ pub(super) fn handle_get_team(team_id: &str, state: &Arc<Mutex<DaemonState>>) ->
     }
 }
 
-pub(super) fn handle_team_agents(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_team_agents(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if s.team_manager.teams().get(team_id).is_none() {
         return Response::json(404, &ErrorResponse { error: format!("team not found: {team_id}") });
@@ -131,7 +131,7 @@ pub(super) fn handle_team_agents(team_id: &str, state: &Arc<Mutex<DaemonState>>)
     Response::json(200, serde_json::json!({ "team_id": team_id, "agents": agents }))
 }
 
-pub(super) fn handle_team_audit(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_team_audit(team_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if s.team_manager.teams().get(team_id).is_none() {
         return Response::json(404, &ErrorResponse { error: format!("team not found: {team_id}") });
@@ -147,7 +147,7 @@ pub(super) fn handle_team_audit(team_id: &str, state: &Arc<Mutex<DaemonState>>) 
     Response::json(200, serde_json::json!({ "team_id": team_id, "events": events }))
 }
 
-pub(super) fn handle_create_team(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_create_team(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { name: String }
     let req: Req = serde_json::from_str(body).unwrap_or(Req { name: String::new() });
@@ -158,7 +158,7 @@ pub(super) fn handle_create_team(body: &str, state: &Arc<Mutex<DaemonState>>) ->
     }
 }
 
-pub(super) fn handle_join_team(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_join_team(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { token: String }
     let req: Req = serde_json::from_str(body).unwrap_or(Req { token: String::new() });
@@ -173,7 +173,7 @@ pub(super) fn handle_join_team(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
 // Conversations
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_list_conversations(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_conversations(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let convs: Vec<serde_json::Value> = s.conversations.values().map(|c| serde_json::json!({
         "id": c.id, "title": c.title, "messages": c.messages,
@@ -183,7 +183,7 @@ pub(super) fn handle_list_conversations(state: &Arc<Mutex<DaemonState>>) -> Resp
     Response::json(200, &convs)
 }
 
-pub(super) fn handle_create_conversation(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_create_conversation(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { title: Option<String> }
     let req: Req = serde_json::from_str(body).unwrap_or(Req { title: None });
@@ -193,7 +193,7 @@ pub(super) fn handle_create_conversation(body: &str, state: &Arc<Mutex<DaemonSta
     Response::json(200, serde_json::json!({ "id": id, "title": title }))
 }
 
-pub(super) fn handle_add_message(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_add_message(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req {
         conversation_id: String, role: String, content: String,
@@ -216,7 +216,7 @@ pub(super) fn handle_add_message(body: &str, state: &Arc<Mutex<DaemonState>>) ->
     }
 }
 
-pub(super) fn handle_get_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "conversation id required".to_string() });
     }
@@ -227,7 +227,7 @@ pub(super) fn handle_get_conversation(id: &str, state: &Arc<Mutex<DaemonState>>)
     }
 }
 
-pub(super) fn handle_delete_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_delete_conversation(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "conversation id required".to_string() });
     }
@@ -243,17 +243,17 @@ pub(super) fn handle_delete_conversation(id: &str, state: &Arc<Mutex<DaemonState
 // Marketplace
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_marketplace_list(_path: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_marketplace_list(_path: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    Response::json(200, s.marketplace.search(None, 1, 20))
+    Response::json(200, s.commerce.marketplace.search(None, 1, 20))
 }
 
-pub(super) fn handle_install(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_install(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { listing_id: String, version: Option<String> }
     let req: Req = serde_json::from_str(body).unwrap_or(Req { listing_id: String::new(), version: None });
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    match s.marketplace.install(&req.listing_id, req.version.as_deref()) {
+    match s.commerce.marketplace.install(&req.listing_id, req.version.as_deref()) {
         Ok(_) => Response::json(200, serde_json::json!({ "ok": true })),
         Err(e) => Response::json(400, &ErrorResponse { error: e.to_string() }),
     }
@@ -263,12 +263,12 @@ pub(super) fn handle_install(body: &str, state: &Arc<Mutex<DaemonState>>) -> Res
 // Cloud jobs (AWS Batch bridge)
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_list_cloud_jobs(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_cloud_jobs(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    Response::json(200, &s.cloud_jobs)
+    Response::json(200, &s.swarm.cloud_jobs)
 }
 
-pub(super) fn handle_submit_cloud_job(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_submit_cloud_job(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req {
         name: String,
@@ -290,26 +290,26 @@ pub(super) fn handle_submit_cloud_job(body: &str, state: &Arc<Mutex<DaemonState>
     match client.submit_job(&req.name, req.command, req.env) {
         Ok(job) => {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            s.cloud_jobs.push(job.clone());
+            s.swarm.cloud_jobs.push(job.clone());
             Response::json(201, &job)
         }
         Err(e) => Response::json(500, &ErrorResponse { error: e }),
     }
 }
 
-pub(super) fn handle_get_cloud_job(job_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_cloud_job(job_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let idx = s.cloud_jobs.iter().position(|j| j.id == job_id);
+    let idx = s.swarm.cloud_jobs.iter().position(|j| j.id == job_id);
     match idx {
         None => Response::json(404, &ErrorResponse { error: "job not found".to_string() }),
         Some(i) => {
             let client = crate::batch_client::BatchClient::new("us-east-1", "tachy-default");
             if let Ok(status) = client.get_job_status(job_id) {
-                s.cloud_jobs[i].status = status;
-                s.cloud_jobs[i].updated_at = std::time::SystemTime::now()
+                s.swarm.cloud_jobs[i].status = status;
+                s.swarm.cloud_jobs[i].updated_at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
             }
-            Response::json(200, &s.cloud_jobs[i])
+            Response::json(200, &s.swarm.cloud_jobs[i])
         }
     }
 }
@@ -318,7 +318,7 @@ pub(super) fn handle_get_cloud_job(job_id: &str, state: &Arc<Mutex<DaemonState>>
 // Audit log
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_audit_log(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_audit_log(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let audit_path = s.workspace_root.join(".tachy").join("audit.jsonl");
     let events: Vec<serde_json::Value> = match std::fs::read_to_string(&audit_path) {
@@ -329,7 +329,7 @@ pub(super) fn handle_audit_log(state: &Arc<Mutex<DaemonState>>) -> Response {
     Response::json(200, &events)
 }
 
-pub(super) fn handle_audit_export(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_audit_export(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let audit_path = s.workspace_root.join(".tachy").join("audit.jsonl");
     let content = std::fs::read_to_string(&audit_path).unwrap_or_default();
@@ -348,7 +348,46 @@ pub(super) fn handle_audit_export(state: &Arc<Mutex<DaemonState>>) -> Response {
     csv_response(&csv, &filename)
 }
 
-pub(super) fn handle_metrics(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_audit_verify(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let audit_path = s.workspace_root.join(".tachy").join("audit.jsonl");
+    let content = match std::fs::read_to_string(&audit_path) {
+        Ok(c) => c,
+        Err(e) => return Response::json(500, &ErrorResponse { error: format!("failed to read audit log: {e}") }),
+    };
+    let events: Vec<audit::AuditEvent> = content.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    
+    match audit::verify_audit_chain(&events) {
+        Ok(count) => Response::json(200, serde_json::json!({
+            "status": "verified",
+            "event_count": count,
+            "last_hash": events.last().map(|e| e.hash.clone()).unwrap_or_default()
+        })),
+        Err(index) => Response::json(400, serde_json::json!({
+            "status": "corrupted",
+            "error_index": index,
+            "corrupted_event": events.get(index)
+        })),
+    }
+}
+
+/// POST /api/audit/flush — flush buffered events in HttpAuditSink and S3AuditSink to
+/// their external destinations. Returns counts of sinks flushed and any errors.
+pub(crate) fn handle_audit_flush(state: &Arc<Mutex<DaemonState>>) -> Response {
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut errors: Vec<String> = Vec::new();
+    s.audit_logger.flush_with_errors(&mut errors);
+    if errors.is_empty() {
+        Response::json(200, serde_json::json!({ "status": "flushed" }))
+    } else {
+        Response::json(207, serde_json::json!({ "status": "partial", "errors": errors }))
+    }
+}
+
+pub(crate) fn handle_metrics(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Response::json(200, serde_json::json!({
         "total_agents_run": s.agents.len(),
@@ -360,13 +399,18 @@ pub(super) fn handle_metrics(state: &Arc<Mutex<DaemonState>>) -> Response {
     }))
 }
 
-pub(super) fn handle_dashboard(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_dashboard(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let stats = &s.inference_stats;
-    let cost = (stats.total_tokens as f64 / 1_000.0) * 0.002;
+    let total_cost: f64 = s.commerce.metering.counters().values()
+        .map(|agg| agg.total_cost_usd)
+        .sum();
     let models: Vec<serde_json::Value> = s.registry.list_models().iter()
         .map(|m| serde_json::json!({ "name": m.name, "tier": format!("{:?}", m.tier) }))
         .collect();
+    let cache_hits = s.semantic_cache.hits();
+    let active_swarms = s.swarm.orchestrator.lock().unwrap().active_runs();
+
     Response::json(200, serde_json::json!({
         "total_requests": stats.total_requests,
         "total_tokens": stats.total_tokens,
@@ -376,7 +420,58 @@ pub(super) fn handle_dashboard(state: &Arc<Mutex<DaemonState>>) -> Response {
         "last_tokens_per_sec": stats.last_tokens_per_sec,
         "p50_ttft_ms": stats.p50_ttft_ms,
         "p95_ttft_ms": stats.p95_ttft_ms,
-        "estimated_cost_usd": cost,
+        "estimated_cost_usd": total_cost,
         "models": models,
+        "cache_hits": cache_hits,
+        "active_swarms": active_swarms,
     }))
+}
+
+pub(crate) fn handle_promote(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { template: String, model: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match s.promote_model_adapter(&req.template, &req.model) {
+        Ok(_) => Response::json(200, serde_json::json!({ "status": "promoted", "template": req.template, "model": req.model })),
+        Err(e) => Response::json(404, &ErrorResponse { error: e }),
+    }
+}
+
+pub(crate) fn handle_approve_plan(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { template: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match s.approve_plan(&req.template) {
+        Ok(_) => Response::json(200, serde_json::json!({ "status": "approved", "template": req.template })),
+        Err(e) => Response::json(404, &ErrorResponse { error: e }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rewind & Fork (Pillar 1: State Reconstruction)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn handle_fork_session(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+    #[derive(Deserialize)]
+    struct Req { session_id: String, event_hash: String }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return Response::json(400, &ErrorResponse { error: format!("invalid body: {e}") }),
+    };
+
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match s.fork_session_at_hash(&req.session_id, &req.event_hash) {
+        Ok(new_id) => Response::json(201, serde_json::json!({ "new_session_id": new_id, "forked_from": req.session_id, "at_hash": req.event_hash })),
+        Err(e) => Response::json(400, &ErrorResponse { error: e }),
+    }
 }

@@ -74,8 +74,13 @@ mod tests {
 
     #[test]
     fn compacts_sessions_via_slash_command() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(),
+        let session = Session { 
+            branches: Vec::new(), 
+            current_branch: String::new(),
             version: 1,
+            success: false,
+            human_override: false,
+            team_id: None,
             messages: vec![
                 ConversationMessage::user_text("a ".repeat(200)),
                 ConversationMessage::assistant(vec![ContentBlock::Text {

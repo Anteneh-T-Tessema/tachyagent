@@ -6,7 +6,7 @@ Evolution Path: From LegalOS TypeScript Web App to Multi-Agent Legal Data Fabric
 
 ## Executive Summary
 
-This guide provides a step-by-step roadmap for evolving your existing LegalOS project (TypeScript/Node.js web app for legal workflow automation) into a comprehensive multi-agent legal data fabric platform. The integration leverages the Claw Code multi-agent framework concepts and zero-copy architecture principles.
+This guide provides a step-by-step roadmap for evolving your existing LegalOS project (TypeScript/Node.js web app for legal workflow automation) into a comprehensive multi-agent legal data fabric platform. The integration leverages the TachyCode multi-agent framework concepts and zero-copy architecture principles.
 
 ---
 
@@ -53,7 +53,7 @@ This guide provides a step-by-step roadmap for evolving your existing LegalOS pr
 │  │  └─────────────┘  └─────────────┘  └─────────────┘      │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │           Claw Code Framework Integration                │    │
+│  │           TachyCode Framework Integration                │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
 │  │  │  Port       │  │  Query      │  │  Tool       │      │    │
 │  │  │  Runtime    │  │  Engine     │  │  Registry   │      │    │

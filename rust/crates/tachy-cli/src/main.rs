@@ -72,7 +72,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::YayaPreferences { workspace, subject, set_sources, set_terms, clear } => {
             info::handle_yaya_preferences(&workspace, &subject, set_sources.as_deref(), set_terms.as_deref(), clear)?
         }
-        CliAction::Serve { addr, workspace } => agent::run_serve(&addr, workspace.as_deref())?,
+        CliAction::Serve { addr, workspace } => agent::run_serve(&addr, workspace.as_deref()).await?,
         CliAction::RunAgent { template, prompt, model } => agent::run_agent_cmd(&template, &prompt, &model)?,
         CliAction::Doctor { json } => doctor::run_doctor(json),
         CliAction::Pull { model } => agent::run_pull(&model)?,
@@ -111,7 +111,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::ExportAudit { format, output } => analysis::run_export_audit(&format, output.as_deref())?,
         CliAction::Finetune { output, base_model } => analysis::run_finetune(output.as_deref(), base_model.as_deref())?,
         CliAction::Policy { subcommand, file } => analysis::run_policy(&subcommand, file.as_deref())?,
-        CliAction::Swarm { goal, files, model } => analysis::run_swarm(&goal, &files, model.as_deref())?,
+        CliAction::Swarm { subcommand, goal, url, files, model } => {
+            analysis::run_swarm(&subcommand, goal.as_deref(), url.as_deref(), &files, model.as_deref())?
+        }
+        CliAction::OptimizeBrain => analysis::run_optimize_brain()?,
     }
     Ok(())
 }

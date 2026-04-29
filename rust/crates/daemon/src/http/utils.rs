@@ -56,7 +56,8 @@ pub fn csv_response(body: &str, _filename: &str) -> Response {
     Response::Full {
         status: 200,
         content_type: "text/csv".to_string(),
-        body: body.to_string(),
+        body: body.to_string().into_bytes(),
+        extra_headers: Vec::new(),
     }
 }
 
@@ -88,11 +89,46 @@ where
 pub fn extract_user(state: &Arc<Mutex<DaemonState>>, raw: &str) -> Option<audit::User> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let auth = extract_auth_header(raw)?;
-    if let Some(user) = s.user_store.authenticate(&audit::hash_api_key(&auth)) {
-        return Some(user.clone());
+    
+    // Check for explicit team header
+    let team_header = extract_header(raw, "X-Tachy-Team");
+
+    // 1. Check UserStore (API Key)
+    if let Some(user) = s.identity.user_store.authenticate(&audit::hash_api_key(&auth)) {
+        let mut u = user.clone();
+        u.active_team_id = team_header.or(u.active_team_id);
+        return Some(u);
     }
-    if let Some(session) = s.sso_manager.validate_session(&auth) {
-        return s.user_store.users.get(&session.user_id).cloned();
+    
+    // 2. Check SSO
+    if let Some(session) = s.identity.sso_manager.validate_session(&auth) {
+        if let Some(user) = s.identity.user_store.users.get(&session.user_id) {
+            let mut u = user.clone();
+            u.active_team_id = team_header.or(u.active_team_id);
+            return Some(u);
+        }
+    }
+    
+    // 3. Check SaaS (JWT)
+    if let Some(ref commerce) = s.commerce.saas {
+        if let Ok(claims) = commerce.validate_jwt(&auth) {
+            if let Some(user) = s.identity.user_store.users.get(&claims.email) {
+                let mut u = user.clone();
+                u.active_team_id = Some(claims.tenant_id);
+                return Some(u);
+            }
+        }
+    }
+    
+    None
+}
+
+pub fn extract_header(raw: &str, name: &str) -> Option<String> {
+    let target = format!("{}:", name.to_lowercase());
+    for line in raw.lines() {
+        if line.to_lowercase().starts_with(&target) {
+            return Some(line[target.len()..].trim().to_string());
+        }
     }
     None
 }

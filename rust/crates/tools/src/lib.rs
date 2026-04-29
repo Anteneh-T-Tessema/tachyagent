@@ -234,6 +234,75 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: "optimize_brain",
+            description: "Prepare a local fine-tuning dataset from successful session history. This allows the model to specialize and improve its accuracy on this specific codebase. Returns the path to the training bundle.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "capture_screenshot",
+            description: "Capture a visual snapshot of a web page. Saves the image to .tachy/vision/ and returns the path. Use this to verify UI changes or observe external dashboards.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "The URL to capture." },
+                    "wait_for_selector": { "type": "string", "description": "Optional CSS selector to wait for before snapping." },
+                    "delay_ms": { "type": "integer", "description": "Optional millisecond delay to wait after loading." }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "get_accessibility_tree",
+            description: "Extract the interactive structure of a web page (accessibility tree). Returns a list of interactive elements (buttons, links, inputs) with their roles and text labels.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "The URL to analyze." }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "compact_context",
+            description: "Autonomous context optimization. Distills the current conversation history into a high-density 'Memory Digest' to free up context window. Use this when the conversation is getting long or you feel context pressure.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "update_project_md",
+            description: "Update the TACHY.md project DNA file. Use this to record high-level architectural decisions, changes to the tech stack, or new project rules. This file is persistent and visible to all future agents.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "The full new content of TACHY.md in Markdown format." }
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "visual_diff",
+            description: "Compare two UI snapshots (paths returned by capture_screenshot) and return a similarity report. Use this for Visual TDD to verify that a UI change matches the expectation.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path_a": { "type": "string", "description": "Path to the first snapshot." },
+                    "path_b": { "type": "string", "description": "Path to the second snapshot." }
+                },
+                "required": ["path_a", "path_b"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -248,6 +317,9 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "list_directory" => from_value::<ListDirInput>(input).and_then(run_list_directory),
         "web_search" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "web_fetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
+        "capture_screenshot" => from_value::<runtime::ScreenshotInput>(input).and_then(run_capture_screenshot),
+        "get_accessibility_tree" => from_value::<runtime::AccessibilityTreeInput>(input).and_then(run_get_accessibility_tree),
+        "visual_diff" => from_value::<runtime::VisualDiffInput>(input).and_then(run_visual_diff),
         // E1: Richer diagnostics via LSP integration
         "get_diagnostics" => from_value::<GetDiagnosticsInput>(input).and_then(run_get_diagnostics),
         _ => Err(format!("unsupported tool: {name}")),
@@ -391,6 +463,18 @@ fn run_web_search(input: WebSearchInput) -> Result<String, String> {
 
 fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
     to_pretty_json(web_fetch(&input)?)
+}
+
+fn run_capture_screenshot(input: runtime::ScreenshotInput) -> Result<String, String> {
+    to_pretty_json(runtime::capture_screenshot(input).map_err(|e| e.to_string())?)
+}
+
+fn run_get_accessibility_tree(input: runtime::AccessibilityTreeInput) -> Result<String, String> {
+    to_pretty_json(runtime::get_accessibility_tree(input).map_err(|e| e.to_string())?)
+}
+
+fn run_visual_diff(input: runtime::VisualDiffInput) -> Result<String, String> {
+    to_pretty_json(runtime::compare_snapshots(&input.path_a, &input.path_b).map_err(|e| e.to_string())?)
 }
 
 // ── E1: Richer diagnostics ──────────────────────────────────────────────────

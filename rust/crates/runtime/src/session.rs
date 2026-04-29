@@ -51,6 +51,15 @@ pub struct Session {
     /// Current branch name (empty = main).
     #[serde(default)]
     pub current_branch: String,
+    /// Whether the session was successful (for Gold Standard filtering).
+    #[serde(default)]
+    pub success: bool,
+    /// Whether the session results were overriden by a human (disqualifies from Gold Standard).
+    #[serde(default)]
+    pub human_override: bool,
+    /// The team workspace this session belongs to.
+    #[serde(default)]
+    pub team_id: Option<String>,
 }
 
 /// A saved branch point in the conversation.
@@ -100,7 +109,7 @@ impl Session {
             version: 1,
             messages: Vec::new(),
             branches: Vec::new(),
-            current_branch: String::new(),
+            current_branch: String::new(), success: false, human_override: false, team_id: None,
         }
     }
 
@@ -161,6 +170,8 @@ impl Session {
                     .collect(),
             ),
         );
+        object.insert("success".to_string(), JsonValue::Bool(self.success));
+        object.insert("human_override".to_string(), JsonValue::Bool(self.human_override));
         JsonValue::Object(object)
     }
 
@@ -181,7 +192,10 @@ impl Session {
             .iter()
             .map(ConversationMessage::from_json)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { version, messages, branches: Vec::new(), current_branch: String::new() })
+        let success = object.get("success").and_then(JsonValue::as_bool).unwrap_or(false);
+        let human_override = object.get("human_override").and_then(JsonValue::as_bool).unwrap_or(false);
+        let team_id = object.get("team_id").and_then(JsonValue::as_str).map(String::from);
+        Ok(Self { version, messages, branches: Vec::new(), current_branch: String::new(), success, human_override, team_id })
     }
 }
 

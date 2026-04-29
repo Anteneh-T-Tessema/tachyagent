@@ -61,6 +61,8 @@ pub struct TestResult {
     pub stderr: String,
 }
 
+use crate::vision::VisualReport;
+
 /// Result of running LSP diagnostics on edited files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticResult {
@@ -145,6 +147,7 @@ impl EditTestFix {
         test_command: &str,
         result: &TestResult,
         edited_files: &[String],
+        visual: Option<&VisualReport>,
     ) -> String {
         let stderr = if result.stderr.len() > 4000 {
             &result.stderr[..4000]
@@ -158,19 +161,37 @@ impl EditTestFix {
             &result.stdout
         };
 
-        format!(
+        let mut prompt = format!(
             "The following tests failed after your edits:\n\n\
              Command: {test_command}\n\
              Exit code: {}\n\n\
              stderr:\n{stderr}\n\n\
              stdout (tail):\n{stdout_tail}\n\n\
-             Files you edited: {}\n\n\
-             Please fix the code to make the tests pass. \
-             Focus on the specific errors shown above. \
-             Do NOT change the test files unless the tests themselves are wrong.",
+             Files you edited: {}\n\n",
             result.exit_code,
             edited_files.join(", ")
-        )
+        );
+
+        if let Some(v) = visual {
+            if let Some(diff) = &v.diff_report {
+                prompt.push_str(&format!(
+                    "\n\n## Visual Verification Context\n\
+                     A visual regression or failure was detected.\n\
+                     Screenshot: {}\n\
+                     Diff Report:\n{}\n",
+                    v.screenshot_path, diff
+                ));
+            }
+            if let Some(tree) = &v.accessibility_tree {
+                prompt.push_str(&format!("\nAccessibility Tree (Simplified):\n{}\n", tree));
+            }
+        }
+
+        prompt.push_str("\nPlease fix the code to make the tests (and visual state) pass. \
+                         Focus on the specific errors shown above. \
+                         Do NOT change the test files unless the tests themselves are wrong.");
+
+        prompt
     }
 
     /// Run LSP diagnostics on the edited files.
@@ -236,6 +257,42 @@ impl EditTestFix {
         prompt
     }
 
+    /// Perform a visual verification check against a baseline.
+    pub fn run_visual_check(
+        url: &str,
+        baseline_path: &str,
+        workspace_root: &Path,
+    ) -> Result<VisualReport, Box<dyn std::error::Error>> {
+        // 1. Capture fresh screenshot
+        let input = runtime::ScreenshotInput {
+            url: url.to_string(),
+            save_path: None, // Auto-generate in .tachy/vision
+            delay_ms: Some(1000), // Give it time to settle
+            capture_full_page: Some(false),
+            workspace_root: Some(workspace_root.to_string_lossy().to_string()),
+            wait_for_selector: None,
+        };
+        let snapshot = runtime::capture_screenshot(input)?;
+
+        // 2. Extract accessibility tree for semantic comparison
+        let tree_input = runtime::AccessibilityTreeInput {
+            url: url.to_string(),
+            wait_for_selector: None,
+        };
+        let tree = runtime::get_accessibility_tree(tree_input).ok();
+
+        // 3. Compare with baseline
+        let diff_report = runtime::compare_snapshots(baseline_path, &snapshot.path)?;
+
+        Ok(VisualReport {
+            screenshot_path: snapshot.path,
+            diff_report: Some(diff_report.clone()),
+            accessibility_tree: tree,
+            issues: vec![],
+            passed: !diff_report.contains("FAILURE"),
+        })
+    }
+
     /// Combined diagnostic + test cycle. Runs diagnostics first (fast), then tests.
     /// Returns early if diagnostics find errors — no point running tests on broken code.
     #[must_use] pub fn run_diagnostic_then_test(
@@ -270,6 +327,8 @@ pub enum CycleCheckResult {
     DiagnosticErrors(DiagnosticResult),
     /// Diagnostics clean but tests failed.
     TestFailure(TestResult),
+    /// Visual verification failed (Phase 26).
+    VisualFailure(VisualReport),
     /// Could not execute the test command.
     TestExecutionError,
 }
@@ -314,7 +373,7 @@ mod tests {
             stdout: "x".repeat(5000),
             stderr: "e".repeat(6000),
         };
-        let prompt = EditTestFix::build_fix_prompt("cargo test", &result, &["src/lib.rs".to_string()]);
+        let prompt = EditTestFix::build_fix_prompt("cargo test", &result, &["src/lib.rs".to_string()], None);
         assert!(prompt.len() < 10000);
         assert!(prompt.contains("cargo test"));
         assert!(prompt.contains("src/lib.rs"));

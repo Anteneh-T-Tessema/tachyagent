@@ -6,7 +6,14 @@ use std::time::{Duration, Instant};
 /// Hash an API key using the same SHA-256 from our audit chain.
 /// Never store raw API keys — always hash them.
 #[must_use] pub fn hash_api_key(key: &str) -> String {
-    sha256_hex(key)
+    hash_text(key)
+}
+
+/// Calculate SHA-256 hash of text and return hex string.
+#[must_use] pub fn hash_text(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let hash = sha256_bytes(bytes);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Verify an API key against a stored hash.
@@ -63,6 +70,96 @@ impl RateLimiter {
     }
 }
 
+// ── Tiered rate limiter ───────────────────────────────────────────────────────
+
+/// Cost tier for an HTTP endpoint — determines which rate limit bucket applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateTier {
+    /// GPU-bound stream completions: `/api/complete/stream`, `/api/chat/stream`.
+    Stream,
+    /// Expensive operations: parallel runs, agent creation, model pulls.
+    Heavy,
+    /// General API calls.
+    Standard,
+    /// Health, static assets — never limited.
+    Exempt,
+}
+
+/// Result of a rate-limit check.
+pub struct RateDecision {
+    /// Whether the request is allowed through.
+    pub allowed: bool,
+    /// Seconds until the window resets (non-zero when `allowed` is false).
+    pub retry_after_secs: u32,
+}
+
+/// Three-tier rate limiter: separate buckets for stream, heavy, and standard
+/// endpoints, keyed by caller identity (IP or hashed API key).
+///
+/// Production defaults:
+/// - `Stream`   — 10 req/min  (GPU-bound; each ties up a thread for seconds)
+/// - `Heavy`    — 30 req/min  (parallel runs, agent creation)
+/// - `Standard` — 120 req/min (general read/write API)
+pub struct TieredRateLimiter {
+    pub(crate) stream: RateLimiter,
+    pub(crate) heavy: RateLimiter,
+    pub(crate) standard: RateLimiter,
+}
+
+impl Default for TieredRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TieredRateLimiter {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            stream:   RateLimiter::new(10, 60),
+            heavy:    RateLimiter::new(30, 60),
+            standard: RateLimiter::new(120, 60),
+        }
+    }
+
+    /// Classify an API path into its cost tier.
+    #[must_use]
+    pub fn classify(path: &str) -> RateTier {
+        match path {
+            "" | "/" | "/index.html" | "/health" | "/api/inference/stats" => RateTier::Exempt,
+            p if p.ends_with("/stream") || p == "/api/complete" => RateTier::Stream,
+            p if matches!(p,
+                "/api/models/pull"
+                | "/api/runs/parallel"
+                | "/api/swarm/start"
+            ) => RateTier::Heavy,
+            p if p.starts_with("/api/agents") || p.starts_with("/api/runs") => RateTier::Heavy,
+            _ => RateTier::Standard,
+        }
+    }
+
+    /// Check whether `key` is within rate limits for `tier`.
+    ///
+    /// Pass `"ip:{client_ip}"` for unauthenticated callers and
+    /// `"key:{first_16_chars_of_hash}"` for authenticated ones.
+    pub fn check(&mut self, tier: RateTier, key: &str) -> RateDecision {
+        let allowed = match tier {
+            RateTier::Exempt   => return RateDecision { allowed: true, retry_after_secs: 0 },
+            RateTier::Stream   => self.stream.check(key),
+            RateTier::Heavy    => self.heavy.check(key),
+            RateTier::Standard => self.standard.check(key),
+        };
+        RateDecision { allowed, retry_after_secs: if allowed { 0 } else { 60 } }
+    }
+
+    /// Evict expired entries from all buckets (call periodically to bound memory).
+    pub fn cleanup(&mut self) {
+        self.stream.cleanup();
+        self.heavy.cleanup();
+        self.standard.cleanup();
+    }
+}
+
 /// Sanitize user input to prevent prompt injection attacks.
 /// Removes control characters and limits length.
 #[must_use] pub fn sanitize_prompt(input: &str, max_length: usize) -> String {
@@ -108,12 +205,6 @@ impl RateLimiter {
     redacted
 }
 
-// SHA-256 (reuse from event.rs — but keep it here for the security module)
-fn sha256_hex(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let hash = sha256_bytes(bytes);
-    hash.iter().map(|b| format!("{b:02x}")).collect()
-}
 
 #[allow(clippy::unreadable_literal)]
 fn sha256_bytes(message: &[u8]) -> [u8; 32] {
@@ -186,6 +277,90 @@ mod tests {
         let hash = hash_api_key("test-key");
         assert!(verify_api_key("test-key", &hash));
         assert!(!verify_api_key("wrong-key", &hash));
+    }
+
+    // ── TieredRateLimiter tests ───────────────────────────────────────────────
+
+    #[test]
+    fn tier_classify_stream_endpoints() {
+        assert_eq!(TieredRateLimiter::classify("/api/complete/stream"), RateTier::Stream);
+        assert_eq!(TieredRateLimiter::classify("/api/chat/stream"), RateTier::Stream);
+        assert_eq!(TieredRateLimiter::classify("/api/complete"), RateTier::Stream);
+    }
+
+    #[test]
+    fn tier_classify_heavy_endpoints() {
+        assert_eq!(TieredRateLimiter::classify("/api/runs/parallel"), RateTier::Heavy);
+        assert_eq!(TieredRateLimiter::classify("/api/models/pull"), RateTier::Heavy);
+        assert_eq!(TieredRateLimiter::classify("/api/agents"), RateTier::Heavy);
+        assert_eq!(TieredRateLimiter::classify("/api/runs"), RateTier::Heavy);
+    }
+
+    #[test]
+    fn tier_classify_exempt_endpoints() {
+        assert_eq!(TieredRateLimiter::classify("/health"), RateTier::Exempt);
+        assert_eq!(TieredRateLimiter::classify("/"), RateTier::Exempt);
+        assert_eq!(TieredRateLimiter::classify("/api/inference/stats"), RateTier::Exempt);
+    }
+
+    #[test]
+    fn tier_classify_standard_endpoints() {
+        assert_eq!(TieredRateLimiter::classify("/api/audit"), RateTier::Standard);
+        assert_eq!(TieredRateLimiter::classify("/api/templates"), RateTier::Standard);
+    }
+
+    #[test]
+    fn tiered_limiter_stream_tier_enforced() {
+        let mut limiter = TieredRateLimiter {
+            stream:   RateLimiter::new(2, 60),
+            heavy:    RateLimiter::new(100, 60),
+            standard: RateLimiter::new(100, 60),
+        };
+        assert!(limiter.check(RateTier::Stream, "ip:1.2.3.4").allowed);
+        assert!(limiter.check(RateTier::Stream, "ip:1.2.3.4").allowed);
+        let blocked = limiter.check(RateTier::Stream, "ip:1.2.3.4");
+        assert!(!blocked.allowed);
+        assert_eq!(blocked.retry_after_secs, 60);
+    }
+
+    #[test]
+    fn tiered_limiter_buckets_are_independent() {
+        let mut limiter = TieredRateLimiter {
+            stream:   RateLimiter::new(1, 60),
+            heavy:    RateLimiter::new(100, 60),
+            standard: RateLimiter::new(100, 60),
+        };
+        // Exhaust stream bucket for this key
+        limiter.check(RateTier::Stream, "ip:1.2.3.4");
+        assert!(!limiter.check(RateTier::Stream, "ip:1.2.3.4").allowed);
+        // Standard bucket for the same key is unaffected
+        assert!(limiter.check(RateTier::Standard, "ip:1.2.3.4").allowed);
+    }
+
+    #[test]
+    fn tiered_limiter_exempt_always_passes() {
+        let mut limiter = TieredRateLimiter {
+            stream:   RateLimiter::new(0, 60),
+            heavy:    RateLimiter::new(0, 60),
+            standard: RateLimiter::new(0, 60),
+        };
+        // Even with zero-limit buckets, exempt tier is always allowed
+        for _ in 0..100 {
+            assert!(limiter.check(RateTier::Exempt, "ip:1.2.3.4").allowed);
+        }
+    }
+
+    #[test]
+    fn tiered_limiter_per_key_isolation() {
+        let mut limiter = TieredRateLimiter {
+            stream:   RateLimiter::new(1, 60),
+            heavy:    RateLimiter::new(100, 60),
+            standard: RateLimiter::new(100, 60),
+        };
+        limiter.check(RateTier::Stream, "ip:1.1.1.1");
+        assert!(!limiter.check(RateTier::Stream, "ip:1.1.1.1").allowed);
+        // A different IP should not be blocked
+        assert!(limiter.check(RateTier::Stream, "ip:2.2.2.2").allowed);
     }
 
     #[test]

@@ -56,6 +56,8 @@ pub struct SwarmTask {
     pub prompt: String,
     /// IDs of tasks that must complete before this one starts.
     pub deps: Vec<String>,
+    /// Optional: assign this task to a specific worker node in the distributed swarm.
+    pub worker_node_id: Option<String>,
 }
 
 // ── Planning ─────────────────────────────────────────────────────────────────
@@ -99,6 +101,7 @@ fn static_plan(input: &SwarmRefactorInput) -> SwarmPlan {
                 file = file,
             ),
             deps: Vec::new(),
+            worker_node_id: None,
         }
     }).collect();
 
@@ -120,6 +123,7 @@ fn static_plan(input: &SwarmRefactorInput) -> SwarmPlan {
                 files = input.files.join(", "),
             ),
             deps: all_ids,
+            worker_node_id: None,
         });
     }
 
@@ -228,8 +232,9 @@ fn parse_llm_plan_response(text: &str, input: &SwarmRefactorInput) -> Option<Swa
         let deps     = t["deps"].as_array()
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        let worker_node_id = t["worker_node_id"].as_str().map(str::to_string);
         if prompt.is_empty() { return None; }
-        Some(SwarmTask { id, template, prompt, deps })
+        Some(SwarmTask { id, template, prompt, deps, worker_node_id })
     }).collect();
 
     if tasks.is_empty() { return None; }

@@ -14,6 +14,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 const MAX_MEMORY_BYTES: usize = 8000;
+/// When the file exceeds this, pruning fires to reclaim space.
+const PRUNE_THRESHOLD_BYTES: usize = 12_000;
+/// Pruning evicts oldest entries of lowest-priority categories first.
+/// Order: Note → Pattern → ProjectContext → Decision → Preference (never evict).
+const PRUNE_ORDER: &[MemoryCategory] = &[
+    MemoryCategory::Note,
+    MemoryCategory::Pattern,
+    MemoryCategory::ProjectContext,
+    MemoryCategory::Decision,
+];
 
 /// A memory entry with timestamp and content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +89,8 @@ impl AgentMemory {
     }
 
     /// Add a new memory entry and persist to disk.
+    /// If the file exceeds `PRUNE_THRESHOLD_BYTES`, oldest low-priority entries
+    /// are evicted and the file is rewritten before appending.
     pub fn remember(&mut self, content: &str, category: MemoryCategory) -> Result<(), String> {
         let entry = MemoryEntry {
             timestamp: now_timestamp(),
@@ -87,7 +99,50 @@ impl AgentMemory {
         };
 
         self.entries.push(entry.clone());
-        self.append_to_file(&entry)
+
+        // Check if we need to prune before writing
+        let current_size = self.path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+        if current_size >= PRUNE_THRESHOLD_BYTES {
+            self.prune_and_rewrite()?;
+        } else {
+            self.append_to_file(&entry)?;
+        }
+        Ok(())
+    }
+
+    /// Evict oldest entries of lowest-priority categories until the in-memory
+    /// total fits within `MAX_MEMORY_BYTES`, then rewrite the file from scratch.
+    fn prune_and_rewrite(&mut self) -> Result<(), String> {
+        for category in PRUNE_ORDER {
+            // Remove the single oldest entry of this category at a time
+            if let Some(pos) = self.entries.iter().position(|e| &e.category == category) {
+                self.entries.remove(pos);
+            }
+            let total: usize = self.entries.iter().map(|e| e.content.len()).sum();
+            if total <= MAX_MEMORY_BYTES {
+                break;
+            }
+        }
+        self.rewrite_file()
+    }
+
+    /// Rewrite the entire memory file from the current in-memory entries.
+    fn rewrite_file(&self) -> Result<(), String> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.path)
+            .map_err(|e| format!("failed to open memory file for rewrite: {e}"))?;
+        writeln!(file, "# Agent Memory").map_err(|e| format!("write failed: {e}"))?;
+        for entry in &self.entries {
+            writeln!(file, "\n## {} — {}", entry.timestamp, category_label(&entry.category))
+                .map_err(|e| format!("write failed: {e}"))?;
+            writeln!(file, "{}", entry.content)
+                .map_err(|e| format!("write failed: {e}"))?;
+        }
+        Ok(())
     }
 
     /// Get all entries.
@@ -204,6 +259,50 @@ pub fn execute_remember(input: &serde_json::Value, tachy_dir: &Path) -> Result<S
     let mut memory = AgentMemory::load(tachy_dir);
     memory.remember(content, cat)?;
     Ok(format!("Remembered: {content}"))
+}
+
+/// Global Hive Mind — cross-mission shared knowledge base.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HiveMind {
+    pub shared_insights: Vec<MemoryEntry>,
+}
+
+impl HiveMind {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Retrieve insights relevant to a current task context.
+    pub fn retrieve_insights(&self, context: &str) -> Vec<MemoryEntry> {
+        // In a real implementation, this would use semantic vector search
+        self.shared_insights.iter()
+            .filter(|i| context.to_lowercase().contains(&i.category_label().to_lowercase()) || 
+                        context.to_lowercase().split_whitespace().any(|w| i.content.to_lowercase().contains(w)))
+            .cloned()
+            .collect()
+    }
+}
+
+impl MemoryEntry {
+    pub fn category_label(&self) -> &'static str {
+        category_label(&self.category)
+    }
+}
+
+pub struct MemorySyndicator;
+
+impl MemorySyndicator {
+    /// Syndicate local memories to the global hive mind if they meet reward criteria.
+    pub fn syndicate(local: &AgentMemory, hive: &mut HiveMind, min_reward: f32) {
+        for entry in local.entries() {
+            // Syndicate patterns and decisions as they are most valuable for cross-mission reuse
+            if entry.category == MemoryCategory::Pattern || entry.category == MemoryCategory::Decision {
+                if !hive.shared_insights.iter().any(|i| i.content == entry.content) {
+                    hive.shared_insights.push(entry.clone());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

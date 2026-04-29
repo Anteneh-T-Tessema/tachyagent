@@ -65,8 +65,16 @@ pub(crate) enum CliAction {
     Finetune { output: Option<String>, base_model: Option<String> },
     /// F2: policy-as-code — view/set/validate tachy-policy.yaml
     Policy { subcommand: String, file: Option<String> },
-    /// D2/D3: swarm — run a multi-agent parallel refactor
-    Swarm { goal: String, files: Vec<String>, model: Option<String> },
+    /// Phase 23: swarm — manage distributed nodes and run multi-agent tasks
+    Swarm { 
+        subcommand: String, 
+        goal: Option<String>, 
+        url: Option<String>, 
+        files: Vec<String>, 
+        model: Option<String> 
+    },
+    /// Phase 21: optimize — trigger autonomous fine-tuning bridge
+    OptimizeBrain,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
@@ -313,27 +321,34 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
             Ok(CliAction::Policy { subcommand, file })
         }
         "swarm" => {
-            let mut goal = String::new();
+            let subcommand = rest.get(1).cloned().unwrap_or_else(|| "status".to_string());
+            let mut goal = None;
+            let mut url = None;
             let mut files = Vec::new();
             let mut swarm_model = None;
-            let mut i = 1;
-            while i < rest.len() {
-                match rest[i].as_str() {
-                    "--goal" | "-g" => { goal = rest.get(i+1).cloned().unwrap_or_default(); i += 2; }
-                    "--model" => { swarm_model = rest.get(i+1).cloned(); i += 2; }
-                    other if other.starts_with("--") => { i += 1; }
-                    other => { files.push(other.to_string()); i += 1; }
+            
+            if subcommand == "register" {
+                url = rest.get(2).cloned();
+            } else if subcommand == "run" {
+                let mut i = 2;
+                while i < rest.len() {
+                    match rest[i].as_str() {
+                        "--goal" | "-g" => { goal = rest.get(i+1).cloned(); i += 2; }
+                        "--model" => { swarm_model = rest.get(i+1).cloned(); i += 2; }
+                        other if other.starts_with("--") => { i += 1; }
+                        other => { files.push(other.to_string()); i += 1; }
+                    }
                 }
+                if goal.is_none() && !files.is_empty() {
+                    goal = Some(files.remove(0));
+                }
+            } else {
+                // status, list, etc.
             }
-            if goal.is_empty() {
-                // treat all non-flag args as goal if no --goal flag
-                if !files.is_empty() { goal = files.remove(0); }
-            }
-            if goal.is_empty() {
-                return Err("usage: swarm --goal \"...\" [file1 file2 ...]".to_string());
-            }
-            Ok(CliAction::Swarm { goal, files, model: swarm_model })
+            
+            Ok(CliAction::Swarm { subcommand, goal, url, files, model: swarm_model })
         }
+        "optimize" => Ok(CliAction::OptimizeBrain),
         other => Err(format!("unknown command: {other}\nRun `tachy --help` for usage.")),
     }
 }

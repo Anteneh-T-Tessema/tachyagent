@@ -84,6 +84,7 @@ impl AgentDefinition {
             requires_approval: self.approval_required,
             use_planning: self.use_planning,
             use_workspace_context: self.use_workspace_context,
+            preferred_adapter: None,
         }
     }
 }
@@ -283,6 +284,7 @@ mod tests {
             max_iterations: 10,
             approval_required: false,
             use_planning: true,
+            use_workspace_context: true,
             triggers: vec![],
         };
         let template = agent.to_template();

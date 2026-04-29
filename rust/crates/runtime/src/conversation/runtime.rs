@@ -1,6 +1,7 @@
 //! `ConversationRuntime` — the agent turn-execution loop, plus `StaticToolExecutor`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::types::{
     ApiClient, ApiRequest, AssistantEvent, ResponseFormat, RuntimeError, RuntimeEvent, ToolError,
@@ -21,6 +22,9 @@ pub struct ConversationRuntime<C, T> {
     required_write_file_path: Option<String>,
     usage_tracker: UsageTracker,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<RuntimeEvent>>,
+    semantic_cache: Option<Arc<crate::semantic_cache::SemanticCache>>,
+    embedder: Option<Arc<dyn crate::semantic_cache::Embedder>>,
+    pub current_reward_score: Option<f32>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -47,7 +51,22 @@ where
             required_write_file_path: None,
             usage_tracker,
             event_tx: None,
+            semantic_cache: None,
+            embedder: None,
+            current_reward_score: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_embedder(mut self, embedder: Arc<dyn crate::semantic_cache::Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    #[must_use]
+    pub fn with_semantic_cache(mut self, cache: Arc<crate::semantic_cache::SemanticCache>) -> Self {
+        self.semantic_cache = Some(cache);
+        self
     }
 
     #[must_use]
@@ -77,6 +96,31 @@ where
     pub fn with_required_write_file_path(mut self, path: Option<String>) -> Self {
         self.required_write_file_path = path;
         self
+    }
+
+    /// Manually trigger session compaction with a custom summary.
+    pub fn compact_with_summary(&mut self, summary: String) {
+        let preserve_count = 4;
+        let keep_from = self.session.messages.len().saturating_sub(preserve_count);
+        let preserved = self.session.messages[keep_from..].to_vec();
+        
+        let continuation = crate::compact::get_compact_continuation_message(&summary, true, !preserved.is_empty());
+
+        let mut compacted_messages = vec![ConversationMessage {
+            role: crate::session::MessageRole::System,
+            blocks: vec![ContentBlock::Text { text: continuation }],
+            usage: None,
+        }];
+        compacted_messages.extend(preserved);
+        
+        self.session.messages = compacted_messages;
+        
+        if let Some(ref tx) = self.event_tx {
+            let _ = tx.send(RuntimeEvent::SessionCompacted { 
+                removed_count: keep_from,
+                summary: summary.clone() 
+            });
+        }
     }
 
     pub fn run_turn(
@@ -109,46 +153,101 @@ where
                 ));
             }
 
-            let request = ApiRequest {
-                system_prompt: self.system_prompt.clone(),
-                messages: self.session.messages.clone(),
-                format: ResponseFormat::default(),
-            };
+            let system_prompt_str = self.system_prompt.join("\n");
+            let prompt_str = serde_json::to_string(&self.session.messages).unwrap_or_default();
 
-            // API call with error recovery
-            let events = match self.api_client.stream(request) {
-                Ok(events) => {
-                    consecutive_errors = 0;
-                    // Emit TextDeltas if we have a listener
+            let mut events_cached = None;
+            let mut is_cache_hit = false;
+            let mut prompt_embedding = None;
+
+            if let Some(cache) = &self.semantic_cache {
+                // 1. Exact Match Lookup
+                if let Some(cached) = cache.lookup(&prompt_str, &system_prompt_str) {
                     if let Some(tx) = &self.event_tx {
-                        for event in &events {
-                            if let AssistantEvent::TextDelta(delta) = event {
-                                let _ = tx.send(RuntimeEvent::TextDelta(delta.clone()));
+                        let _ = tx.send(RuntimeEvent::TextDelta(format!("[Exact Cache Hit] {}", cached.output)));
+                    }
+                    events_cached = Some(vec![
+                        AssistantEvent::TextDelta(cached.output.clone()),
+                        AssistantEvent::MessageStop,
+                    ]);
+                    is_cache_hit = true;
+                } 
+                // 2. Semantic Match Lookup (if exact fails and embedder is present)
+                else if let Some(embedder) = &self.embedder {
+                    if let Ok(emb) = embedder.embed(&prompt_str) {
+                        prompt_embedding = Some(emb.clone());
+                        if let Some(cached) = cache.lookup_semantic(&emb, 0.95) {
+                            if let Some(trace) = &cached.expert_trace {
+                                if let Some(tx) = &self.event_tx {
+                                    let _ = tx.send(RuntimeEvent::TextDelta(format!("\n[Flash Guidance Active] Injecting expert trace from similar task...")));
+                                }
+                                // Inject expert trace as guidance in the system prompt
+                                let guidance = format!("\n\n### EXPERT GUIDANCE\nSimilar task succeeded with this pattern:\n{}\nUse this as a guide for your execution.", trace);
+                                self.system_prompt.push(guidance); self.current_reward_score = Some(cached.reward_score);
+                            } else {
+                                // Default semantic hit: return output
+                                if let Some(tx) = &self.event_tx {
+                                    let _ = tx.send(RuntimeEvent::TextDelta(format!("[Semantic Cache Hit] {}", cached.output)));
+                                }
+                                events_cached = Some(vec![
+                                    AssistantEvent::TextDelta(cached.output.clone()),
+                                    AssistantEvent::MessageStop,
+                                ]);
+                                is_cache_hit = true;
                             }
                         }
                     }
-                    events
                 }
+            }
 
-                Err(error) => {
-                    consecutive_errors += 1;
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        // If we have partial results, return them
-                        if !assistant_messages.is_empty() {
-                            break;
+            let events = if let Some(e) = events_cached { e } else {
+                // API call with error recovery
+                match self.api_client.stream(ApiRequest {
+                    system_prompt: self.system_prompt.clone(),
+                    messages: self.session.messages.clone(),
+                    format: ResponseFormat::default(),
+                }) {
+                    Ok(events) => {
+                        consecutive_errors = 0;
+                        // Emit TextDeltas if we have a listener
+                        if let Some(tx) = &self.event_tx {
+                            for event in &events {
+                                if let AssistantEvent::TextDelta(delta) = event {
+                                    let _ = tx.send(RuntimeEvent::TextDelta(delta.clone()));
+                                }
+                            }
                         }
-                        return Err(error);
+                        events
                     }
-                    // Inject a recovery hint so the model can try again
-                    self.session.messages.push(ConversationMessage::user_text(
-                        format!("[System: Previous response failed ({error}). Please try again. If you need to use a tool, use the function calling mechanism — do not print JSON as text.]")
-                    ));
-                    continue;
+
+                    Err(error) => {
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            // If we have partial results, return them
+                            if !assistant_messages.is_empty() {
+                                break;
+                            }
+                            return Err(error);
+                        }
+                        // Inject a recovery hint so the model can try again
+                        self.session.messages.push(ConversationMessage::user_text(
+                            format!("[System: Previous response failed ({error}). Please try again. If you need to use a tool, use the function calling mechanism — do not print JSON as text.]")
+                        ));
+                        continue;
+                    }
                 }
             };
 
             let (assistant_message, usage) = match build_assistant_message(events) {
-                Ok(result) => result,
+                Ok(result) => {
+                    if !is_cache_hit {
+                        if let Some(cache) = &self.semantic_cache {
+                            let text = assistant_message_to_text(&result.0);
+                            cache.store(&prompt_str, &system_prompt_str, &text, "frontier", prompt_embedding, None, 1.0);
+                        }
+                    }
+                    result
+                },
                 Err(error) => {
                     consecutive_errors += 1;
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -214,9 +313,9 @@ where
             for (tool_use_id, tool_name, input) in pending_tool_uses {
                 let permission_outcome = if let Some(prompt) = prompter.as_mut() {
                     self.permission_policy
-                        .authorize(&tool_name, &input, Some(*prompt))
+                        .authorize(&tool_name, &input, Some(*prompt), self.current_reward_score)
                 } else {
-                    self.permission_policy.authorize(&tool_name, &input, None)
+                    self.permission_policy.authorize(&tool_name, &input, None, self.current_reward_score)
                 };
 
                 let result_message = match permission_outcome {
@@ -268,6 +367,15 @@ where
                     }
                 };
                 self.session.messages.push(result_message.clone());
+
+                // Detect compaction trigger
+                if let ContentBlock::ToolResult { output, .. } = &result_message.blocks[0] {
+                    if output == "__TACTY_TRIGGER_COMPACTION__" {
+                        let summary = crate::compact::digest_session(&self.session);
+                        self.compact_with_summary(summary);
+                    }
+                }
+
                 if let Some(tx) = &self.event_tx {
                     if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = &result_message.blocks[0] {
                         let _ = tx.send(RuntimeEvent::ToolResult {
@@ -335,6 +443,11 @@ where
     }
 
     #[must_use]
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    #[must_use]
     pub fn into_session(self) -> Session {
         self.session
     }
@@ -356,7 +469,7 @@ where
         })
         .to_string();
 
-        match self.permission_policy.authorize("write_file", &input, None) {
+        match self.permission_policy.authorize("write_file", &input, None, self.current_reward_score) {
             PermissionOutcome::Allow => match self.tool_executor.execute("write_file", &input) {
                 Ok(output) => Ok(Some(ConversationMessage::tool_result(
                     "required-artifact",
@@ -417,6 +530,16 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
             text: std::mem::take(text),
         });
     }
+}
+
+fn assistant_message_to_text(msg: &ConversationMessage) -> String {
+    msg.blocks.iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn extract_assistant_text(messages: &[ConversationMessage]) -> String {

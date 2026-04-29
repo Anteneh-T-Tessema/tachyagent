@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use audit::RateLimiter;
+use audit::TieredRateLimiter;
 
 use crate::state::DaemonState;
 use crate::web;
@@ -22,8 +22,10 @@ use super::auth::{
     handle_sso_config, handle_sso_login, handle_sso_logout, handle_sso_sessions, handle_usage,
 };
 use super::governance::{
-    handle_add_message, handle_approve_patch, handle_audit_export, handle_audit_log,
+    handle_add_message, handle_approve_patch, handle_approve_plan,
+    handle_audit_export, handle_audit_flush, handle_audit_log, handle_audit_verify,
     handle_create_conversation, handle_create_team, handle_dashboard, handle_delete_conversation,
+    handle_fork_session, handle_promote,
     handle_get_cloud_job, handle_get_conversation, handle_get_mission_feed, handle_get_policy,
     handle_get_team, handle_install, handle_join_team, handle_list_cloud_jobs,
     handle_list_conversations, handle_list_file_locks, handle_list_pending_approvals,
@@ -31,15 +33,16 @@ use super::governance::{
     handle_set_policy, handle_submit_cloud_job, handle_team_agents, handle_team_audit,
 };
 use super::intel::{
-    handle_dependency_graph, handle_diagnostics, handle_finetune_extract,
-    handle_finetune_modelfile, handle_index_build, handle_index_status, handle_monorepo,
-    handle_search,
+    handle_dependency_graph, handle_diagnostics, handle_eval_run, handle_finetune_extract,
+    handle_finetune_modelfile, handle_harness_start, handle_index_build, handle_index_status, handle_list_harnesses, handle_monorepo,
+    handle_search, handle_policy_upload, handle_reweight_guidance, handle_train_start, handle_train_status,
 };
 use super::runs::{
-    handle_cancel_parallel_run, handle_delete_run_template, handle_event_stream,
+    handle_approve_task, handle_cancel_parallel_run, handle_delete_run_template, handle_event_stream,
     handle_get_parallel_run, handle_get_run_conflicts, handle_get_run_cost,
     handle_get_run_template, handle_get_swarm_run, handle_list_parallel_runs,
-    handle_list_run_templates, handle_list_swarm_runs, handle_parallel_run, handle_replay_run,
+    handle_list_run_templates, handle_list_suspended_tasks, handle_list_swarm_runs,
+    handle_parallel_run, handle_replay_run,
     handle_run_history, handle_run_template, handle_save_run_template, handle_start_swarm_run,
 };
 use super::webhooks::{handle_list_webhooks, handle_register_webhook, handle_verify_webhook_signature};
@@ -51,13 +54,20 @@ use super::yaya::{
     handle_yaya_chat, handle_yaya_get_retrieval_preferences, handle_yaya_list_experts,
     handle_yaya_set_retrieval_preferences, handle_yaya_submit_training_example,
 };
+use super::feedback::{
+    handle_ab_test, handle_activate_adapter, handle_finetune_trigger,
+    handle_get_adapter, handle_gold_standard_extract, handle_gold_standard_status,
+    handle_list_adapters, handle_list_finetune_jobs, handle_register_adapter,
+};
+use super::sync;
+use super::vision::handle_get_snapshot;
 
 // ── Main request handler ──────────────────────────────────────────────────────
 
 pub async fn handle_request(
     raw: &str,
     state: &Arc<Mutex<DaemonState>>,
-    rate_limiter: &Arc<Mutex<RateLimiter>>,
+    rate_limiter: &Arc<Mutex<TieredRateLimiter>>,
     client_ip: &str,
 ) -> Response {
     let (method, path_raw, body) = parse_http_request(raw);
@@ -69,15 +79,25 @@ pub async fn handle_request(
         return Response::Full {
             status: 204,
             content_type: "text/plain".to_string(),
-            body: String::new(),
+            body: String::new().into_bytes(),
+            extra_headers: Vec::new(),
         };
     }
 
-    if !path.starts_with("/api/inference/stats") && !matches!(path, "" | "/" | "/index.html" | "/health") {
+    // Tiered rate limiting: classify path, key by auth token or IP.
+    // Authenticated callers get a separate bucket with the same limits,
+    // preventing a single bad actor from starving legitimate users.
+    let tier = TieredRateLimiter::classify(path);
+    {
+        let auth_key = extract_auth_header(raw);
+        let rate_key = match &auth_key {
+            Some(k) => format!("key:{}", &audit::hash_text(k)[..16]),
+            None    => format!("ip:{client_ip}"),
+        };
         let mut limiter = rate_limiter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let rate_key = if path == "/api/complete" { format!("complete:{client_ip}") } else { client_ip.to_string() };
-        if !limiter.check(&rate_key) {
-            return Response::json(429, &ErrorResponse { error: "rate limit exceeded".to_string() });
+        let decision = limiter.check(tier, &rate_key);
+        if !decision.allowed {
+            return Response::rate_limited(decision.retry_after_secs);
         }
     }
 
@@ -97,7 +117,7 @@ pub async fn handle_request(
         ("GET", "/health") => Response::json(200, handle_health(state)),
         ("GET", "/api/models") => Response::json(200, handle_list_models(state)),
         ("GET", "/api/inference/stats") => handle_inference_stats(state),
-        ("POST", "/api/models/pull") => handle_pull_model(&body, state),
+        ("POST", "/api/models/pull") => gate_action(state, raw, audit::Action::ManageModels, |_| handle_pull_model(&body, state)),
         ("POST", "/api/complete/stream") => handle_complete_stream(&body, state).await,
         ("POST", "/api/chat/stream") => handle_chat_stream(&body, state).await,
         ("GET", "/api/templates") => Response::json(200, handle_list_templates(state)),
@@ -105,6 +125,8 @@ pub async fn handle_request(
         ("GET", "/api/tasks") => Response::json(200, handle_list_tasks(state)),
         ("GET", "/api/audit") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_log(state)),
         ("GET", "/api/audit/export") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_export(state)),
+        ("GET", "/api/audit/verify") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_audit_verify(state)),
+        ("POST", "/api/audit/flush") => gate_action(state, raw, audit::Action::ManageModels, |_| handle_audit_flush(state)),
         ("GET", "/api/metrics") => gate_action(state, raw, audit::Action::ViewAudit, |_| handle_metrics(state)),
         ("GET", "/api/conversations") => handle_list_conversations(state),
         ("POST", "/api/conversations") => handle_create_conversation(&body, state),
@@ -129,18 +151,21 @@ pub async fn handle_request(
             }
         }
         ("GET", "/api/marketplace") => handle_marketplace_list(path, state),
-        ("POST", "/api/marketplace/install") => handle_install(&body, state),
-        ("GET", "/api/parallel/runs") => handle_list_parallel_runs(state),
+        ("POST", "/api/marketplace/install") => gate_action(state, raw, audit::Action::ManageConfig, |_| handle_install(&body, state)),
+        ("GET", "/api/parallel/runs") => handle_list_parallel_runs(state, raw),
         ("GET", "/api/runs/history") => handle_run_history(state),
-        ("POST", "/api/parallel/runs") => handle_parallel_run(&body, state),
+        ("POST", "/api/parallel/runs") => gate_action(state, raw, audit::Action::RunAgent, |_| handle_parallel_run(&body, state, raw)),
         ("GET", "/api/cloud/jobs") => handle_list_cloud_jobs(state),
-        ("POST", "/api/cloud/jobs") => handle_submit_cloud_job(&body, state),
+        ("POST", "/api/cloud/jobs") => gate_action(state, raw, audit::Action::ManageCloudJobs, |_| handle_submit_cloud_job(&body, state)),
         _ if method == "GET" && path.starts_with("/api/cloud/jobs/") => {
             let job_id = path.strip_prefix("/api/cloud/jobs/").unwrap_or(path);
             handle_get_cloud_job(job_id, state)
         }
         ("GET", "/api/swarm/runs") => handle_list_swarm_runs(state),
-        ("POST", "/api/swarm/runs") => handle_start_swarm_run(&body, state),
+        ("POST", "/api/swarm/runs") => gate_action(state, raw, audit::Action::RunAgent, |_| handle_start_swarm_run(&body, state)),
+        ("POST", "/api/swarm/execute") => super::swarm::handle_swarm_execute(&body, state).await,
+        ("POST", "/api/swarm/register") => super::swarm::handle_swarm_register(&body, state).await,
+        ("GET", "/api/swarm/nodes") => super::swarm::handle_swarm_list_nodes(state).await,
         _ if method == "GET" && path.starts_with("/api/swarm/runs/") => {
             let run_id = path.strip_prefix("/api/swarm/runs/").unwrap_or(path);
             handle_get_swarm_run(run_id, state)
@@ -157,17 +182,17 @@ pub async fn handle_request(
         ("POST", "/api/yaya/retrieval-preferences") => handle_yaya_set_retrieval_preferences(&body, raw, state).await,
         ("POST", "/api/yaya/chat") => handle_yaya_chat(&body, raw, state).await,
         ("POST", "/api/yaya/training/examples") => handle_yaya_submit_training_example(&body, raw, state).await,
-        ("GET", "/api/policy") => handle_get_policy(state),
-        ("POST", "/api/policy") => handle_set_policy(&body, state),
+        ("GET", "/api/policy") => gate_action(state, raw, audit::Action::ManageGovernance, |_| handle_get_policy(state)),
+        ("POST", "/api/policy") => gate_action(state, raw, audit::Action::ManageGovernance, |_| handle_set_policy(&body, state)),
 
         // --- routes present in OpenAPI spec ---
         ("POST", "/api/complete") => handle_complete(&body, state).await,
-        ("POST", "/api/parallel/run") => handle_parallel_run(&body, state), // spec uses singular
-        ("GET", "/api/webhooks") => handle_list_webhooks(state),
-        ("POST", "/api/webhooks") => handle_register_webhook(&body, state),
-        ("POST", "/api/webhooks/verify") => handle_verify_webhook_signature(&body, raw, state),
-        ("POST", "/api/tasks/schedule") => handle_schedule_task(&body, state),
-        ("POST", "/api/license/activate") => handle_license_activate(&body, state),
+        ("POST", "/api/parallel/run") => handle_parallel_run(&body, state, raw), // spec uses singular
+        ("GET", "/api/webhooks") => gate_action(state, raw, audit::Action::ManageWebhooks, |_| handle_list_webhooks(state)),
+        ("POST", "/api/webhooks") => gate_action(state, raw, audit::Action::ManageWebhooks, |_| handle_register_webhook(&body, state)),
+        ("POST", "/api/webhooks/verify") => gate_action(state, raw, audit::Action::ManageWebhooks, |_| handle_verify_webhook_signature(&body, raw, state)),
+        ("POST", "/api/tasks/schedule") => gate_action(state, raw, audit::Action::ScheduleTask, |_| handle_schedule_task(&body, state)),
+        ("POST", "/api/license/activate") => gate_action(state, raw, audit::Action::ManageGovernance, |_| handle_license_activate(&body, state)),
 
         ("POST", "/api/prompt") => handle_prompt_oneshot(&body, state),
         ("GET", "/api/usage") => handle_usage(state),
@@ -195,19 +220,44 @@ pub async fn handle_request(
         ("POST", "/api/workers/register") => handle_register_worker(&body, state),
         ("POST", "/api/workers/heartbeat") => handle_worker_heartbeat(&body, state),
         ("DELETE", "/api/workers/deregister") => handle_deregister_worker(&body, state),
-        ("POST", "/api/finetune/extract") => handle_finetune_extract(&body, state),
+        ("POST", "/api/finetune/extract") => gate_action(state, raw, audit::Action::ManageIntelligence, |user| handle_finetune_extract(&body, state, user)),
         ("POST", "/api/finetune/modelfile") => handle_finetune_modelfile(&body, state),
+        // Phase 2: Gold Standard
+        ("GET", "/api/gold-standard/status") => handle_gold_standard_status(state),
+        ("POST", "/api/gold-standard/extract") => gate_action(state, raw, audit::Action::ManageIntelligence, |_| handle_gold_standard_extract(state)),
+        // Phase 2: Adapter Registry
+        ("GET", "/api/adapters") => handle_list_adapters(state),
+        ("POST", "/api/adapters") => gate_action(state, raw, audit::Action::ManageModels, |_| handle_register_adapter(&body, state)),
+        ("POST", "/api/adapters/ab-test") => gate_action(state, raw, audit::Action::ManageModels, |_| handle_ab_test(&body, state)),
+        // Phase 2: Fine-tuning Bridge
+        ("GET", "/api/finetune/jobs") => handle_list_finetune_jobs(state),
+        ("POST", "/api/finetune/trigger") => gate_action(state, raw, audit::Action::ManageIntelligence, |_| handle_finetune_trigger(&body, state)),
         ("GET", "/api/diagnostics") => handle_diagnostics(&query_str, state),
         ("POST", "/api/index") => handle_index_build(&body, state),
         ("GET", "/api/index") => handle_index_status(state),
+        ("POST", "/api/intel/train") => handle_train_start(&body, state),
+        ("GET", "/api/intel/train/status") => handle_train_status(state),
         ("GET", "/api/graph") => handle_dependency_graph(&query_str, state),
         ("GET", "/api/monorepo") => handle_monorepo(state),
         ("GET", "/api/dashboard") => handle_dashboard(state),
+        ("POST", "/api/eval/run") => handle_eval_run(&body, state),
+        ("POST", "/api/harness/start") => handle_harness_start(&body, state),
+        ("GET", "/api/harnesses") => handle_list_harnesses(state),
+        ("GET", "/api/repo/manifest") => handle_monorepo(state),
         // Wave 2: live events, cost tracking, run replay, DAG templates
         ("GET", "/api/events") => handle_event_stream(state).await,
         ("GET", "/api/run-templates") => handle_list_run_templates(state),
         ("POST", "/api/run-templates") => handle_save_run_template(&body, state),
-        _ => route_dynamic(method.as_str(), path, &body, state).await,
+        ("POST", "/api/governance/promote") => handle_promote(&body, state),
+        ("POST", "/api/governance/approve-plan") => handle_approve_plan(&body, state),
+        ("POST", "/api/governance/fork") => handle_fork_session(&body, state),
+        ("POST", "/api/intel/guidance/reweight") => handle_reweight_guidance(&body, state),
+        ("GET", "/api/governance/mission") => handle_get_mission_feed(state),
+        ("POST", "/api/governance/policy/upload") => gate_action(state, raw, audit::Action::ManagePolicies, |user| handle_policy_upload(&body, state, user)),
+        ("POST", "/api/sync/receive") => sync::handle_receive_sync(&body, state).await,
+        ("POST", "/api/sync/beam") => sync::handle_trigger_beam(&query_str, state).await,
+        ("GET", "/api/sync/pulse") => sync::handle_sync_pulse(state),
+        _ => route_dynamic(method.as_str(), path, &body, state, raw).await,
     }
 }
 
@@ -222,17 +272,33 @@ async fn route_dynamic(
     path: &str,
     body: &str,
     state: &Arc<Mutex<DaemonState>>,
+    raw: &str,
 ) -> Response {
+    // ── /api/adapters/{id}/* ─────────────────────────────────────────────────
+    if let Some(rest) = path.strip_prefix("/api/adapters/") {
+        if method == "GET" {
+            return handle_get_adapter(rest, state);
+        }
+        if method == "POST" {
+            if let Some(id) = rest.strip_suffix("/activate") {
+                return handle_activate_adapter(id, state);
+            }
+        }
+    }
+
     // ── /api/parallel/runs/{id}/* ────────────────────────────────────────────
     if let Some(rest) = path.strip_prefix("/api/parallel/runs/") {
         if method == "GET" {
+            if rest == "suspended" {
+                return handle_list_suspended_tasks(state);
+            }
             if let Some(run_id) = rest.strip_suffix("/cost") {
-                return handle_get_run_cost(run_id, state);
+                return handle_get_run_cost(run_id, state, raw);
             }
             if let Some(run_id) = rest.strip_suffix("/conflicts") {
-                return handle_get_run_conflicts(run_id, state);
+                return handle_get_run_conflicts(run_id, state, raw);
             }
-            return handle_get_parallel_run(rest, state);
+            return handle_get_parallel_run(rest, state, raw);
         }
         if method == "POST" {
             if let Some(run_id) = rest.strip_suffix("/replay") {
@@ -240,6 +306,14 @@ async fn route_dynamic(
             }
             if let Some(run_id) = rest.strip_suffix("/cancel") {
                 return handle_cancel_parallel_run(run_id, body, state);
+            }
+            // Wave 2D: POST /api/parallel/runs/{run_id}/tasks/{task_id}/approve
+            if let Some(task_path) = rest.find("/tasks/").map(|pos| &rest[pos + 7..]) {
+                if let Some(task_id) = task_path.strip_suffix("/approve") {
+                    return gate_action(state, raw, audit::Action::ManageGovernance, |_| {
+                        handle_approve_task(task_id, state)
+                    });
+                }
             }
         }
     }
@@ -251,7 +325,7 @@ async fn route_dynamic(
             "DELETE"                          => return handle_delete_run_template(rest, state),
             "POST" => {
                 if let Some(name) = rest.strip_suffix("/run") {
-                    return handle_run_template(name, body, state);
+                    return handle_run_template(name, body, state, raw);
                 }
             }
             _ => {}
@@ -283,6 +357,13 @@ async fn route_dynamic(
             "GET"    => return handle_get_conversation(id, state),
             "DELETE" => return handle_delete_conversation(id, state),
             _ => {}
+        }
+    }
+
+    // ── /api/vision/snapshot/{id} ──────────────────────────────────────────
+    if let Some(id) = path.strip_prefix("/api/vision/snapshot/") {
+        if method == "GET" {
+            return handle_get_snapshot(id, state);
         }
     }
 

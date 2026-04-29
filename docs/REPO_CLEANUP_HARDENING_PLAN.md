@@ -1,8 +1,8 @@
-# Claw-Code Repo Cleanup and Hardening Plan
+# TachyCode Repo Cleanup and Hardening Plan
 
 ## Purpose
 
-This document defines a focused cleanup and hardening plan for Claw-Code itself. The goal is not cosmetic tidiness. The goal is to increase trust, reduce contributor confusion, improve release reliability, and harden the platform around its strongest capabilities.
+This document defines a focused cleanup and hardening plan for TachyCode itself. The goal is not cosmetic tidiness. The goal is to increase trust, reduce contributor confusion, improve release reliability, and harden the platform around its strongest capabilities.
 
 ## Current Assessment
 
@@ -266,6 +266,6 @@ The result is that the best parts of the repo are stronger than the repo hygiene
 
 ## Strategic Conclusion
 
-Claw-Code does not mainly need more breadth right now. It needs clearer canonical structure and stronger trust signals around what it already does well.
+TachyCode does not mainly need more breadth right now. It needs clearer canonical structure and stronger trust signals around what it already does well.
 
 If this cleanup phase is done well, the platform will look and feel much more credible without changing its core strategic direction.

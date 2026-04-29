@@ -1,6 +1,6 @@
 # Multi-Agent Web Application Automation System Architecture
 
-This document outlines the architecture for building a multi-agent system for automated web application development, leveraging the Claw Code harness as its foundation. This system supports workflow-specific agent deployment and is designed for easy use by laypersons across multiple platforms.
+This document outlines the architecture for building a multi-agent system for automated web application development, leveraging the TachyCode harness as its foundation. This system supports workflow-specific agent deployment and is designed for easy use by laypersons across multiple platforms.
 
 ---
 
@@ -13,7 +13,7 @@ This document outlines the architecture for building a multi-agent system for au
 5. [Data Flow Between Agents](#data-flow-between-agents)
 6. [Component Interaction Diagrams](#component-interaction-diagrams)
 7. [Runtime Execution Flow](#runtime-execution-flow)
-8. [Integration with Claw Code](#integration-with-claw-code)
+8. [Integration with TachyCode](#integration-with-tachycode)
 9. [Platform Support (Lovable, Emergent, Base44)](#platform-support-lovable-emergent-base44)
 10. [Layperson Deployment Guide](#layperson-deployment-guide)
 
@@ -63,7 +63,7 @@ A multi-agent system where specialized AI agents collaborate to build, test, and
 │  │  Agents     │  │  Agents     │  │  Agents     │  │  Agents     │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                        Claw Code Harness Layer                               │
+│                        TachyCode Harness Layer                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
 │  │  Port       │  │  Query      │  │  Tool       │  │  Session    │        │
@@ -547,7 +547,7 @@ graph TB
         AM[Auditor Agent]
     end
 
-    subgraph "Claw Code Harness"
+    subgraph "TachyCode Harness"
         PR[PortRuntime]
         QE[QueryEnginePort]
         TR[ToolRegistry]
@@ -717,11 +717,11 @@ graph LR
 
 ---
 
-## Integration with Claw Code
+## Integration with TachyCode
 
 ### Reusing Existing Components
 
-| Claw Code Component | Multi-Agent Usage |
+| TachyCode Component | Multi-Agent Usage |
 |---------------------|-------------------|
 | [`PortRuntime`](src/runtime.py:89) | Base runtime for all agents |
 | [`QueryEnginePort`](src/query_engine.py:36) | Agent message processing |

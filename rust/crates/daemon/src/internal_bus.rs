@@ -34,6 +34,17 @@ pub enum MissionEvent {
         task_id: String,
         output: Option<String>,
     },
+    /// A new visual snapshot captured by an agent.
+    VisionUpdate {
+        agent_id: String,
+        snapshot_id: String,
+        thumbnail_url: String,
+    },
+    /// A multi-agent consensus report has been finalized.
+    ConsensusFormed {
+        agent_id: String,
+        report: intelligence::consensus::ConsensusReport,
+    },
     /// A system-level heartbeat to ensure the swarm is healthy.
     Heartbeat {
         timestamp: u64,

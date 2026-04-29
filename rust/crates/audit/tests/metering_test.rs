@@ -6,6 +6,8 @@
 
 use proptest::prelude::*;
 use audit::{AuditLogger, MeteringService, UsageEvent, UsageEventType, MeteringError};
+use audit::cost_model::CostModelRegistry;
+use std::sync::Arc;
 
 fn make_agent_run_event(user_id: &str, input: u64, output: u64, tools: u32, ts: u64) -> UsageEvent {
     UsageEvent {
@@ -55,7 +57,7 @@ proptest! {
         tool_count in 0u32..20u32,
         ts in 1_000_000u64..9_999_999u64,
     ) {
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
         let event = make_agent_run_event("user-1", input_tokens, output_tokens, tool_count, ts);
 
         prop_assert!(svc.record_event(event).is_ok(), "valid event should not fail");
@@ -76,7 +78,7 @@ proptest! {
         tokens_per_event in 1u64..1_000u64,
     ) {
         // Feature: product-hardening-v3, Property 1: Usage event recording preserves all fields
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
 
         for i in 0..n {
             let event = make_agent_run_event("user-acc", tokens_per_event, tokens_per_event, 0, i as u64 + 1);
@@ -107,7 +109,7 @@ proptest! {
         events_per_user in 1usize..6usize,
         tokens in 10u64..500u64,
     ) {
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
         let mut expected_total = 0u64;
 
         for u in 0..user_count {
@@ -137,7 +139,7 @@ proptest! {
         tool_count in 1usize..5usize,
     ) {
         // Feature: product-hardening-v3, Property 2: Counter consistency
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
         let uid = "user-indep";
 
         for i in 0..run_count {
@@ -160,7 +162,7 @@ proptest! {
 #[test]
 fn empty_user_id_is_rejected() {
     // Feature: product-hardening-v3, Property 3: Invalid usage events are rejected
-    let mut svc = MeteringService::new(AuditLogger::new());
+    let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
     let event = make_agent_run_event("", 100, 100, 0, 1);
     assert!(
         matches!(svc.record_event(event), Err(MeteringError::InvalidEvent(_))),
@@ -179,7 +181,7 @@ proptest! {
         input in 0u64..10_000u64,
         output in 0u64..10_000u64,
     ) {
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
         let event = make_agent_run_event("", input, output, 0, 1);
         prop_assert!(svc.record_event(event).is_err(), "empty user_id must fail");
     }
@@ -192,7 +194,7 @@ proptest! {
         output in 0u64..100_000u64,
     ) {
         // Feature: product-hardening-v3, Property 3: Invalid usage events are rejected
-        let mut svc = MeteringService::new(AuditLogger::new());
+        let mut svc = MeteringService::new(Arc::new(AuditLogger::new()), CostModelRegistry::default());
         let event = make_agent_run_event(&user_id, input, output, 0, 1);
         prop_assert!(svc.record_event(event).is_ok(), "valid event must be accepted");
     }

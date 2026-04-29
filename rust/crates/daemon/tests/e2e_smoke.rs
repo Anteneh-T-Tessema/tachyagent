@@ -53,7 +53,7 @@ fn agent_run_with_real_model() {
         template,
         session_id: "e2e-smoke".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
+        environment: std::collections::BTreeMap::new(), team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -67,6 +67,7 @@ fn agent_run_with_real_model() {
         &root,
         None,
         None,
+        false,
     );
 
     eprintln!("Result: success={}, iterations={}, tools={}", result.success, result.iterations, result.tool_invocations);
@@ -139,7 +140,7 @@ fn chat_template_reads_file_and_references_content() {
         template,
         session_id: "e2e-chat-read".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
+        environment: std::collections::BTreeMap::new(), team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -153,6 +154,7 @@ fn chat_template_reads_file_and_references_content() {
         &root,
         None,
         None,
+        false,
     );
 
     eprintln!("Summary: {}", &result.summary[..result.summary.len().min(300)]);
@@ -193,7 +195,7 @@ fn code_reviewer_template_produces_review_summary() {
         template,
         session_id: "e2e-review".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
+        environment: std::collections::BTreeMap::new(), team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -207,6 +209,7 @@ fn code_reviewer_template_produces_review_summary() {
         &root,
         None,
         None,
+        false,
     );
 
     eprintln!("Review summary: {}", &result.summary[..result.summary.len().min(300)]);
@@ -241,7 +244,7 @@ fn agent_creates_reads_and_modifies_file() {
         template,
         session_id: "e2e-file-ops".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
+        environment: std::collections::BTreeMap::new(), team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -255,6 +258,7 @@ fn agent_creates_reads_and_modifies_file() {
         &root,
         None,
         None,
+        false,
     );
 
     eprintln!("File ops result: success={}, tools={}", result.success, result.tool_invocations);
@@ -304,12 +308,15 @@ fn parallel_execution_two_independent_tasks_complete() {
         model: Some(model.clone()),
         deps: vec![],
         priority: 5,
+        role: daemon::parallel::TaskRole::General,
         status: TaskStatus::Pending,
         result: None,
         created_at: now,
         started_at: None,
         completed_at: None,
         work_dir: Some(root.clone()),
+        team_id: None,
+        conditions: Default::default(), approval_required: false, approved: false,
     };
 
     let run = ParallelRun {
@@ -320,8 +327,11 @@ fn parallel_execution_two_independent_tasks_complete() {
         ],
         status: RunStatus::Running,
         created_at: now,
-        max_concurrency: 2,
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 2,
+        team_id: None,
+        max_cost_usd: None,
     };
 
     let completed_run = daemon::execute_parallel_run(run, &state);
@@ -379,7 +389,7 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         template,
         session_id: "e2e-audit".to_string(),
         working_directory: root.to_string_lossy().to_string(),
-        environment: std::collections::BTreeMap::new(),
+        environment: std::collections::BTreeMap::new(), team_id: None,
     };
 
     let result = daemon::AgentEngine::run_agent(
@@ -393,6 +403,7 @@ fn agent_run_produces_audit_events_with_hash_chain() {
         &root,
         None,
         None,
+        false,
     );
 
     let events = captured.events();

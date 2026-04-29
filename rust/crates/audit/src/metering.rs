@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +36,7 @@ pub struct UsageEvent {
 }
 
 /// Aggregated usage counters for a user within a period.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UsageAggregate {
     pub user_id: String,
     pub team_id: Option<String>,
@@ -43,6 +44,7 @@ pub struct UsageAggregate {
     pub total_output_tokens: u64,
     pub total_tool_invocations: u64,
     pub total_agent_runs: u64,
+    pub total_cost_usd: f64,
     pub period_start: u64,
     pub period_end: u64,
 }
@@ -67,16 +69,18 @@ impl std::error::Error for MeteringError {}
 /// Tracks usage events and maintains in-memory counters keyed by `user_id`.
 pub struct MeteringService {
     counters: BTreeMap<String, UsageAggregate>,
-    audit_logger: AuditLogger,
+    audit_logger: Arc<AuditLogger>,
+    cost_model: crate::cost_model::CostModelRegistry,
 }
 
 impl MeteringService {
     /// Create a new metering service backed by the given audit logger.
     #[must_use]
-    pub fn new(audit_logger: AuditLogger) -> Self {
+    pub fn new(audit_logger: Arc<AuditLogger>, cost_model: crate::cost_model::CostModelRegistry) -> Self {
         Self {
             counters: BTreeMap::new(),
             audit_logger,
+            cost_model,
         }
     }
 
@@ -123,6 +127,12 @@ impl MeteringService {
         self.audit_logger.log(&audit_event);
 
         // Update counters
+        let cost = self.cost_model.calculate_cost(
+            event.model_name.as_deref().unwrap_or("unknown"),
+            event.input_tokens,
+            event.output_tokens
+        );
+
         let agg = self.counters.entry(event.user_id.clone()).or_insert_with(|| {
             UsageAggregate {
                 user_id: event.user_id.clone(),
@@ -131,6 +141,7 @@ impl MeteringService {
                 total_output_tokens: 0,
                 total_tool_invocations: 0,
                 total_agent_runs: 0,
+                total_cost_usd: 0.0,
                 period_start: event.timestamp,
                 period_end: event.timestamp,
             }
@@ -138,6 +149,7 @@ impl MeteringService {
 
         agg.total_input_tokens += event.input_tokens;
         agg.total_output_tokens += event.output_tokens;
+        agg.total_cost_usd += cost;
 
         match event.event_type {
             UsageEventType::AgentRun => {
@@ -197,6 +209,7 @@ impl MeteringService {
                             total_output_tokens: agg.total_output_tokens,
                             total_tool_invocations: agg.total_tool_invocations,
                             total_agent_runs: agg.total_agent_runs,
+                            total_cost_usd: agg.total_cost_usd,
                             period_start: agg.period_start,
                             period_end: agg.period_end,
                         });
@@ -206,6 +219,7 @@ impl MeteringService {
                         r.total_output_tokens += agg.total_output_tokens;
                         r.total_tool_invocations += agg.total_tool_invocations;
                         r.total_agent_runs += agg.total_agent_runs;
+                        r.total_cost_usd += agg.total_cost_usd;
                         if agg.period_start < r.period_start {
                             r.period_start = agg.period_start;
                         }
@@ -235,10 +249,30 @@ impl MeteringService {
         drained
     }
 
+    /// Get usage for all users within a time range.
+    #[must_use]
+    pub fn get_all_usage(&self, from: u64, to: u64) -> Vec<UsageAggregate> {
+        self.counters.values()
+            .filter(|agg| agg.period_end >= from && agg.period_start <= to)
+            .cloned()
+            .collect()
+    }
+
     /// Access the underlying audit logger.
     #[must_use]
     pub fn audit_logger(&self) -> &AuditLogger {
         &self.audit_logger
+    }
+
+    /// Return the total accumulated cost in USD for a team across all time.
+    /// Used for pre-flight budget checks before launching new agent tasks.
+    #[must_use]
+    pub fn team_accumulated_cost_usd(&self, team_id: &str) -> f64 {
+        self.counters
+            .values()
+            .filter(|agg| agg.team_id.as_deref() == Some(team_id))
+            .map(|agg| agg.total_cost_usd)
+            .sum()
     }
 
     /// Access the counters (for testing / billing integration).
@@ -257,7 +291,10 @@ mod tests {
         let sink = MemoryAuditSink::new();
         let mut logger = AuditLogger::new();
         logger.add_sink(sink.clone());
-        (MeteringService::new(logger), sink)
+        (
+            MeteringService::new(Arc::new(logger), crate::cost_model::CostModelRegistry::default()),
+            sink,
+        )
     }
 
     fn agent_run_event(user_id: &str, input: u64, output: u64, tools: u32, ts: u64) -> UsageEvent {

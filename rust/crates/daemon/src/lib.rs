@@ -10,8 +10,10 @@ pub mod saas;
 mod state;
 pub mod teams;
 mod web;
+pub mod swarm;
 pub mod worker_registry;
 pub mod telemetry;
+pub mod logger;
 
 pub use channels::{load_channels, ChannelConfig, ChannelType};
 pub use engine::{AgentEngine, AgentRunResult};

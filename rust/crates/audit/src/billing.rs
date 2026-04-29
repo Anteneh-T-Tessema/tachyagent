@@ -378,7 +378,10 @@ mod tests {
         let sink = MemoryAuditSink::new();
         let mut logger = AuditLogger::new();
         logger.add_sink(sink.clone());
-        (MeteringService::new(logger), sink)
+        (
+            MeteringService::new(Arc::new(logger), crate::cost_model::CostModelRegistry::default()),
+            sink,
+        )
     }
 
     fn agent_run(user: &str, input: u64, output: u64, tools: u32, ts: u64) -> UsageEvent {

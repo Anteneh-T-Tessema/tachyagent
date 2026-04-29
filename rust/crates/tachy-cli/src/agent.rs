@@ -10,7 +10,7 @@ use daemon::DaemonState;
 use crate::DEFAULT_MODEL;
 use crate::info::json_output_enabled;
 
-pub(crate) fn run_serve(addr: &str, workspace: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run_serve(addr: &str, workspace: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = workspace
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| env::current_dir().unwrap_or_default());
@@ -20,8 +20,7 @@ pub(crate) fn run_serve(addr: &str, workspace: Option<&Path>) -> Result<(), Box<
     eprintln!("Workspace: {}", cwd.display());
     eprintln!("State is auto-saved on every change. Ctrl+C to stop.");
 
-    let rt = tokio::runtime::Runtime::new()?;
-    let result = rt.block_on(daemon::serve(addr, state.clone()));
+    let result = daemon::serve(addr, state.clone()).await;
 
     if let Ok(s) = state.lock() {
         s.save();
@@ -57,6 +56,7 @@ pub(crate) fn run_agent_cmd(template: &str, prompt: &str, model: &str) -> Result
         &state.workspace_root,
         None,
         None,
+        false,
     );
 
     if result.success {
@@ -200,7 +200,21 @@ pub(crate) fn verify_audit() -> Result<(), Box<dyn std::error::Error>> {
         Ok(count) => {
             println!("    ✓ Chain intact: {count} events verified");
             println!("    ✓ Last hash: {}…", &events[count - 1].hash.get(..16).unwrap_or("unknown"));
-            println!("\n  RESULT: PASS — audit trail is tamper-proof");
+            
+            let signed_count = events.iter().filter(|e| e.signature.is_some()).count();
+            let verified_count = events.iter().filter(|e| e.verify_signature()).count();
+            
+            if signed_count > 0 {
+                println!("    ✓ Cryptographic signatures: {verified_count}/{signed_count} verified");
+                if verified_count == signed_count {
+                    println!("\n  RESULT: PASS — audit trail is authenticated and tamper-proof");
+                } else {
+                    println!("\n  RESULT: FAIL — some signatures are INVALID");
+                }
+            } else {
+                println!("    ⚠ No cryptographic signatures found (legacy audit log)");
+                println!("\n  RESULT: PASS — audit trail is tamper-proof (hash chain only)");
+            }
         }
         Err(broken_at) => {
             println!("    ✗ Chain BROKEN at event {broken_at}");

@@ -8,6 +8,12 @@ pub struct PlanConfig {
     pub auto_commit: bool,
     pub auto_branch: bool,
     pub auto_test: bool,
+    /// Reward calculation configuration.
+    pub reward: crate::reward::RewardConfig,
+    /// Whether to spawn parallel sub-agents to explore the codebase.
+    pub use_parallel_exploration: bool,
+    /// How many files to explore in parallel.
+    pub exploration_depth: usize,
 }
 
 impl Default for PlanConfig {
@@ -18,6 +24,9 @@ impl Default for PlanConfig {
             auto_commit: true,
             auto_branch: true,
             auto_test: true,
+            reward: crate::reward::RewardConfig::default(),
+            use_parallel_exploration: false,
+            exploration_depth: 3,
         }
     }
 }
@@ -40,10 +49,35 @@ pub struct PlanStep {
     pub expected_files: Vec<String>,
     pub status: StepStatus,
     pub result: Option<String>,
+    /// The specific tool actions proposed for this step (The Blueprint).
+    pub actions: Option<Blueprint>,
+    /// Optional: assign this step to a specific worker node in the distributed swarm.
+    pub worker_node_id: Option<String>,
+    /// Optional: baseline image for visual verification (Phase 26).
+    pub visual_baseline: Option<String>,
+    /// Optional: URL to verify for this step (Phase 26).
+    pub url: Option<String>,
+}
+
+/// A deterministic list of tool actions (The Blueprint) to be executed for a plan step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Blueprint {
+    pub actions: Vec<BlueprintAction>,
+    /// Cryptographic signature of the blueprint for governance.
+    pub signature: Option<String>,
+}
+
+/// A single tool invocation inside a blueprint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintAction {
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    /// Rationale for why this specific tool call is necessary.
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlanStatus { Created, InProgress, Completed, Failed, Revised }
+pub enum PlanStatus { Created, InProgress, Completed, Failed, Revised, ResumeReady, SafePlanReady }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepStatus { Pending, Running, Completed, Failed, Skipped }
@@ -56,6 +90,8 @@ pub struct PlanExecutionResult {
     pub total_tool_invocations: u32,
     pub revisions: usize,
     pub success: bool,
+    /// The aggregate reward for this plan's execution.
+    pub reward: crate::reward::RewardScore,
 }
 
 #[derive(Debug)]
@@ -101,6 +137,7 @@ impl PlanExecutor {
              - Steps should be ordered by dependency\n\
              - Keep steps small — prefer 3-5 steps over 1 giant step\n\
              - Include file paths the step will read or modify\n\
+             - If the step involves UI changes, include a \"url\" and optionally a \"visual_baseline\" (path to an existing snapshot) to trigger autonomous visual verification\n\
              - The instruction should be specific enough for an AI agent to execute\n\n\
              User's task: {user_prompt}\n\n\
              Project context:\n{context}"
@@ -141,6 +178,10 @@ impl PlanExecutor {
                     .unwrap_or_default(),
                 status: StepStatus::Pending,
                 result: None,
+                actions: None,
+                worker_node_id: step.get("worker_node_id").and_then(|v| v.as_str()).map(String::from),
+                visual_baseline: step.get("visual_baseline").and_then(|v| v.as_str()).map(String::from),
+                url: step.get("url").and_then(|v| v.as_str()).map(String::from),
             })
             .filter(|s| !s.instruction.is_empty())
             .collect();
@@ -160,6 +201,60 @@ impl PlanExecutor {
             steps,
             current_step: 0,
             status: PlanStatus::Created,
+        })
+    }
+
+    /// Build the prompt to translate a plan step into a concrete Blueprint (Tool List).
+    #[must_use] pub fn build_blueprinting_prompt(step: &PlanStep, available_tools: &str) -> String {
+        format!(
+            "You are a Senior Engineer (The Architect). Your task is to translate a high-level plan step into a deterministic 'Blueprint' (a list of specific tool calls).\n\n\
+             Plan Step to Blueprint:\n\
+             Description: {desc}\n\
+             Instruction: {instr}\n\n\
+             Available Tools:\n{tools}\n\n\
+             Return ONLY a JSON object with this structure:\n\
+             {{\n  \"actions\": [\n    {{\n      \"tool_name\": \"read_file\",\n      \"arguments\": {{ \"path\": \"src/main.rs\" }},\n      \"rationale\": \"Need to see current implementation before editing\"\n    }}\n  ]\n}}\n\n\
+             Rules:\n\
+             - Only use the tools provided in the list\n\
+             - Each action must have a clear rationale\n\
+             - The sequence must be complete enough to fulfill the step instruction",
+            desc = step.description,
+            instr = step.instruction,
+            tools = available_tools
+        )
+    }
+
+    /// Parse a Blueprint from the LLM's JSON response.
+    pub fn parse_blueprint(response: &str) -> Result<Blueprint, PlanError> {
+        let json_start = response.find('{').ok_or_else(|| {
+            PlanError::PlanGeneration("no JSON object found in blueprint response".to_string())
+        })?;
+        let json_end = response.rfind('}').ok_or_else(|| {
+            PlanError::PlanGeneration("no closing brace found in blueprint".to_string())
+        })?;
+
+        let json_str = &response[json_start..=json_end];
+        let parsed: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+            PlanError::PlanGeneration(format!("invalid Blueprint JSON: {e}"))
+        })?;
+
+        let actions_array = parsed
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| PlanError::PlanGeneration("missing 'actions' array in blueprint".to_string()))?;
+
+        let actions: Vec<BlueprintAction> = actions_array
+            .iter()
+            .map(|act| BlueprintAction {
+                tool_name: act.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                arguments: act.get("arguments").cloned().unwrap_or(serde_json::json!({})),
+                rationale: act.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            })
+            .collect();
+
+        Ok(Blueprint {
+            actions,
+            signature: None,
         })
     }
 }

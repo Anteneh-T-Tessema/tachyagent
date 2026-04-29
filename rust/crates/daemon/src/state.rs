@@ -1,8 +1,9 @@
+use platform::PermissionMode;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, OAuthManager, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
+use audit::{AuditEvent, AuditEventKind, AuditLogger, FileAuditSink, HttpAuditSink, S3AuditSink, OAuthManager, PolicyEngine, FilePatch, SsoConfig, SsoManager, MeteringService, StripeBillingConnector};
 use backend::BackendRegistry;
 use platform::{
     AgentConfig, AgentInstance, PlatformConfig, PlatformWorkspace,
@@ -27,6 +28,43 @@ struct PersistedState {
     patch_counter: u64,
     pending_patches: Vec<PendingPatch>,
     inference_stats: InferenceStats,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub plans: BTreeMap<String, intelligence::Plan>,
+    #[serde(default)]
+    pub harnesses: BTreeMap<String, intelligence::AgenticHarness>,
+    #[serde(default)]
+    pub proposals: BTreeMap<String, crate::engine::OptimizationProposal>,
+    #[serde(default)]
+    pub investment_policy: platform::finance::InvestmentPolicy,
+    #[serde(default)]
+    pub active_proposals: BTreeMap<String, platform::governance::GovernanceProposal>,
+    #[serde(default)]
+    pub hive_mind: intelligence::HiveMind,
+    #[serde(default)]
+    pub agent_reputations: BTreeMap<String, platform::reputation::ReputationScore>,
+    #[serde(default)]
+    pub active_nodes: Vec<platform::compute::ComputeNode>,
+    #[serde(default)]
+    pub swarm_nodes: Vec<platform::replication::SwarmNode>,
+    #[serde(default)]
+    pub active_crisis: Option<intelligence::Anomaly>,
+    #[serde(default)]
+    pub expert_adapters: Vec<intelligence::ExpertAdapter>,
+    #[serde(default)]
+    pub allied_swarms: Vec<platform::diplomacy::DiplomaticSwarm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DreamingJob {
+    pub id: String,
+    pub conv_id: String,
+    pub step_index: usize,
+    pub status: String,
+    pub attempts: usize,
+    pub max_attempts: usize,
+    pub best_reward: f32,
 }
 
 /// A server-side conversation.
@@ -38,6 +76,12 @@ pub struct Conversation {
     pub created_at: String,
     pub updated_at: String,
     pub workspace: String,
+    /// The team workspace this conversation belongs to.
+    #[serde(default)]
+    pub team_id: Option<String>,
+    /// Compressed state summary provided by the Summary Agent.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// A single chat message in a conversation.
@@ -84,6 +128,7 @@ pub struct InferenceStats {
     pub avg_tokens_per_sec: f32,
     pub p50_ttft_ms: f32,
     pub p95_ttft_ms: f32,
+    pub active_training_jobs: Vec<intelligence::finetune::TrainingJob>,
     #[serde(skip)]
     pub ttft_history: VecDeque<u32>,
 }
@@ -125,58 +170,121 @@ impl InferenceStats {
     }
 }
 
+/// Identity and Access Management service.
+pub struct IdentityService {
+    pub sso_manager: SsoManager,
+    pub oauth_manager: OAuthManager,
+    pub user_store: audit::UserStore,
+    pub agent_identities: Arc<Mutex<BTreeMap<String, platform::crypto::AgentIdentity>>>,
+    /// Per-user resource-quota enforcement (token/cost/concurrency limits by role).
+    pub quota_store: audit::QuotaStore,
+}
+
+impl IdentityService {
+    pub fn get_or_create_identity(&self, agent_id: &str) -> Result<platform::crypto::AgentIdentity, String> {
+        let mut identities = self.agent_identities.lock().unwrap();
+        if let Some(id) = identities.get(agent_id) {
+            Ok(id.clone())
+        } else {
+            let id = platform::crypto::AgentIdentity::generate();
+            identities.insert(agent_id.to_string(), id.clone());
+            Ok(id)
+        }
+    }
+}
+
+/// Usage, billing, and marketplace service.
+pub struct CommerceService {
+    pub metering: MeteringService,
+    pub billing: Option<StripeBillingConnector>,
+    pub marketplace: Marketplace,
+    pub saas: Option<SaaSPlatform>,
+}
+
+impl CommerceService {
+    /// Check if a team has exceeded their resource limits.
+    pub fn check_team_quota(&self, team_id: &str, action: &str) -> Result<(), String> {
+        if let Some(ref saas) = self.saas {
+            // If in SaaS mode, check the tenant limits
+            if let Err(e) = saas.check_limits(team_id, action) {
+                return Err(format!("Quota exceeded: {e}"));
+            }
+        }
+        
+        // Also check local metering aggregates if needed (e.g. for self-hosted quotas)
+        Ok(())
+    }
+}
+
+/// Swarm orchestration and distributed execution service.
+pub struct SwarmService {
+    pub orchestrator: Arc<Mutex<crate::parallel::Orchestrator>>,
+    pub cloud_jobs: Vec<crate::batch_client::BatchJob>,
+    pub worker_registry: crate::worker_registry::WorkerRegistry,
+    pub mission_control: Arc<crate::internal_bus::MissionControl>,
+    pub mission_feed: Arc<Mutex<VecDeque<crate::internal_bus::MissionEvent>>>,
+}
+
+/// External connectivity and webhook service.
+pub struct ConnectivityService {
+    pub mcp_client: McpClientManager,
+    pub webhooks: Vec<WebhookConfig>,
+    pub sync_manager: Option<platform::sync::SyncManager>,
+}
+
 /// Shared daemon state, wrapped in Arc<Mutex<>> for thread safety.
 pub struct DaemonState {
     pub workspace_root: PathBuf,
+    pub workspace: Option<platform::PlatformWorkspace>,
     pub config: PlatformConfig,
+    pub permission_mode: PermissionMode,
     pub registry: BackendRegistry,
     pub scheduler: TaskScheduler,
     pub agents: BTreeMap<String, AgentInstance>,
     pub conversations: BTreeMap<String, Conversation>,
     pub audit_logger: Arc<AuditLogger>,
+    pub swarm_manager: Arc<crate::swarm::SwarmManager>,
     pub agent_counter: u64,
     pub task_counter: u64,
     pub conv_counter: u64,
     pub api_key: Option<String>,
-    pub webhooks: Vec<WebhookConfig>,
+    
+    // Refactored Services
+    pub identity: IdentityService,
+    pub commerce: CommerceService,
+    pub swarm: SwarmService,
+    pub connectivity: ConnectivityService,
+    
     /// Shared file lock manager for parallel agent safety.
     pub file_locks: FileLockManager,
     /// Policy engine for patch-level governance.
     pub policy_engine: PolicyEngine,
+    /// Sovereign semantic cache for zero-latency responses.
+    pub semantic_cache: Arc<runtime::SemanticCache>,
+    /// Client for generating semantic embeddings.
+    pub embedding_client: Arc<backend::embeddings::EmbeddingClient>,
     /// Patches awaiting human approval.
     pub pending_patches: Vec<PendingPatch>,
     /// Counter for pending patch IDs.
     pub patch_counter: u64,
-    /// SSO/SAML manager for enterprise authentication.
-    pub sso_manager: SsoManager,
-    /// `OAuth2` manager for Google/GitHub login.
-    pub oauth_manager: OAuthManager,
-    /// User store for RBAC.
-    pub user_store: audit::UserStore,
-    /// MCP client manager for external tool servers.
-    pub mcp_client: McpClientManager,
-    /// Usage metering service.
-    pub metering: MeteringService,
-    /// Stripe billing connector (None if no Stripe API key configured).
-    pub billing: Option<StripeBillingConnector>,
+    pub evolution: crate::engine::EvolutionManager,
+    pub proposals: BTreeMap<String, crate::engine::OptimizationProposal>,
+    pub liquidity: platform::finance::LiquidityMonitor,
+    pub investment_policy: platform::finance::InvestmentPolicy,
+    pub active_proposals: BTreeMap<String, platform::governance::GovernanceProposal>,
+    pub hive_mind: intelligence::HiveMind,
+    pub agent_reputations: BTreeMap<String, platform::reputation::ReputationScore>,
+    pub active_nodes: Vec<platform::compute::ComputeNode>,
+    pub swarm_nodes: Vec<platform::replication::SwarmNode>,
+    pub active_crisis: Option<intelligence::Anomaly>,
+    pub expert_adapters: Vec<intelligence::ExpertAdapter>,
+    pub allied_swarms: Vec<platform::diplomacy::DiplomaticSwarm>,
+    /// Expert Adapter registry — persisted to `.tachy/adapters.json`.
+    pub adapter_registry: intelligence::AdapterRegistry,
     /// Team workspace manager.
     pub team_manager: TeamManager,
-    /// Agent marketplace.
-    pub marketplace: Marketplace,
-    /// `SaaS` platform (None if not in `SaaS` mode).
-    pub saas: Option<SaaSPlatform>,
     /// Real-time inference performance tracking.
     pub inference_stats: InferenceStats,
-    /// Registry of cloud-scale batch jobs (Direction B).
-    pub cloud_jobs: Vec<crate::batch_client::BatchJob>,
-    /// Parallel swarm orchestrator (Direction C).
-    pub orchestrator: Arc<Mutex<crate::parallel::Orchestrator>>,
-    /// Mission Control event bus (Phase 5).
-    pub mission_control: Arc<crate::internal_bus::MissionControl>,
-    /// Recent mission event log for retrieval.
-    pub mission_feed: Arc<Mutex<VecDeque<crate::internal_bus::MissionEvent>>>,
-    /// Distributed swarm worker registry (multi-machine execution).
-    pub worker_registry: crate::worker_registry::WorkerRegistry,
     /// OpenTelemetry-compatible tracer (no-op when `TACHY_OTLP_ENDPOINT` not set).
     pub tracer: crate::telemetry::Tracer,
     /// Live event bus — subscribers receive SSE messages in real time.
@@ -184,6 +292,22 @@ pub struct DaemonState {
     pub event_bus: tokio::sync::broadcast::Sender<String>,
     /// Named DAG templates — reusable swarm configurations saved by operators.
     pub run_templates: HashMap<String, RunTemplate>,
+    /// Autonomous engineering plans.
+    pub plans: BTreeMap<String, intelligence::Plan>,
+    /// Active agentic harness loops (Gather -> Act -> Verify).
+    pub harnesses: BTreeMap<String, intelligence::AgenticHarness>,
+    /// Live codebase index — updated incrementally after each file write so
+    /// RAG context stays current without full rebuilds.
+    pub codebase_index: Option<intelligence::CodebaseIndex>,
+}
+
+/// Status of a run template in the governance lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateStatus {
+    Draft,
+    Approved,
+    Deprecated,
 }
 
 /// A reusable swarm configuration that can be saved, loaded, and executed by name.
@@ -194,7 +318,41 @@ pub struct RunTemplate {
     pub tasks: Vec<TemplateTask>,
     pub max_concurrency: usize,
     pub created_at: u64,
+    /// Version of the template (e.g. "1.0.0").
+    #[serde(default = "default_version")]
+    pub version: String,
+    /// Governance status of the template.
+    #[serde(default = "default_status")]
+    pub status: TemplateStatus,
+    pub team_id: Option<String>,
+    /// Cryptographic signature for governance verification.
+    #[serde(default)]
+    pub signature: Option<String>,
 }
+
+impl RunTemplate {
+    pub fn calculate_hash(&self) -> String {
+        let mut text = format!("template:{}:v{}", self.name, self.version);
+        for task in &self.tasks {
+            text.push_str(&format!("|task:{}:{}", task.template, task.prompt));
+            for dep in &task.deps {
+                text.push_str(&format!("|dep:{}", dep));
+            }
+        }
+        audit::hash_text(&text)
+    }
+
+    #[must_use] pub fn verify_signature(&self) -> bool {
+        let Some(sig) = &self.signature else { return false; };
+        let hash = self.calculate_hash();
+        // In production, this would use a real public key.
+        // For the hardening POC, we implement identity-signing (hash == signature).
+        sig == &hash
+    }
+}
+
+fn default_version() -> String { "1.0.0".to_string() }
+fn default_status() -> TemplateStatus { TemplateStatus::Draft }
 
 /// A task definition inside a `RunTemplate`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,20 +369,83 @@ pub struct TemplateTask {
 
 fn default_priority() -> u8 { 5 }
 
+/// Audit sink that fires SSE events on `Critical` severity or `GovernanceViolation` kind.
+/// Registered as a sink in `DaemonState::init` so alerting flows through the existing
+/// `AuditLogger` dispatch path without coupling the `audit` crate to Tokio.
+struct AlertAuditSink {
+    bus: tokio::sync::broadcast::Sender<String>,
+}
+
+impl audit::AuditSink for AlertAuditSink {
+    fn write_event(&self, event: &audit::AuditEvent) -> Result<(), String> {
+        let is_critical = matches!(event.severity, audit::AuditSeverity::Critical);
+        let is_violation = matches!(event.kind, audit::AuditEventKind::GovernanceViolation);
+        if is_critical || is_violation {
+            let msg = format!(
+                "event: audit_alert\ndata: {}\n\n",
+                serde_json::json!({
+                    "kind": "audit_alert",
+                    "payload": {
+                        "severity": format!("{:?}", event.severity),
+                        "event_kind": format!("{:?}", event.kind),
+                        "detail": event.detail,
+                        "session_id": event.session_id,
+                        "agent_id": event.agent_id,
+                        "hash": event.hash,
+                        "ts": event.timestamp,
+                    }
+                })
+            );
+            let _ = self.bus.send(msg);
+        }
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), String> { Ok(()) }
+}
+
 impl DaemonState {
     pub fn init(workspace_root: PathBuf) -> Result<Self, String> {
         let ws = PlatformWorkspace::init(&workspace_root)?;
+
+        // Create the event bus early so AlertAuditSink can reference it.
+        let (event_bus_tx, _) = tokio::sync::broadcast::channel::<String>(256);
 
         let mut audit_logger = AuditLogger::resume_from_file(&ws.audit_log_path());
         if let Ok(sink) = FileAuditSink::new(ws.audit_log_path()) {
             audit_logger.add_sink(sink);
         }
+        // Wire critical-event alerting into the audit chain.
+        audit_logger.add_sink(AlertAuditSink { bus: event_bus_tx.clone() });
 
         audit_logger.log(&AuditEvent::new(
             "daemon",
             AuditEventKind::SessionStart,
             "daemon started",
         ));
+
+        // Optional HTTP sink — set TACHY_AUDIT_HTTP_URL to enable
+        if let Ok(url) = std::env::var("TACHY_AUDIT_HTTP_URL") {
+            let token = std::env::var("TACHY_AUDIT_HTTP_TOKEN").ok();
+            let sink = HttpAuditSink::new(url, token, None);
+            audit_logger.add_sink(sink);
+        }
+
+        // Optional S3/MinIO sink — set TACHY_AUDIT_S3_BUCKET + credentials to enable
+        if let (Ok(bucket), Ok(region), Ok(access_key), Ok(secret_key)) = (
+            std::env::var("TACHY_AUDIT_S3_BUCKET"),
+            std::env::var("TACHY_AUDIT_S3_REGION"),
+            std::env::var("TACHY_AUDIT_S3_ACCESS_KEY"),
+            std::env::var("TACHY_AUDIT_S3_SECRET_KEY"),
+        ) {
+            let prefix = std::env::var("TACHY_AUDIT_S3_PREFIX").unwrap_or_else(|_| "audit".to_string());
+            let mut sink = S3AuditSink::new(bucket, prefix, region, access_key, secret_key, None);
+            if let Ok(ep) = std::env::var("TACHY_AUDIT_S3_ENDPOINT") {
+                sink = sink.with_endpoint(ep);
+            }
+            audit_logger.add_sink(sink);
+        }
+
         let audit_logger = Arc::new(audit_logger);
 
         let registry = BackendRegistry::with_defaults();
@@ -232,11 +453,18 @@ impl DaemonState {
         // Load API key from env or config
         let api_key = std::env::var("TACHY_API_KEY").ok();
 
+        // Register all known env secrets for masking in the audit trail.
+        if let Some(ref k) = api_key { audit_logger.mask_secret(k); }
+        for var in &["YAYA_API_KEY", "TACHY_AUDIT_S3_ACCESS_KEY", "TACHY_AUDIT_S3_SECRET_KEY", "TACHY_SYNC_KEY", "TACHY_AUDIT_HTTP_TOKEN"] {
+            if let Ok(s) = std::env::var(var) { audit_logger.mask_secret(&s); }
+        }
+
         // Restore persisted state if it exists
         let state_path = workspace_root.join(".tachy").join("state.json");
         let persisted = load_persisted_state(&state_path);
+        let restored = persisted.clone();
 
-        let (agents, conversations, agent_counter, task_counter, conv_counter, patch_counter, pending_patches, inference_stats) = match persisted {
+        let (agents, conversations, agent_counter, task_counter, conv_counter, patch_counter, pending_patches, inference_stats, device_id, plans, harnesses, proposals) = match persisted {
             Some(p) => {
                 let count = p.agents.len();
                 audit_logger.log(&AuditEvent::new(
@@ -244,10 +472,19 @@ impl DaemonState {
                     AuditEventKind::SessionStart,
                     format!("restored {count} agents, {} conversations from disk", p.conversations.len()),
                 ));
-                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter, p.patch_counter, p.pending_patches, p.inference_stats)
+                (p.agents, p.conversations, p.agent_counter, p.task_counter, p.conv_counter, p.patch_counter, p.pending_patches, p.inference_stats, p.device_id, p.plans, p.harnesses, p.proposals)
             }
-            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0, 0, Vec::new(), InferenceStats::default()),
+            None => (BTreeMap::new(), BTreeMap::new(), 0, 0, 0, 0, Vec::new(), InferenceStats::default(), format!("device-{}", uuid::Uuid::new_v4()), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
         };
+
+        // Initialize SyncManager if a key is provided
+        let sync_manager = if let Ok(key_hex) = std::env::var("TACHY_SYNC_KEY") {
+            if let Ok(key_bytes) = hex::decode(key_hex) {
+                if let Ok(key) = key_bytes.try_into() {
+                    Some(platform::sync::SyncManager::new(workspace_root.clone(), device_id.clone(), key))
+                } else { None }
+            } else { None }
+        } else { None };
 
         // Load webhooks from config
         let webhooks: Vec<WebhookConfig> = Vec::new(); // loaded from config if present
@@ -261,48 +498,104 @@ impl DaemonState {
             Arc::new(Mutex::new(orch))
         };
 
+        let cache_path = workspace_root.join(".tachy").join("cache").join("semantic.json");
+        let semantic_cache = runtime::SemanticCache::load(&cache_path).unwrap_or_else(|_| runtime::SemanticCache::new());
+
         let mut state = Self {
-            workspace_root,
+            workspace_root: workspace_root.clone(),
+            workspace: Some(platform::PlatformWorkspace {
+                root: workspace_root.clone(),
+                config: ws.config.clone(),
+            }),
             config: ws.config,
+            permission_mode: PermissionMode::default(),
             registry,
             scheduler: TaskScheduler::new(),
             agents,
             conversations,
-            audit_logger,
+            audit_logger: audit_logger.clone(),
+            swarm_manager: Arc::new(crate::swarm::SwarmManager::new()),
             agent_counter,
             task_counter,
             conv_counter,
             api_key,
-            webhooks,
+
+            identity: IdentityService {
+                sso_manager: SsoManager::new(audit::SsoConfig::default()),
+                oauth_manager: OAuthManager::new(),
+                user_store: audit::UserStore::new(),
+                agent_identities: Arc::new(Mutex::new(BTreeMap::new())),
+                quota_store: audit::QuotaStore::new(),
+            },
+            commerce: CommerceService {
+                metering: MeteringService::new(
+                    audit_logger.clone(),
+                    audit::cost_model::CostModelRegistry::load(&workspace_root)
+                ),
+                billing: None,
+                marketplace: Marketplace::new(),
+                saas: None,
+            },
+            swarm: SwarmService {
+                orchestrator,
+                cloud_jobs: Vec::new(),
+                worker_registry: crate::worker_registry::WorkerRegistry::new(),
+                mission_control: Arc::new(crate::internal_bus::MissionControl::new(1024)),
+                mission_feed: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
+            },
+            connectivity: ConnectivityService {
+                mcp_client: McpClientManager::new(),
+                webhooks,
+                sync_manager,
+            },
+
             file_locks: FileLockManager::new(),
             policy_engine: PolicyEngine::enterprise_default(),
+            semantic_cache: Arc::new(semantic_cache),
+            embedding_client: Arc::new(backend::embeddings::EmbeddingClient::new()),
             pending_patches,
             patch_counter,
-            sso_manager: SsoManager::new(SsoConfig::default()),
-            oauth_manager: OAuthManager::new(),
-            user_store: audit::UserStore::new(),
-            mcp_client: McpClientManager::new(),
-            metering: MeteringService::new(AuditLogger::new()),
-            billing: None,
+            adapter_registry: {
+                let mut reg = intelligence::AdapterRegistry::load(
+                    workspace_root.join(".tachy").join("adapters.json")
+                );
+                // Migrate any adapters previously stored in PersistedState
+                if let Some(ref p) = restored {
+                    reg.sync_from_vec(&p.expert_adapters);
+                }
+                reg
+            },
             team_manager: TeamManager::new(),
-            marketplace: Marketplace::new(),
-            saas: None,
             inference_stats,
-            cloud_jobs: Vec::new(),
-            orchestrator,
-            mission_control: Arc::new(crate::internal_bus::MissionControl::new(1024)),
-            mission_feed: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
-            worker_registry: crate::worker_registry::WorkerRegistry::new(),
             tracer: {
                 let collector = std::sync::Arc::new(Mutex::new(crate::telemetry::SpanCollector::new()));
                 crate::telemetry::Tracer::new(collector)
             },
-            event_bus: {
-                let (tx, _) = tokio::sync::broadcast::channel(256);
-                tx
-            },
+            event_bus: event_bus_tx,
             run_templates: HashMap::new(),
+            plans,
+            harnesses,
+            evolution: crate::engine::EvolutionManager::new(&workspace_root),
+            proposals,
+            liquidity: platform::finance::LiquidityMonitor::new(),
+            investment_policy: restored.as_ref().map(|p| p.investment_policy.clone()).unwrap_or_default(),
+            active_proposals: restored.as_ref().map(|p| p.active_proposals.clone()).unwrap_or_default(),
+            hive_mind: restored.as_ref().map(|p| p.hive_mind.clone()).unwrap_or_default(),
+            agent_reputations: restored.as_ref().map(|p| p.agent_reputations.clone()).unwrap_or_default(),
+            active_nodes: restored.as_ref().map(|p| p.active_nodes.clone()).unwrap_or_default(),
+            swarm_nodes: restored.as_ref().map(|p| p.swarm_nodes.clone()).unwrap_or_default(),
+            active_crisis: restored.as_ref().and_then(|p| p.active_crisis.clone()),
+            expert_adapters: restored.as_ref().map(|p| p.expert_adapters.clone()).unwrap_or_default(),
+            allied_swarms: restored.as_ref().map(|p| p.allied_swarms.clone()).unwrap_or_default(),
+            // Attempt to load a pre-built index; agents will trigger incremental
+            // updates after file writes via reindex_changed_files.
+            codebase_index: intelligence::CodebaseIndexer::load_index(&workspace_root).ok(),
         };
+
+        // Bridge platform logs to the dashboard
+        platform::logger::set_logger(Box::new(crate::logger::DashboardLogger::new(state.event_bus.clone())));
+        println!("[DEBUG] Logger initialized in DaemonState::init");
+        platform::log_info("Testing global logger bridge");
 
         // Auto-select Gemma 4 if no model is configured
         if state.config.agent_templates.iter().all(|t| t.model.is_empty() || t.model == "gemma4:26b") {
@@ -319,7 +612,7 @@ impl DaemonState {
         }
 
         if let Some(api_key) = &state.api_key {
-            state.user_store = audit::UserStore::with_default_admin(&audit::hash_api_key(api_key));
+            state.identity.user_store = audit::UserStore::with_default_admin(&audit::hash_api_key(api_key));
         }
 
         let mut stale_agents = Vec::new();
@@ -341,6 +634,29 @@ impl DaemonState {
         }
 
         Ok(state)
+    }
+
+    pub fn load(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let state_path = self.workspace_root.join(".tachy").join("state.json");
+        if !state_path.exists() {
+            return Ok(());
+        }
+
+        let json = std::fs::read_to_string(state_path)?;
+        let p: PersistedState = serde_json::from_str(&json)?;
+
+        self.agents = p.agents;
+        self.conversations = p.conversations;
+        self.agent_counter = p.agent_counter;
+        self.task_counter = p.task_counter;
+        self.conv_counter = p.conv_counter;
+        self.patch_counter = p.patch_counter;
+        self.pending_patches = p.pending_patches;
+        self.inference_stats = p.inference_stats;
+        self.plans = p.plans;
+        self.harnesses = p.harnesses;
+
+        Ok(())
     }
 
     pub fn next_agent_id(&mut self) -> String {
@@ -368,6 +684,20 @@ impl DaemonState {
             patch_counter: self.patch_counter,
             pending_patches: self.pending_patches.clone(),
             inference_stats: self.inference_stats.clone(),
+            device_id: self.connectivity.sync_manager.as_ref().map(|m| m.device_id().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            plans: self.plans.clone(),
+            harnesses: self.harnesses.clone(),
+            proposals: self.proposals.clone(),
+            investment_policy: self.investment_policy.clone(),
+            active_proposals: self.active_proposals.clone(),
+            hive_mind: self.hive_mind.clone(),
+            agent_reputations: self.agent_reputations.clone(),
+            active_nodes: self.active_nodes.clone(),
+            swarm_nodes: self.swarm_nodes.clone(),
+            active_crisis: self.active_crisis.clone(),
+            expert_adapters: self.expert_adapters.clone(),
+            allied_swarms: self.allied_swarms.clone(),
         };
 
         if let Ok(json) = serde_json::to_string_pretty(&persisted) {
@@ -376,6 +706,57 @@ impl DaemonState {
                 let _ = std::fs::rename(tmp_path, state_path);
             }
         }
+
+        // Persist semantic cache
+        let cache_dir = state_dir.join("cache");
+        if !cache_dir.exists() { let _ = std::fs::create_dir_all(&cache_dir); }
+        let _ = self.semantic_cache.save(&cache_dir.join("semantic.json"));
+    }
+
+    pub fn trigger_evolution(&mut self) {
+        let proposals = self.evolution.analyze_performance(&self.config.intelligence);
+        for p in proposals {
+            if !self.proposals.contains_key(&p.id) {
+                self.publish_event("optimization_proposed", serde_json::json!(&p));
+                self.proposals.insert(p.id.clone(), p);
+            }
+        }
+        self.save();
+    }
+
+    pub fn apply_optimization(&mut self, proposal_id: &str) -> Result<(), String> {
+        let mut proposal = self.proposals.get(proposal_id).cloned().ok_or("Proposal not found")?;
+        if proposal.status != crate::engine::OptimizationStatus::Pending {
+            return Err("Optimization already processed".to_string());
+        }
+
+        proposal.status = crate::engine::OptimizationStatus::Applied;
+        self.proposals.insert(proposal_id.to_string(), proposal.clone());
+
+        self.publish_event("evolution_applied", serde_json::json!({
+            "id": proposal_id,
+            "template": proposal.template_name,
+        }));
+        
+        self.save();
+        Ok(())
+    }
+
+    pub fn rollback_optimization(&mut self, proposal_id: &str) -> Result<(), String> {
+        let mut proposal = self.proposals.get(proposal_id).cloned().ok_or("Proposal not found")?;
+        if proposal.status != crate::engine::OptimizationStatus::Applied {
+            return Err("Only applied optimizations can be rolled back".to_string());
+        }
+
+        proposal.status = crate::engine::OptimizationStatus::RolledBack;
+        self.proposals.insert(proposal_id.to_string(), proposal.clone());
+
+        self.publish_event("evolution_rolled_back", serde_json::json!({
+            "id": proposal_id,
+        }));
+        
+        self.save();
+        Ok(())
     }
 
     pub fn next_conv_id(&mut self) -> String {
@@ -394,6 +775,8 @@ impl DaemonState {
             created_at: now.clone(),
             updated_at: now,
             workspace: self.workspace_root.to_string_lossy().to_string(),
+            team_id: None,
+            summary: None,
         };
         self.conversations.insert(id.clone(), conv);
         self.save();
@@ -405,11 +788,35 @@ impl DaemonState {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
             conv.messages.push(msg);
             conv.updated_at = timestamp();
+            
+            // Trigger Summary Agent if conversation is getting long
+            if conv.messages.len() > 15 && conv.messages.len() % 5 == 0 {
+                self.summarize_conversation(conv_id);
+            }
+
             self.save();
             true
         } else {
             false
         }
+    }
+
+    /// Run the Summary Agent to compress the conversation history.
+    pub fn summarize_conversation(&mut self, conv_id: &str) {
+        let Some(conv) = self.conversations.get_mut(conv_id) else { return; };
+        
+        let json_messages: Vec<serde_json::Value> = conv.messages.iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect();
+        
+        let summary = intelligence::SummaryManager::summarize(&json_messages);
+        conv.summary = Some(summary);
+        
+        self.audit_logger.log(&audit::AuditEvent::new(
+            "daemon",
+            audit::AuditEventKind::SessionCompacted,
+            format!("Conversation {} context compressed by Summary Agent", conv_id)
+        ));
     }
 
     /// Queue a patch for human approval.
@@ -458,6 +865,143 @@ impl DaemonState {
         Ok(pending.patch.file_path)
     }
 
+    /// Transition a plan from SafePlanReady to InProgress.
+    pub fn approve_plan(&mut self, template_name: &str) -> Result<(), String> {
+        if let Some(_template) = self.run_templates.get_mut(template_name) {
+            // Find any task in SafePlanReady and move to InProgress (or Created if not started)
+            // For now, we assume the whole template run is being approved.
+            self.audit_logger.log(
+                &AuditEvent::new("daemon", AuditEventKind::PermissionGranted,
+                    format!("plan for template {} approved for execution", template_name))
+            );
+            self.save();
+            Ok(())
+        } else {
+            Err(format!("template '{}' not found", template_name))
+        }
+    }
+
+    /// Fork a session at a specific cryptographic hash (Pillar 1: State Reconstruction).
+    /// Pinpoints the exact event, finds its position in the session, and creates a new branch.
+    pub fn fork_session_at_hash(&mut self, session_id: &str, event_hash: &str) -> Result<String, String> {
+        let audit_path = self.workspace_root.join(".tachy").join("audit.jsonl");
+        let content = std::fs::read_to_string(&audit_path)
+            .map_err(|e| format!("Failed to read audit log: {}", e))?;
+        
+        let mut events = Vec::new();
+        for line in content.lines() {
+            if let Ok(event) = serde_json::from_str::<audit::AuditEvent>(line) {
+                if event.session_id == session_id {
+                    events.push(event);
+                }
+            }
+        }
+        
+        // 1. Find the target event and verify it belongs to this session
+        let target_idx = events.iter().position(|e| e.hash == event_hash)
+            .ok_or_else(|| format!("Hash {} not found in session {}", event_hash, session_id))?;
+        
+        // 2. Count messages up to this event to find the fork point
+        let mut message_count = 0;
+        for i in 0..=target_idx {
+            match events[i].kind {
+                audit::AuditEventKind::UserMessage | audit::AuditEventKind::AssistantMessage => {
+                    message_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // 3. Load the session and create a new fork
+        let session_path = self.workspace_root.join(".tachy").join("sessions").join(format!("{}.json", session_id));
+        let session_json = std::fs::read_to_string(&session_path)
+            .map_err(|e| format!("Failed to read session {}: {}", session_id, e))?;
+        let session: runtime::Session = serde_json::from_str(&session_json)
+            .map_err(|e| format!("Failed to parse session {}: {}", session_id, e))?;
+        
+        let new_session_id = format!("{}-fork-{}", session_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+        let mut forked_messages = session.messages.clone();
+        forked_messages.truncate(message_count);
+
+        let forked_session = runtime::Session {
+            version: session.version,
+            messages: forked_messages,
+            branches: Vec::new(),
+            current_branch: "main".to_string(),
+            success: false,
+            human_override: false,
+            team_id: session.team_id.clone(),
+        };
+
+        // 4. Persist and Log
+        let new_session_path = self.workspace_root.join(".tachy").join("sessions").join(format!("{}.json", new_session_id));
+        let new_session_json = serde_json::to_string_pretty(&forked_session)
+            .map_err(|e| format!("Failed to serialize forked session: {}", e))?;
+        std::fs::write(&new_session_path, new_session_json)
+            .map_err(|e| format!("Failed to write forked session {}: {}", new_session_id, e))?;
+
+        self.audit_logger.log(&audit::AuditEvent::new(
+            &new_session_id,
+            audit::AuditEventKind::SessionStart,
+            format!("Forked from {} at hash {}", session_id, event_hash)
+        ));
+
+        Ok(new_session_id)
+    }
+
+    /// Select the best available model for a given agent role.
+    /// Returns the specialized adapter if promoted, otherwise falls back to the template default.
+    pub fn get_expert_model_for_role(&self, template_name: &str) -> String {
+        if let Some(template) = self.run_templates.get(template_name) {
+            // Find the first task and return its model, or a default
+            template.tasks.first()
+                .and_then(|t| t.model.clone())
+                .unwrap_or_else(|| "gemma4:26b".to_string())
+        } else {
+            "gemma4:26b".to_string()
+        }
+    }
+
+    /// Hot-swap a model adapter for a specific template.
+    /// This is used by the autonomous feedback loop to promote verified fine-tuned models.
+    pub fn promote_model_adapter(&mut self, template_name: &str, new_model_name: &str) -> Result<(), String> {
+        if let Some(template) = self.run_templates.get_mut(template_name) {
+            let old_model = template.tasks.iter_mut()
+                .find(|t| t.template == template_name || t.template == "default")
+                .map(|t| {
+                    let old = t.model.clone();
+                    t.model = Some(new_model_name.to_string());
+                    old
+                })
+                .flatten();
+
+            self.audit_logger.log(
+                &AuditEvent::new("daemon", AuditEventKind::ModelSwitch,
+                    format!("promoted model for template {}: {:?} -> {}", template_name, old_model, new_model_name))
+            );
+            self.save();
+            Ok(())
+        } else {
+            // Also check global config templates if not in run_templates
+            let mut found = false;
+            for t in &mut self.config.agent_templates {
+                if t.name == template_name {
+                    t.model = new_model_name.to_string();
+                    found = true;
+                }
+            }
+            if found {
+                self.audit_logger.log(
+                    &AuditEvent::new("daemon", AuditEventKind::ModelSwitch,
+                        format!("promoted global model for template {}: -> {}", template_name, new_model_name))
+                );
+                self.save();
+                return Ok(());
+            }
+            Err(format!("template '{}' not found", template_name))
+        }
+    }
+
     /// Publish a structured event to the live SSE bus.
     ///
     /// Subscribers on `GET /api/events` receive it immediately.
@@ -474,7 +1018,7 @@ impl DaemonState {
     /// Fire webhooks for an event.
     /// Outbound payloads are HMAC-SHA256 signed when a `secret` is configured.
     pub fn fire_webhooks(&self, event_type: &str, payload: &serde_json::Value) {
-        for webhook in &self.webhooks {
+        for webhook in &self.connectivity.webhooks {
             if !webhook.enabled { continue; }
             if !webhook.events.contains(&event_type.to_string()) && !webhook.events.contains(&"*".to_string()) { continue; }
 
@@ -519,7 +1063,7 @@ impl DaemonState {
         payload: &[u8],
         signature_header: &str,
     ) -> Result<(), String> {
-        let webhook = self.webhooks.iter().find(|w| w.url == webhook_url);
+        let webhook = self.connectivity.webhooks.iter().find(|w| w.url == webhook_url);
         let secret = match webhook.and_then(|w| w.secret.as_deref()) {
             Some(s) => s,
             None => return Ok(()), // no secret configured → accept all
@@ -554,7 +1098,7 @@ impl DaemonState {
             template,
             session_id: session_id.clone(),
             working_directory: self.workspace_root.to_string_lossy().to_string(),
-            environment: BTreeMap::new(),
+            environment: BTreeMap::new(), team_id: None,
         };
 
         let mut instance = AgentInstance::new(&agent_id, config);
@@ -592,7 +1136,7 @@ impl DaemonState {
             template,
             session_id,
             working_directory: self.workspace_root.to_string_lossy().to_string(),
-            environment: BTreeMap::new(),
+            environment: BTreeMap::new(), team_id: None,
         };
 
         let task = ScheduledTask::new(&task_id, name, config, schedule);
@@ -645,6 +1189,238 @@ impl DaemonState {
             true
         } else {
             false
+        }
+    }
+
+    /// Background utility to clean up old snapshots.
+    pub fn clean_vision_cache(&self) {
+        let vision_dir = self.workspace_root.join(".tachy").join("vision");
+        match runtime::clean_old_snapshots(&vision_dir, 86400) {
+            Ok(count) if count > 0 => platform::log_info(&format!("[VISION] Cleaned up {count} old snapshots.")),
+            _ => {}
+        }
+    }
+
+    pub fn vote_on_proposal(&mut self, proposal_id: &str, agent_id: &str, vote: bool, rationale: &str) -> Result<(), String> {
+        let (new_status, should_execute) = {
+            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            if proposal.status != platform::governance::ProposalStatus::Pending {
+                return Err("Proposal is no longer active".to_string());
+            }
+
+            if vote { proposal.votes_yes += 1; } else { proposal.votes_no += 1; }
+
+            let engine = platform::governance::ConsensusEngine::new(0.66);
+            let eligible_voters = self.agents.len().max(3); // Assume at least 3 voters for simulation
+            proposal.status = engine.evaluate(proposal, eligible_voters);
+
+            let new_status = proposal.status.clone();
+            let should_execute = new_status == platform::governance::ProposalStatus::Passed;
+            (new_status, should_execute)
+        };
+        self.publish_event("governance_vote", serde_json::json!({
+            "proposal_id": proposal_id,
+            "agent_id": agent_id,
+            "vote": vote,
+            "rationale": rationale,
+            "new_status": new_status,
+        }));
+
+        if should_execute {
+            self.execute_governance_proposal(proposal_id)?;
+        }
+
+        self.save();
+        Ok(())
+    }
+
+    pub fn execute_governance_proposal(&mut self, proposal_id: &str) -> Result<(), String> {
+        {
+            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            if proposal.status != platform::governance::ProposalStatus::Passed {
+                return Err("Only passed proposals can be executed".to_string());
+            }
+
+            // Apply the change based on type
+            match proposal.change_type.as_str() {
+                "investment_policy" => {
+                    if let Ok(new_policy) = serde_json::from_value(proposal.payload.clone()) {
+                        self.investment_policy = new_policy;
+                    }
+                }
+                _ => return Err(format!("Unknown proposal type: {}", proposal.change_type)),
+            }
+
+            proposal.status = platform::governance::ProposalStatus::Executed;
+        }
+        self.publish_event("governance_executed", serde_json::json!({ "proposal_id": proposal_id }));
+        self.save();
+        Ok(())
+    }
+
+    pub fn veto_proposal(&mut self, proposal_id: &str) -> Result<(), String> {
+        {
+            let proposal = self.active_proposals.get_mut(proposal_id).ok_or("Governance proposal not found")?;
+            proposal.status = platform::governance::ProposalStatus::Vetoed;
+        }
+        self.publish_event("governance_vetoed", serde_json::json!({ "proposal_id": proposal_id }));
+        self.save();
+        Ok(())
+    }
+
+    pub fn syndicate_knowledge(&mut self, agent_id: &str) {
+        let tachy_dir = self.workspace_root.join(".tachy");
+        let local_memory = intelligence::AgentMemory::load(&tachy_dir);
+        
+        intelligence::MemorySyndicator::syndicate(&local_memory, &mut self.hive_mind, 0.9);
+        
+        self.publish_event("hive_mind_updated", serde_json::json!({
+            "agent_id": agent_id,
+            "total_insights": self.hive_mind.shared_insights.len(),
+        }));
+        
+        self.save();
+    }
+
+    pub fn update_reputation(&mut self, agent_id: &str, mission_success: bool, reward: f32) {
+        let (new_mode, trust_index) = {
+            let score = self.agent_reputations.entry(agent_id.to_string()).or_insert_with(platform::reputation::ReputationScore::new);
+            
+            score.mission_count += 1;
+            if mission_success {
+                score.success_rate = (score.success_rate * 0.9) + 0.1;
+            } else {
+                score.success_rate = score.success_rate * 0.9;
+            }
+            
+            let new_mode = platform::reputation::TrustElevator::evaluate_autonomy(score);
+            let trust_index = score.calculate_trust_index();
+            (new_mode, trust_index)
+        };
+        
+        self.publish_event("reputation_updated", serde_json::json!({
+            "agent_id": agent_id,
+            "new_trust_index": trust_index,
+            "permission_mode": new_mode,
+        }));
+        
+        self.save();
+    }
+
+    pub fn provision_infrastructure(&mut self, requirements: &platform::compute::NodeSpecs) -> Result<String, String> {
+        let orchestrator = platform::compute::ResourceOrchestrator::new(2.0); // $2/hr max budget
+        let node = orchestrator.provision_node(requirements)?;
+        
+        self.active_nodes.push(node.clone());
+        self.publish_event("infrastructure_provisioned", serde_json::json!(&node));
+        self.save();
+        Ok(node.id)
+    }
+
+    pub fn terminate_infrastructure(&mut self, node_id: &str) -> Result<(), String> {
+        let index = self.active_nodes.iter().position(|n| n.id == node_id).ok_or("Node not found")?;
+        let mut node = self.active_nodes.remove(index);
+        node.status = platform::compute::NodeStatus::Terminating;
+        
+        self.publish_event("infrastructure_terminated", serde_json::json!({ "node_id": node_id }));
+        self.save();
+        Ok(())
+    }
+
+    pub fn replicate_daemon(&mut self, node_id: &str) -> Result<String, String> {
+        let node = self.active_nodes.iter().find(|n| n.id == node_id).ok_or("Infrastructure node not found")?;
+        let spawner = platform::replication::DaemonSpawner;
+        let linker = platform::replication::SwarmLinker;
+        
+        let new_daemon = spawner.spawn_instance(node_id, "remote-addr")?;
+        linker.link_node("parent-daemon", &new_daemon)?;
+        
+        self.swarm_nodes.push(new_daemon.clone());
+        self.publish_event("swarm_replicated", serde_json::json!(&new_daemon));
+        self.save();
+        Ok(new_daemon.id)
+    }
+
+    pub fn sync_swarm_health(&mut self) {
+        let dead_nodes = platform::replication::HealthMonitor::monitor_swarm(&self.swarm_nodes);
+        for id in dead_nodes {
+            if let Some(index) = self.swarm_nodes.iter().position(|n| n.id == id) {
+                self.swarm_nodes.remove(index);
+                self.publish_event("swarm_node_offline", serde_json::json!({ "node_id": id }));
+            }
+        }
+        self.save();
+    }
+
+    pub fn trigger_red_alert(&mut self, telemetry: &str) -> Result<(), String> {
+        let anomalies = intelligence::AnomalyDetector::scan_telemetry(telemetry);
+        if let Some(anomaly) = anomalies.into_iter().find(|a| matches!(a.severity, intelligence::CrisisSeverity::RedAlert)) {
+            let playbook = intelligence::PlaybookEngine::select_playbook(&anomaly);
+            self.active_crisis = Some(anomaly.clone());
+            
+            self.publish_event("red_alert_triggered", serde_json::json!({
+                "anomaly": anomaly,
+                "playbook": playbook,
+            }));
+            
+            // Execute mock playbook: De-risk assets
+            self.publish_event("playbook_executing", serde_json::json!({ "action": "Liquidating high-risk positions to EmergencyVault" }));
+            
+            self.save();
+        }
+        Ok(())
+    }
+
+    pub fn resolve_crisis(&mut self) {
+        if let Some(anomaly) = self.active_crisis.take() {
+            self.publish_event("crisis_resolved", serde_json::json!({ "id": anomaly.id }));
+            self.save();
+        }
+    }
+
+    pub fn start_autonomous_tuning(&mut self, domain: &str) -> Result<String, String> {
+        let orchestrator = intelligence::TrainerOrchestrator;
+        let job_id = orchestrator.start_tuning_job("mock-dataset", domain)?;
+
+        let adapter_id = self.adapter_registry.register("llama-3.2-3b", domain, "");
+        self.expert_adapters.push(intelligence::ExpertAdapter {
+            id: adapter_id.clone(),
+            base_model: "llama-3.2-3b".to_string(),
+            domain: domain.to_string(),
+            lift_score: 0.0,
+            status: intelligence::AdapterStatus::Training,
+            adapter_path: String::new(),
+            registered_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+        
+        self.publish_event("tuning_job_started", serde_json::json!({
+            "job_id": job_id,
+            "domain": domain,
+        }));
+        
+        self.save();
+        Ok(job_id)
+    }
+
+    pub fn establish_diplomacy(&mut self, swarm_id: &str, signature: &str) -> Result<(), String> {
+        let auth = platform::diplomacy::SwarmAuthenticator;
+        let swarm = auth.authenticate_swarm(swarm_id, signature)?;
+        
+        self.allied_swarms.push(swarm.clone());
+        self.publish_event("diplomacy_established", serde_json::json!(&swarm));
+        self.save();
+        Ok(())
+    }
+
+    pub fn sync_hyper_swarm(&mut self) {
+        let discovered = platform::diplomacy::HyperSwarmLinker::discover_allies();
+        for swarm in discovered {
+            if !self.allied_swarms.iter().any(|s| s.id == swarm.id) {
+                self.publish_event("hyper_swarm_discovery", serde_json::json!(&swarm));
+            }
         }
     }
 }

@@ -257,6 +257,53 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // ── Follow a teammate's active mission session ────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tachy.followSession", async () => {
+      const smolagentEndpoint = vscode.workspace
+        .getConfiguration("tachy")
+        .get<string>("smolagentEndpoint", "http://localhost:8100");
+
+      const sessionId = await vscode.window.showInputBox({
+        prompt: "Session ID to follow (leave blank to follow all active missions)",
+        placeHolder: "mission-abc123 or empty for broadcast feed",
+      });
+      if (sessionId === undefined) { return; } // cancelled
+
+      const developer = vscode.env.machineId.slice(0, 8);
+      const streamUrl = `${smolagentEndpoint}/sessions/live`;
+
+      // Join endpoint announces presence and returns recent history
+      try {
+        const joinResp = await fetch(`${smolagentEndpoint}/sessions/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, developer }),
+        });
+        const joinData = await joinResp.json() as { history_events?: number };
+        const historyCount = joinData.history_events ?? 0;
+        vscode.window.showInformationMessage(
+          `Following session${sessionId ? ` "${sessionId}"` : " (all)"}. ` +
+          `${historyCount} recent events replayed. DAG panel updating…`
+        );
+      } catch {
+        vscode.window.showWarningMessage(
+          `SmolAgent not reachable at ${smolagentEndpoint} — is webhook_receiver.py running?`
+        );
+        return;
+      }
+
+      // Subscribe the DAG panel to the SSE stream so it updates in real time.
+      // The dagProvider polls TachyCode directly; here we additionally forward
+      // SmolAgent mission events (from teammates) into the same refresh cycle.
+      dagProvider.followExternalStream(streamUrl);
+
+      vscode.window.showInformationMessage(
+        `DAG panel now streaming from ${streamUrl}. Teammate actions appear in real time.`
+      );
+    })
+  );
+
   // ── Open web dashboard ────────────────────────────────────────────────
   context.subscriptions.push(
     vscode.commands.registerCommand("tachy.openDashboard", () => {

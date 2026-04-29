@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PermissionMode {
     Allow,
     Deny,
     Prompt,
+    RewardAware { threshold: f32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +30,7 @@ pub enum PermissionOutcome {
     Deny { reason: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PermissionPolicy {
     default_mode: PermissionMode,
     tool_modes: BTreeMap<String, PermissionMode>,
@@ -64,23 +65,41 @@ impl PermissionPolicy {
         tool_name: &str,
         input: &str,
         mut prompter: Option<&mut dyn PermissionPrompter>,
+        reward_score: Option<f32>,
     ) -> PermissionOutcome {
         match self.mode_for(tool_name) {
             PermissionMode::Allow => PermissionOutcome::Allow,
             PermissionMode::Deny => PermissionOutcome::Deny {
                 reason: format!("tool '{tool_name}' denied by permission policy"),
             },
-            PermissionMode::Prompt => match prompter.as_mut() {
-                Some(prompter) => match prompter.decide(&PermissionRequest {
-                    tool_name: tool_name.to_string(),
-                    input: input.to_string(),
-                }) {
-                    PermissionPromptDecision::Allow => PermissionOutcome::Allow,
-                    PermissionPromptDecision::Deny { reason } => PermissionOutcome::Deny { reason },
-                },
-                None => PermissionOutcome::Deny {
-                    reason: format!("tool '{tool_name}' requires interactive approval"),
-                },
+            PermissionMode::RewardAware { threshold } => {
+                if let Some(score) = reward_score {
+                    if score >= threshold {
+                        return PermissionOutcome::Allow;
+                    }
+                }
+                self.authorize_prompt(tool_name, input, prompter)
+            }
+            PermissionMode::Prompt => self.authorize_prompt(tool_name, input, prompter),
+        }
+    }
+
+    fn authorize_prompt(
+        &self,
+        tool_name: &str,
+        input: &str,
+        mut prompter: Option<&mut dyn PermissionPrompter>,
+    ) -> PermissionOutcome {
+        match prompter.as_mut() {
+            Some(prompter) => match prompter.decide(&PermissionRequest {
+                tool_name: tool_name.to_string(),
+                input: input.to_string(),
+            }) {
+                PermissionPromptDecision::Allow => PermissionOutcome::Allow,
+                PermissionPromptDecision::Deny { reason } => PermissionOutcome::Deny { reason },
+            },
+            None => PermissionOutcome::Deny {
+                reason: format!("tool '{tool_name}' requires interactive approval"),
             },
         }
     }
@@ -107,10 +126,10 @@ mod tests {
         let policy = PermissionPolicy::new(PermissionMode::Deny)
             .with_tool_mode("bash", PermissionMode::Prompt);
 
-        let outcome = policy.authorize("bash", "echo hi", Some(&mut AllowPrompter));
+        let outcome = policy.authorize("bash", "echo hi", Some(&mut AllowPrompter), None);
         assert_eq!(outcome, PermissionOutcome::Allow);
         assert!(matches!(
-            policy.authorize("edit", "x", None),
+            policy.authorize("edit", "x", None, None),
             PermissionOutcome::Deny { .. }
         ));
     }

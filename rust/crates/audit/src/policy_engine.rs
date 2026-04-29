@@ -55,6 +55,8 @@ pub enum PolicyRuleType {
     ContentBlock { patterns: Vec<String> },
     /// Block patches whose diff contains specific patterns (checks added lines only).
     DiffContentBlock { patterns: Vec<String> },
+    /// Execute a WASM module for custom policy logic.
+    Wasm { module_path: String, function_name: String },
     /// Require tests to pass before applying.
     RequireTests,
 }
@@ -88,6 +90,11 @@ impl PolicyEngine {
                         "**/crypto/**".to_string(),
                         "**/.env*".to_string(),
                         "**/secrets/**".to_string(),
+                        "**/migrations/**".to_string(),
+                        "**/database/**".to_string(),
+                        "**/db/**".to_string(),
+                        "**/routes/**".to_string(),
+                        "**/handlers/**".to_string(),
                     ],
                 },
                 action: PolicyAction::RequireApproval,
@@ -110,13 +117,31 @@ impl PolicyEngine {
                 },
                 action: PolicyAction::Reject,
             },
+            // OWASP Top-10 security scan gate: any diff introducing known injection
+            // patterns requires human approval before the patch is applied.
+            PolicyRule {
+                name: "security_scan_required".to_string(),
+                rule_type: PolicyRuleType::DiffContentBlock {
+                    patterns: vec![
+                        r#"execute\s*\(\s*f["']"#.to_string(),
+                        r#"execute\s*\(\s*["'].*%s"#.to_string(),
+                        r"shell\s*=\s*True".to_string(),
+                        r"pickle\.load".to_string(),
+                        r"\beval\s*\(".to_string(),
+                        r"yaml\.load\s*\([^,)]+\)".to_string(),
+                        r"innerHTML\s*=".to_string(),
+                        r"dangerouslySetInnerHTML".to_string(),
+                    ],
+                },
+                action: PolicyAction::RequireApproval,
+            },
         ])
     }
 
     /// Evaluate a patch against all rules.
     #[must_use] pub fn evaluate(&self, patch: &FilePatch) -> PolicyDecision {
         for rule in &self.rules {
-            match Self::check_rule(rule, patch) {
+            match self.check_rule(rule, patch) {
                 PolicyDecision::AutoApprove => {}
                 decision => return decision,
             }
@@ -124,7 +149,7 @@ impl PolicyEngine {
         PolicyDecision::AutoApprove
     }
 
-    fn check_rule(rule: &PolicyRule, patch: &FilePatch) -> PolicyDecision {
+    fn check_rule(&self, rule: &PolicyRule, patch: &FilePatch) -> PolicyDecision {
         match &rule.rule_type {
             PolicyRuleType::PathMatch { patterns } => {
                 for pattern in patterns {
@@ -194,6 +219,44 @@ impl PolicyEngine {
                 }
                 PolicyDecision::AutoApprove
             }
+            PolicyRuleType::Wasm { module_path, function_name } => {
+                self.evaluate_wasm(module_path, function_name, patch)
+            }
+        }
+    }
+
+    fn evaluate_wasm(&self, module_path: &str, function_name: &str, patch: &FilePatch) -> PolicyDecision {
+        use wasmtime::*;
+
+        let engine = Engine::default();
+        let module = match Module::from_file(&engine, module_path) {
+            Ok(m) => m,
+            Err(e) => return PolicyDecision::Reject { reason: format!("failed to load WASM module: {e}") },
+        };
+
+        let mut store = Store::new(&engine, ());
+        let linker = Linker::new(&engine);
+        let instance = match linker.instantiate(&mut store, &module) {
+            Ok(i) => i,
+            Err(e) => return PolicyDecision::Reject { reason: format!("failed to instantiate WASM: {e}") },
+        };
+
+        let func = match instance.get_typed_func::<(u32, u32, u32, u32), i32>(&mut store, function_name) {
+            Ok(f) => f,
+            Err(_) => return PolicyDecision::Reject { reason: format!("function '{function_name}' not found in WASM") },
+        };
+
+        // Simplified interface: pass additions, deletions, path length, content length
+        // In a real production system, we'd share memory for full patch access.
+        let path_len = patch.file_path.len() as u32;
+        let content_len = patch.new_content.len() as u32;
+        
+        match func.call(&mut store, (patch.additions as u32, patch.deletions as u32, path_len, content_len)) {
+            Ok(0) => PolicyDecision::AutoApprove,
+            Ok(1) => PolicyDecision::RequiresApproval { reason: "WASM policy flagged for review".to_string() },
+            Ok(2) => PolicyDecision::Reject { reason: "WASM policy rejected patch".to_string() },
+            Ok(n) => PolicyDecision::Reject { reason: format!("WASM policy returned unknown code: {n}") },
+            Err(e) => PolicyDecision::Reject { reason: format!("WASM execution failed: {e}") },
         }
     }
 }

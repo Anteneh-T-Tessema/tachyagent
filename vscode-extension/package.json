@@ -93,6 +93,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show policy violations as VS Code diagnostics"
+        },
+        "tachy.smolagentEndpoint": {
+          "type": "string",
+          "default": "http://localhost:8100",
+          "description": "SmolAgent webhook receiver URL (for team session sharing)"
         }
       }
     },
@@ -133,6 +138,10 @@
       {
         "command": "tachy.openDashboard",
         "title": "Tachy: Open Web Dashboard"
+      },
+      {
+        "command": "tachy.followSession",
+        "title": "Tachy: Follow Teammate's Active Mission"
       }
     ],
     "menus": {
@@ -177,7 +186,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "tsc -p ./ --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20.19.39",

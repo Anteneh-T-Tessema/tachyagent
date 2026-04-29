@@ -9,7 +9,9 @@ pub enum Response {
     Full {
         status: u16,
         content_type: String,
-        body: String,
+        body: Vec<u8>,
+        /// Additional HTTP response headers (e.g. `Retry-After`).
+        extra_headers: Vec<(String, String)>,
     },
     Stream {
         status: u16,
@@ -23,7 +25,8 @@ impl Response {
         Self::Full {
             status,
             content_type: "application/json".to_string(),
-            body: serde_json::to_string(&body).unwrap_or_default(),
+            body: serde_json::to_string(&body).unwrap_or_default().into_bytes(),
+            extra_headers: Vec::new(),
         }
     }
 
@@ -31,7 +34,22 @@ impl Response {
         Self::Full {
             status,
             content_type: "text/html".to_string(),
-            body: body.to_string(),
+            body: body.as_bytes().to_vec(),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    /// 429 Too Many Requests with a `Retry-After` header.
+    pub fn rate_limited(retry_after_secs: u32) -> Self {
+        Self::Full {
+            status: 429,
+            content_type: "application/json".to_string(),
+            body: serde_json::to_string(&serde_json::json!({
+                "error": format!("rate limit exceeded — retry after {retry_after_secs}s")
+            }))
+            .unwrap_or_default()
+            .into_bytes(),
+            extra_headers: vec![("Retry-After".to_string(), retry_after_secs.to_string())],
         }
     }
 
@@ -50,7 +68,7 @@ impl Response {
     #[cfg(test)]
     pub fn contains(&self, s: &str) -> bool {
         match self {
-            Self::Full { body, .. } => body.contains(s),
+            Self::Full { body, .. } => String::from_utf8_lossy(body).contains(s),
             Self::Stream { .. } => false,
         }
     }
@@ -68,8 +86,10 @@ pub struct HealthResponse {
     pub status: &'static str,
     pub models: usize,
     pub agents: usize,
+    pub active_swarms: usize,
     pub tasks: usize,
     pub workspace: String,
+    pub cache_hits: u64,
 }
 
 #[derive(Debug, Serialize)]

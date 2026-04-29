@@ -9,7 +9,7 @@ use crate::engine::AgentEngine;
 use crate::state::DaemonState;
 use super::{Response, ErrorResponse, AgentInfo, truncate_completion};
 
-pub(super) fn handle_get_agent(agent_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_get_agent(agent_id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match s.agents.get(agent_id) {
         Some(a) => Response::json(200, &AgentInfo {
@@ -24,7 +24,7 @@ pub(super) fn handle_get_agent(agent_id: &str, state: &Arc<Mutex<DaemonState>>) 
     }
 }
 
-pub(super) fn handle_delete_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_delete_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
     }
@@ -36,7 +36,7 @@ pub(super) fn handle_delete_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> 
     }
 }
 
-pub(super) fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     if id.trim().is_empty() {
         return Response::json(400, &ErrorResponse { error: "agent id required".to_string() });
     }
@@ -48,7 +48,7 @@ pub(super) fn handle_cancel_agent(id: &str, state: &Arc<Mutex<DaemonState>>) -> 
     }
 }
 
-pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     #[allow(dead_code)]
     struct WebhookTrigger {
@@ -57,6 +57,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
         template: Option<String>,
         prompt: Option<String>,
         payload: Option<serde_json::Value>,
+        simulation: Option<bool>,
     }
     let trigger: WebhookTrigger = match serde_json::from_str(body) {
         Ok(t) => t,
@@ -102,6 +103,7 @@ pub(super) fn handle_run_agent(body: &str, state: &Arc<Mutex<DaemonState>>) -> R
                 &bg_agent_id, &config, &prompt, &registry, &governance,
                 audit_logger, &intelligence, &workspace_root,
                 Some(file_locks), Some(Arc::clone(&bg_state)),
+                trigger.simulation.unwrap_or(false),
             );
             (r, tracer, model)
         };
@@ -294,7 +296,7 @@ pub(super) async fn handle_complete(body: &str, state: &Arc<Mutex<DaemonState>>)
     Response::json(200, serde_json::json!({ "completion": text, "model": model }))
 }
 
-pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req { prompt: String, model: Option<String>, session_id: Option<String> }
     let req: Req = match serde_json::from_str(body) {
@@ -318,10 +320,12 @@ pub(super) fn handle_prompt_oneshot(body: &str, state: &Arc<Mutex<DaemonState>>)
         session_id: session_id.clone(),
         working_directory: workspace_root.to_string_lossy().to_string(),
         environment: std::collections::BTreeMap::new(),
+        team_id: None,
     };
     let result = AgentEngine::run_agent(
         &session_id, &config, &prompt, &registry, &governance,
         audit_logger, &intel_cfg, &workspace_root, None, None,
+        false, // Oneshot is never simulation for now
     );
     Response::json(200, serde_json::json!({
         "model": config.template.model,

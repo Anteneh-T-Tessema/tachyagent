@@ -83,6 +83,38 @@ export class DagTreeProvider implements vscode.TreeDataProvider<DagTreeItem> {
     }
   }
 
+  /**
+   * Subscribe to a SmolAgent SSE stream (GET /sessions/live) so teammate
+   * mission events trigger a DAG panel refresh in real time.
+   * Silently ignores connection errors — the poll timer is still the fallback.
+   */
+  followExternalStream(streamUrl: string) {
+    try {
+      const es = new (require("node:events").EventEmitter)();
+      // Use Node's built-in fetch with manual SSE parsing (no EventSource in Node).
+      fetch(streamUrl)
+        .then(async (resp) => {
+          if (!resp.body) return;
+          const decoder = new TextDecoder();
+          const reader = resp.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true });
+            // Each SSE line is "data: {...}\n\n" — refresh on any event
+            if (text.includes("data:")) {
+              this._onDidChangeTreeData.fire(undefined);
+            }
+          }
+        })
+        .catch(() => {
+          // Stream closed or SmolAgent went offline — silent degradation
+        });
+    } catch {
+      // node:events unavailable in this context — no-op
+    }
+  }
+
   getTreeItem(element: DagTreeItem): vscode.TreeItem {
     return element;
   }

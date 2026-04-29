@@ -285,6 +285,21 @@ pub fn record_llm_call(
     if success { span.finish(); } else { span.finish_error("LLM call failed"); }
 }
 
+/// Record a visual perception event (screenshot).
+pub fn record_vision_snapshot(
+    tracer: &Tracer,
+    agent_id: &str,
+    url: &str,
+    path: &str,
+) {
+    if !tracer.is_enabled() { return; }
+    let mut span = tracer.start_span("tachy.vision.snapshot");
+    span.set_attr("agent.id", agent_id);
+    span.set_attr("vision.url", url);
+    span.set_attr("vision.path", path);
+    span.finish();
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 fn now_nano() -> u64 {

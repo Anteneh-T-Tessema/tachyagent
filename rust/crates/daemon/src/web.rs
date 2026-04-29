@@ -137,6 +137,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
         .header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
 
         .status-badge { 
+.btn-sm { background: var(--accent); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 600; }
             padding: 6px 12px; 
             border-radius: 20px; 
             font-size: 12px; 
@@ -369,6 +370,10 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <div class="stat-card">
                         <div class="stat-value" id="val-workers">0</div>
                         <div class="stat-label">Active Swarm Workers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="val-cache-hits" style="color:var(--success);">0</div>
+                        <div class="stat-label">Cache Hits (Sovereign Memory)</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-value" id="val-cloud">Off</div>
@@ -634,6 +639,59 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         </div>
                         <pre id="modelfile-output" style="display:none; background:rgba(0,0,0,0.4); padding:12px; border-radius:8px; font-size:11px; white-space:pre-wrap; max-height:300px; overflow-y:auto;"></pre>
                     </div>
+                </div>
+
+                <div class="card">
+                    <h3>Sovereign Evaluation Rig (Duel)</h3>
+                    <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+                        Benchmark a fine-tuned adapter against the base model using verified Gold Standard sessions.
+                    </p>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="runEvaluation()" id="eval-btn" style="background:var(--success); color:white; border:none; padding:12px 24px; border-radius:var(--radius); cursor:pointer; font-weight:600;">Run Benchmark Duel</button>
+                        <span id="eval-status" style="font-size:13px; color:var(--muted);"></span>
+                    </div>
+                    <div id="eval-results" style="margin-top:20px; display:none;">
+                        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
+                            <div class="stat-card"><div class="stat-value" id="eval-win-ratio">0%</div><div class="stat-label">Tuned Win Ratio</div></div>
+                            <div class="stat-card"><div class="stat-value" id="eval-avg-sim">0.00</div><div class="stat-label">Avg Similarity</div></div>
+                            <div class="stat-card"><div class="stat-value" id="eval-total-cases">0</div><div class="stat-label">Test Cases</div></div>
+                        </div>
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <tbody id="eval-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Swarm Expertise Leaderboard</h3>
+                    <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+                        Autonomous role-specialization progress across the multi-agent swarm.
+                    </p>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap:12px;" id="swarm-expertise-grid">
+                        <div class="stat-card"><div class="stat-value" style="font-size:16px;">Generalist</div><div class="stat-label">Promoted: ★★★</div></div>
+                        <div class="stat-card"><div class="stat-value" style="font-size:16px; color:var(--success);">Security</div><div class="stat-label">Promoted: ★★★</div></div>
+                        <div class="stat-card"><div class="stat-value" style="font-size:16px; color:var(--accent);">Reviewer</div><div class="stat-label">Training...</div></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Training Pipeline</h3>
+                    <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+                        Monitor autonomous LoRA training jobs triggered by the feedback loop.
+                    </p>
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="text-align:left; color:var(--muted); border-bottom:1px solid var(--border);">
+                                <th style="padding:8px 0;">Job ID</th>
+                                <th>Adapter</th>
+                                <th>Status</th>
+                                <th style="text-align:right;">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="training-table-body">
+                            <tr><td colspan="4" style="padding:20px; text-align:center; color:var(--muted);">No active training jobs.</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
 
@@ -1036,8 +1094,54 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             const r = await apiFetch('/api/audit');
             const audit = await r.json();
             const tbody = document.getElementById('audit-table-body');
-            tbody.innerHTML = '<thead><tr><th>Timestamp</th><th>Kind</th><th>Detail</th></tr></thead>' + 
-                audit.slice(-20).reverse().map(e => `<tr><td style="font-size:11px;">${e.timestamp}</td><td>${e.kind}</td><td style="font-size:12px;">${e.detail}</td></tr>`).join('');
+            tbody.innerHTML = '<thead><tr><th>Timestamp</th><th>Kind</th><th>Hash (DNA)</th><th>Detail</th><th>Action</th></tr></thead>' + 
+                audit.slice(-20).reverse().map(e => `
+                    <tr>
+                        <td style="font-size:11px;">${e.timestamp}</td>
+                        <td><span class="status-badge status-ok">${e.kind}</span></td>
+                        <td style="font-family:monospace; font-size:10px; color:var(--accent);">${e.hash ? e.hash.substring(0,8) : '---'}</td>
+                        <td style="font-size:12px;">${e.detail}</td>
+                        <td>
+                            ${e.hash ? `<button onclick="forkSession('${e.session_id}', '${e.hash}')" class="btn-sm">Fork</button>` : ''}
+                        </td>
+                    </tr>
+                `).join('');
+        }
+
+        async function forkSession(sessionId, hash) {
+            if(!confirm(`Reconstruct session from hash ${hash.substring(0,8)}? This will create a new Sovereign Fork.`)) return;
+            try {
+                const r = await apiFetch('/api/governance/fork', 'POST', { session_id: sessionId, event_hash: hash });
+                const res = await r.json();
+                alert(`Sovereign Fork Created: ${res.new_session_id}`);
+                loadAudit();
+            } catch(e) { alert(`Fork failed: ${e.message}`); }
+        }
+
+        async function loadTrainingStatus() {
+            try {
+                const r = await apiFetch('/api/intel/train/status');
+                const jobs = await r.json();
+                const tbody = document.getElementById('training-table-body');
+                if (jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--muted);">No active training jobs.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = jobs.map(j => `
+                    <tr style="border-top:1px solid var(--border);">
+                        <td style="padding:8px 0; font-family:monospace; color:var(--muted);">${j.id}</td>
+                        <td>${j.adapter_name}</td>
+                        <td><span class="status-badge ${j.status==='completed'?'status-ok':j.status==='running'?'status-pending':'status-err'}">${j.status}</span></td>
+                        <td style="text-align:right; color:var(--muted);">${j.end_time ? ((j.end_time-j.start_time)/1000).toFixed(0)+'s' : '---'}</td>
+                    </tr>
+                `).reverse().join('');
+            } catch(e) { console.error('Failed to load training status', e); }
+        }
+
+        async function loadDashboard() {
+            loadAudit();
+            loadParallel();
+            loadTrainingStatus();
         }
 
         async function loadParallel() {
@@ -1585,6 +1689,12 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 const costEl = document.getElementById('val-cost-usd');
                 if (costEl) costEl.textContent = '$' + (d.estimated_cost_usd || 0).toFixed(4);
 
+                const cacheEl = document.getElementById('val-cache-hits');
+                if (cacheEl) cacheEl.textContent = (d.cache_hits || 0).toLocaleString();
+
+                const swarmEl = document.getElementById('val-workers');
+                if (swarmEl) swarmEl.textContent = (d.active_swarms || 0).toLocaleString();
+
                 const inEl  = document.getElementById('val-input-tokens');
                 const outEl = document.getElementById('val-output-tokens');
                 if (inEl)  inEl.textContent  = (d.input_tokens  || 0).toLocaleString();
@@ -1599,7 +1709,10 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <td style="padding:8px; text-align:right; color:var(--muted);">${(m.tokens||0).toLocaleString()}</td>
                             <td style="padding:8px; text-align:right; color:var(--success);">${(m.avg_tps||0).toFixed(1)}</td>
                             <td style="padding:8px; text-align:right; color:var(--muted);">${(m.p50_ttft_ms||0).toFixed(0)}ms</td>
-                            <td style="padding:8px; text-align:right;"><span style="background:rgba(99,102,241,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:11px;">${m.tier||'local'}</span></td>
+                            <td style="padding:8px; text-align:right;">
+                                <span style="background:rgba(99,102,241,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:11px;">${m.tier||'local'}</span>
+                                ${m.name.includes('-ft-') ? '<span style="background:rgba(16,185,129,0.15); color:var(--success); padding:2px 6px; border-radius:4px; font-size:10px; margin-left:4px;">★ Promoted</span>' : ''}
+                            </td>
                         </tr>
                     `).join('');
                 } else if (tbody) {
@@ -1640,7 +1753,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
             // Named events from publish_event() — e.g. "event: agent_run_complete"
             ['agent_run_complete','task_complete','run_replay_started','run_replay_complete',
-             'template_run_started','template_run_complete','worker_heartbeat','lag'].forEach(name => {
+             'template_run_started','template_run_complete','worker_heartbeat','lag',
+             'vision_snapshot_started','vision_snapshot_completed'].forEach(name => {
                 _sseSource.addEventListener(name, (ev) => {
                     appendEvent(ev.data, name);
                     // Reactive refresh
@@ -1672,6 +1786,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 template_run_started: 'var(--accent)',
                 template_run_complete: 'var(--success)',
                 lag: 'var(--error)',
+                vision_snapshot_started: 'var(--warning)',
+                vision_snapshot_completed: '#00f2ff', // cyan
             }[kind] || 'var(--muted)';
             const row = document.createElement('div');
             row.style.cssText = 'padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.04); display:flex; gap:12px; align-items:baseline;';
@@ -1768,6 +1884,84 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     alert(`Error: ${d.error || r.status}`);
                 }
             } catch(e) { alert(`Request failed: ${e.message}`); }
+        }
+
+        async function runEvaluation() {
+            const btn = document.getElementById('eval-btn');
+            const status = document.getElementById('eval-status');
+            btn.disabled = true; btn.textContent = 'Benchmarking…';
+            status.textContent = 'Running model duel against Gold Standard sessions…';
+            try {
+                const r = await apiFetch('/api/eval/run', { method: 'POST', body: '{}' });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || 'Eval failed');
+                
+                document.getElementById('eval-results').style.display = 'block';
+                document.getElementById('eval-win-ratio').textContent = ((d.tuned_wins / d.total_cases) * 100).toFixed(0) + '%';
+                document.getElementById('eval-avg-sim').textContent = d.avg_tuned_similarity.toFixed(2);
+                document.getElementById('eval-total-cases').textContent = d.total_cases;
+
+                const tbody = document.getElementById('eval-table-body');
+                tbody.innerHTML = '<thead><tr><th style="text-align:left;">Instruction</th><th>Base Sim</th><th>Tuned Sim</th><th>Winner</th><th>Trace</th></tr></thead>' +
+                    d.results.map((res, idx) => `
+                        <tr style="border-top:1px solid var(--border);">
+                            <td style="padding:8px 0; color:var(--muted); font-size:11px;">${res.instruction.substring(0,60)}…</td>
+                            <td style="padding:8px; text-align:right;">${res.base_similarity.toFixed(2)}</td>
+                            <td style="padding:8px; text-align:right; color:var(--success); font-weight:bold;">${res.tuned_similarity.toFixed(2)}</td>
+                            <td style="padding:8px; text-align:right;"><span class="status-badge ${res.winner === 'tuned' ? 'status-ok' : 'status-err'}">${res.winner}</span></td>
+                            <td style="padding:8px; text-align:center;"><button onclick="viewEvalDiff(${idx})" style="background:var(--accent); color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">View Diff</button></td>
+                        </tr>
+                    `).join('');
+                
+                status.textContent = 'Benchmark complete.';
+            } catch(e) {
+                status.textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false; btn.textContent = 'Run Benchmark Duel';
+            }
+        }
+
+        async function viewEvalDiff(index) {
+            const r = await apiFetch('/api/eval/run', { method: 'POST', body: '{}' });
+            const d = await r.json();
+            const res = d.results[index];
+            if (!res) return;
+
+            const modal = document.createElement('div');
+            modal.style = "position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:2000; display:flex; align-items:center; justify-content:center; padding:40px;";
+            modal.innerHTML = `
+                <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); width:100%; max-width:1200px; height:80vh; display:flex; flex-direction:column; overflow:hidden;">
+                    <div style="padding:16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin:0;">Trace Diff: ${res.instruction.substring(0,40)}...</h3>
+                        <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background:none; border:none; color:var(--text); cursor:pointer; font-size:20px;">&times;</button>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; flex:1; overflow:hidden;">
+                        <div style="border-right:1px solid var(--border); overflow-y:auto; padding:20px;">
+                            <div style="color:var(--muted); font-size:11px; margin-bottom:8px; text-transform:uppercase;">Base Model Trace</div>
+                            <pre style="font-size:12px; white-space:pre-wrap;">${res.base_output}</pre>
+                        </div>
+                        <div style="overflow-y:auto; padding:20px; background:rgba(16,185,129,0.03);">
+                            <div style="color:var(--success); font-size:11px; margin-bottom:8px; text-transform:uppercase;">Fine-Tuned Trace (Follow-up)</div>
+                            <pre style="font-size:12px; white-space:pre-wrap;">${res.tuned_output}</pre>
+                        </div>
+                    </div>
+                    <div style="padding:16px; border-top:1px solid var(--border); background:rgba(0,0,0,0.2); font-family:monospace; font-size:11px; color:var(--muted); overflow-x:auto;">
+                        <pre style="margin:0;">${res.trace_diff}</pre>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function approvePlan(template) {
+            if (!confirm(`Approve execution plan for "${template}"?`)) return;
+            try {
+                const r = await apiFetch('/api/governance/approve-plan', { method: 'POST', body: JSON.stringify({ template }) });
+                if (r.ok) {
+                    alert('Plan approved. Execution resuming...');
+                    loadParallelRuns();
+                }
+            } catch(e) { alert('Error: ' + e.message); }
         }
 
         // Initialize

@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Trait for asymmetric cryptographic signing (e.g. Ed25519).
+/// Used by the audit logger to authenticate events.
+pub trait AsymmetricSigner: Send + Sync {
+    /// Sign a message and return (HexSignature, HexPublicKey).
+    fn sign_payload(&self, message: &[u8]) -> (String, String);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
@@ -25,6 +32,12 @@ pub enum AuditEventKind {
     ModelSwitch,
     UsageMetering,
     RoleChange,
+    VisualSnapshot,
+    ResourceCleanup,
+    /// Autonomous repair attempt (Phase 25: The Healer).
+    SelfRepair,
+    /// Multi-agent consensus approval (Phase 27).
+    ConsensusSeal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +63,17 @@ pub struct AuditEvent {
     /// Hash of the previous event in the chain. Empty for the first event.
     #[serde(default)]
     pub prev_hash: String,
+    /// Cryptographic signature of the hash (asymmetric signing).
+    pub signature: Option<String>,
+    /// Hex-encoded public key of the signing agent.
+    pub public_key: Option<String>,
+    /// Optional path to a visual snapshot related to this event.
+    pub visual_anchor: Option<String>,
+    /// Optional: structured metadata for visual verification (Phase 26).
+    /// Stores diff similarity, viewport info, etc.
+    pub visual_metadata: Option<serde_json::Value>,
+    /// Optional: structured consensus report from swarm governance (Phase 27).
+    pub consensus_report: Option<serde_json::Value>,
 }
 
 impl AuditEvent {
@@ -73,6 +97,11 @@ impl AuditEvent {
             sequence: 0,
             hash: String::new(),
             prev_hash: String::new(),
+            signature: None,
+            public_key: None,
+            visual_anchor: None,
+            visual_metadata: None,
+            consensus_report: None,
         }
     }
 
@@ -113,6 +142,24 @@ impl AuditEvent {
     }
 
     #[must_use]
+    pub fn with_visual_anchor(mut self, path: impl Into<String>) -> Self {
+        self.visual_anchor = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_visual_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.visual_metadata = Some(metadata);
+        self
+    }
+
+    #[must_use]
+    pub fn with_consensus_report(mut self, report: serde_json::Value) -> Self {
+        self.consensus_report = Some(report);
+        self
+    }
+
+    #[must_use]
     pub fn to_json_line(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| format!("{{\"error\":\"serialize_failed\",\"detail\":\"{}\"}}", self.detail))
     }
@@ -120,13 +167,16 @@ impl AuditEvent {
     /// Compute the content string used for hashing (excludes hash fields).
     fn hash_content(&self) -> String {
         format!(
-            "{}|{}|{:?}|{:?}|{}|{}",
+            "{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}",
             self.timestamp,
             self.session_id,
             self.kind,
             self.severity,
             self.detail,
             self.sequence,
+            self.visual_anchor.as_deref().unwrap_or(""),
+            self.visual_metadata.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            self.consensus_report.as_ref().map(|v| v.to_string()).unwrap_or_default(),
         )
     }
 
@@ -145,6 +195,32 @@ impl AuditEvent {
         let expected = sha256_hex(&format!("{prev_hash}|{content}"));
         self.hash == expected && self.prev_hash == prev_hash
     }
+
+    /// Verify the asymmetric cryptographic signature.
+    pub fn verify_signature(&self) -> bool {
+        let (Some(sig_hex), Some(pk_hex)) = (&self.signature, &self.public_key) else {
+            return false;
+        };
+
+        let Ok(sig_bytes) = hex_to_bytes(sig_hex) else { return false; };
+        let Ok(pk_bytes) = hex_to_bytes(pk_hex) else { return false; };
+
+        let Ok(signature) = ed25519_dalek::Signature::from_slice(&sig_bytes) else { return false; };
+        let Ok(public_key) = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes.try_into().unwrap_or([0u8; 32])) else { return false; };
+
+        use ed25519_dalek::Verifier;
+        public_key.verify(self.hash.as_bytes(), &signature).is_ok()
+    }
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|e| e.to_string())
+        })
+        .collect()
 }
 
 /// Verify an entire audit chain. Returns Ok(count) or Err(first broken index).

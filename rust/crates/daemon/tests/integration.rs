@@ -208,20 +208,25 @@ fn orchestrator_respects_task_dependencies() {
             AgentTask {
                 id: "t1".into(), run_id: "run-dep".into(), template: "chat".into(),
                 prompt: "first".into(), model: None, deps: vec![], priority: 5,
+                role: TaskRole::General,
                 status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None,
+                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
             },
             AgentTask {
                 id: "t2".into(), run_id: "run-dep".into(), template: "chat".into(),
                 prompt: "second".into(), model: None, deps: vec!["t1".into()], priority: 5,
+                role: TaskRole::General,
                 status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None,
+                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
             },
         ],
         status: RunStatus::Running,
         created_at: 0,
-        max_concurrency: 4,
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 4,
+        team_id: None,
+        max_cost_usd: None,
     };
     orch.submit(run);
 
@@ -258,20 +263,25 @@ fn orchestrator_partial_failure() {
             AgentTask {
                 id: "ok".into(), run_id: "run-fail".into(), template: "chat".into(),
                 prompt: "a".into(), model: None, deps: vec![], priority: 5,
+                role: TaskRole::General,
                 status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None,
+                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
             },
             AgentTask {
                 id: "bad".into(), run_id: "run-fail".into(), template: "chat".into(),
                 prompt: "b".into(), model: None, deps: vec![], priority: 5,
+                role: TaskRole::General,
                 status: TaskStatus::Pending, result: None, created_at: 0,
-                started_at: None, completed_at: None, work_dir: None,
+                started_at: None, completed_at: None, work_dir: None, team_id: None, conditions: Default::default(), approval_required: false, approved: false,
             },
         ],
         status: RunStatus::Running,
         created_at: 0,
-        max_concurrency: 4,
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 4,
+        team_id: None,
+        max_cost_usd: None,
     };
     orch.submit(run);
 

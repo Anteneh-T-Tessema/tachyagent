@@ -112,33 +112,38 @@ async fn execute_bash_async(input: BashCommandInput) -> io::Result<BashCommandOu
         cmd
     };
 
-    // Enforce minimum 5 second timeout — local models often send tiny values
-    let effective_timeout = input.timeout.map(|t| t.max(5_000));
+    // Default timeout from env (seconds) → milliseconds. Minimum 5s, maximum 5min.
+    // Set TACHY_TOOL_TIMEOUT_SECS=0 to use per-call timeout values only.
+    let default_ms: u64 = std::env::var("TACHY_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30)
+        .saturating_mul(1_000);
+    let effective_timeout = input.timeout
+        .unwrap_or(default_ms)
+        .max(5_000)          // floor: never less than 5s
+        .min(300_000);       // ceiling: never more than 5min
 
-    let output_result = if let Some(timeout_ms) = effective_timeout {
-        match timeout(Duration::from_millis(timeout_ms), command.output()).await {
-            Ok(result) => (result?, false),
-            Err(_) => {
-                return Ok(BashCommandOutput {
-                    stdout: String::new(),
-                    stderr: format!("Command exceeded timeout of {timeout_ms} ms"),
-                    raw_output_path: None,
-                    interrupted: true,
-                    is_image: None,
-                    background_task_id: None,
-                    backgrounded_by_user: None,
-                    assistant_auto_backgrounded: None,
-                    dangerously_disable_sandbox: input.dangerously_disable_sandbox,
-                    return_code_interpretation: Some(String::from("timeout")),
-                    no_output_expected: Some(true),
-                    structured_content: None,
-                    persisted_output_path: None,
-                    persisted_output_size: None,
-                });
-            }
+    let output_result = match timeout(Duration::from_millis(effective_timeout), command.output()).await {
+        Ok(result) => (result?, false),
+        Err(_) => {
+            return Ok(BashCommandOutput {
+                stdout: String::new(),
+                stderr: format!("Command exceeded timeout of {effective_timeout} ms"),
+                raw_output_path: None,
+                interrupted: true,
+                is_image: None,
+                background_task_id: None,
+                backgrounded_by_user: None,
+                assistant_auto_backgrounded: None,
+                dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                return_code_interpretation: Some(String::from("timeout")),
+                no_output_expected: Some(true),
+                structured_content: None,
+                persisted_output_path: None,
+                persisted_output_size: None,
+            });
         }
-    } else {
-        (command.output().await?, false)
     };
 
     let (output, interrupted) = output_result;
@@ -188,5 +193,36 @@ mod tests {
 
         assert_eq!(output.stdout, "hello");
         assert!(!output.interrupted);
+    }
+
+    #[test]
+    fn timeout_enforced_when_none_provided() {
+        // No timeout in input → default kicks in (30s), command finishes well within that.
+        let output = execute_bash(BashCommandInput {
+            command: String::from("printf 'ok'"),
+            timeout: None,
+            description: None,
+            run_in_background: Some(false),
+            dangerously_disable_sandbox: Some(false),
+        })
+        .expect("should succeed with default timeout");
+        assert_eq!(output.stdout, "ok");
+        assert!(!output.interrupted);
+    }
+
+    #[test]
+    fn timeout_kills_slow_command() {
+        // 5_000ms minimum floor; test a command with an explicit short timeout.
+        let output = execute_bash(BashCommandInput {
+            command: String::from("sleep 10"),
+            timeout: Some(5_000), // minimum floor, will be applied as-is
+            description: None,
+            run_in_background: Some(false),
+            dangerously_disable_sandbox: Some(false),
+        })
+        .expect("should return a timeout result");
+        assert!(output.interrupted, "sleep 10 should be interrupted");
+        assert!(output.stderr.contains("timeout") || output.stderr.contains("exceeded"),
+            "stderr should mention timeout: {}", output.stderr);
     }
 }

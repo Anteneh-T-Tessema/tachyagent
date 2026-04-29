@@ -225,10 +225,26 @@ fn execute_shell_tool(tool: &CustomTool, input: &Value) -> Result<String, String
     let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
     let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
 
-    let output = Command::new(shell)
-        .arg(flag)
-        .arg(&command)
-        .output()
+    let timeout_secs: u64 = std::env::var("TACHY_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30)
+        .max(5)
+        .min(300);
+
+    // Run in a background thread so we can enforce a hard deadline.
+    let command_owned = command.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = Command::new(shell)
+            .arg(flag)
+            .arg(&command_owned)
+            .output();
+        let _ = tx.send(result);
+    });
+    let output = rx
+        .recv_timeout(std::time::Duration::from_secs(timeout_secs))
+        .map_err(|_| format!("custom tool timed out after {timeout_secs}s"))?
         .map_err(|e| format!("failed to execute command: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

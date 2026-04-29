@@ -1,4 +1,4 @@
-# Rewriting Project Claw Code
+# Rewriting Project TachyCode
 
 <p align="center">
   <img src="assets/clawd-hero.jpeg" alt="Claw" width="300" />
@@ -13,7 +13,7 @@
 </p>
 
 > [!IMPORTANT]
-> **The Rust workspace is now the canonical runtime** for Claw-Code. The Python `src/` tree remains in the repository as compatibility and porting support, but the real execution, governance, orchestration, and API surface live under `rust/`. See [`REPO_MAP.md`](REPO_MAP.md) for the current canonical layout.
+> **The Rust workspace is now the canonical runtime** for TachyCode. The Python `src/` tree remains in the repository as compatibility and porting support, but the real execution, governance, orchestration, and API surface live under `rust/`. See [`REPO_MAP.md`](REPO_MAP.md) for the current canonical layout.
 
 > If you find this work useful, consider [sponsoring @instructkr on GitHub](https://github.com/sponsors/instructkr) to support continued open-source harness engineering research.
 
@@ -27,7 +27,7 @@ The whole thing was orchestrated end-to-end using [oh-my-codex (OmX)](https://gi
 
 The result is a clean-room Python rewrite that captures the architectural patterns of Claude Code's agent harness without copying any proprietary source. I'm now actively collaborating with [@bellman_ych](https://x.com/bellman_ych) — the creator of OmX himself — to push this further. The basic Python foundation is already in place and functional, but we're just getting started. **Stay tuned — a much more capable version is on the way.**
 
-https://github.com/instructkr/claw-code
+https://github.com/instructkr/tachycode
 
 ![Tweet screenshot](assets/tweet-screenshot.png)
 
@@ -188,11 +188,11 @@ Join the [**instructkr Discord**](https://instruct.kr/) — the best Korean lang
 
 This repository became **the fastest GitHub repo in history to surpass 30K stars**, reaching the milestone in just a few hours after publication.
 
-<a href="https://star-history.com/#instructkr/claw-code&Date">
+<a href="https://star-history.com/#instructkr/tachycode&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=instructkr/tachycode&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=instructkr/tachycode&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=instructkr/tachycode&type=Date" />
   </picture>
 </a>
 

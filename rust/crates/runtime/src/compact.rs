@@ -103,9 +103,58 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
             messages: compacted_messages,
             branches: session.branches.clone(),
             current_branch: session.current_branch.clone(),
+            success: session.success,
+            human_override: session.human_override,
+            team_id: session.team_id.clone(),
         },
         removed_message_count: removed.len(),
     }
+}
+
+/// Distill the session into a high-density "Memory Digest".
+pub fn digest_session(session: &Session) -> String {
+    let mut lines = vec!["# Session Digest (Compacted)\n".to_string()];
+    
+    // Extract reasoning and tools
+    for msg in &session.messages {
+        let _role = match msg.role {
+            MessageRole::System => continue, // Skip system prompts
+            MessageRole::User => "User",
+            MessageRole::Assistant => "Assistant",
+            MessageRole::Tool => "Tool",
+        };
+
+        for block in &msg.blocks {
+            match block {
+                ContentBlock::Text { text } => {
+                    if msg.role == MessageRole::Assistant {
+                        // Extract reasoning (stuff before code blocks or tool calls)
+                        let reasoning = text.split("```").next().unwrap_or("").trim();
+                        if !reasoning.is_empty() {
+                            lines.push(format!("- [Reasoning] {reasoning}"));
+                        }
+                    } else if msg.role == MessageRole::User {
+                        lines.push(format!("- [Intent] {text}"));
+                    }
+                }
+                ContentBlock::ToolUse { name, .. } => {
+                    lines.push(format!("- [Tool Call] {name}"));
+                }
+                ContentBlock::ToolResult { tool_name, is_error, .. } => {
+                    if *is_error {
+                        lines.push(format!("- [Tool Error] {tool_name}"));
+                    }
+                }
+            }
+        }
+    }
+
+    if lines.len() > 100 {
+        lines.truncate(100);
+        lines.push("... (history truncated)".to_string());
+    }
+
+    lines.join("\n")
 }
 
 fn summarize_messages(messages: &[ConversationMessage]) -> String {
@@ -222,7 +271,7 @@ mod tests {
 
     #[test]
     fn leaves_small_sessions_unchanged() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(),
+        let session = Session { branches: Vec::new(), current_branch: String::new(), success: false, human_override: false, team_id: None,
             version: 1,
             messages: vec![ConversationMessage::user_text("hello")],
         };
@@ -235,7 +284,7 @@ mod tests {
 
     #[test]
     fn compacts_older_messages_into_a_system_summary() {
-        let session = Session { branches: Vec::new(), current_branch: String::new(),
+        let session = Session { branches: Vec::new(), current_branch: String::new(), success: false, human_override: false, team_id: None,
             version: 1,
             messages: vec![
                 ConversationMessage::user_text("one ".repeat(200)),

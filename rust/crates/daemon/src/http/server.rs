@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use audit::RateLimiter;
+use audit::TieredRateLimiter;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -18,7 +18,7 @@ pub async fn serve(
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(listen_addr).await?;
-    let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(120, 60)));
+    let rate_limiter = Arc::new(Mutex::new(TieredRateLimiter::new()));
     // TACHY_ALLOWED_ORIGINS: comma-separated list of allowed CORS origins.
     // Defaults to "*" for local dev. Set to "https://app.example.com" in prod.
     let allowed_origin = Arc::new(
@@ -26,6 +26,16 @@ pub async fn serve(
     );
 
     eprintln!("Tachy daemon listening on {listen_addr}");
+
+    // Phase 24: Background task to clean up old vision snapshots (every hour)
+    let cleanup_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            let s = cleanup_state.lock().unwrap();
+            s.clean_vision_cache();
+        }
+    });
 
     loop {
         let (mut stream, addr) = listener.accept().await?;
@@ -45,7 +55,10 @@ pub async fn serve(
             let response = handle_request(&request_raw, &state, &rate_limiter, &client_ip).await;
 
             match response {
-                Response::Full { status, content_type, body } => {
+                Response::Full { status, content_type, body, extra_headers } => {
+                    let extra = extra_headers.iter()
+                        .map(|(k, v)| format!("{k}: {v}\r\n"))
+                        .collect::<String>();
                     let header = format!(
                         "HTTP/1.1 {status} OK\r\n\
                          Content-Type: {content_type}\r\n\
@@ -53,11 +66,12 @@ pub async fn serve(
                          Access-Control-Allow-Origin: {origin}\r\n\
                          Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n\
                          Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+                         {extra}\
                          Connection: close\r\n\r\n",
                         body.len()
                     );
                     let _ = stream.write_all(header.as_bytes()).await;
-                    let _ = stream.write_all(body.as_bytes()).await;
+                    let _ = stream.write_all(&body).await;
                 }
                 Response::Stream { status, content_type, mut rx } => {
                     let header = format!(
@@ -104,12 +118,17 @@ pub fn handle_pull_model(body: &str, _state: &Arc<Mutex<DaemonState>>) -> Respon
 
 pub fn handle_health(state: &Arc<Mutex<DaemonState>>) -> HealthResponse {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let active_swarms = s.swarm.orchestrator.lock().unwrap().active_runs();
+    let cache_hits = s.semantic_cache.hits();
+    
     HealthResponse {
         status: "ok",
         models: s.registry.list_models().len(),
         agents: s.agents.len(),
+        active_swarms,
         tasks: s.scheduler.list_tasks().len(),
         workspace: s.workspace_root.to_string_lossy().to_string(),
+        cache_hits,
     }
 }
 

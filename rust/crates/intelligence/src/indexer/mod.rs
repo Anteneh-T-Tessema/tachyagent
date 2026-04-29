@@ -85,6 +85,21 @@ pub struct FileEntry {
     pub embedding: Option<Vec<f32>>,
 }
 
+/// Describes a multi-repo workspace for cross-codebase indexing.
+///
+/// Declared in `TACHY.md` under `[workspace.repos]`.  Example:
+/// ```toml
+/// [workspace.repos]
+/// paths = ["../auth-service", "../payments-service", "../api-gateway"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkspaceManifest {
+    /// Canonical workspace root (used as the index `workspace_root`).
+    pub root: String,
+    /// Absolute or relative paths to each repo in the workspace.
+    pub repos: Vec<String>,
+}
+
 /// Errors from the indexer
 #[derive(Debug)]
 pub enum IndexError {
@@ -296,6 +311,139 @@ impl CodebaseIndexer {
         }
 
         Ok((new_index, reindexed))
+    }
+
+    /// Re-index only the files whose content hash has changed since `existing`
+    /// was built. Returns the updated index and the number of files re-indexed.
+    ///
+    /// Call this after a tool writes files so the RAG context stays fresh
+    /// without the cost of a full rebuild on every change.
+    pub fn reindex_changed_files(
+        workspace_root: &Path,
+        existing: &CodebaseIndex,
+        changed_paths: &[&str],
+        config: &IndexerConfig,
+    ) -> Result<(CodebaseIndex, usize), IndexError> {
+        let mut updated = existing.clone();
+        let mut reindexed = 0usize;
+
+        for rel_path in changed_paths {
+            let abs_path = workspace_root.join(rel_path);
+
+            if !abs_path.exists() {
+                // File was deleted — remove from index
+                if updated.files.remove(*rel_path).is_some() {
+                    reindexed += 1;
+                }
+                continue;
+            }
+
+            let metadata = match std::fs::metadata(&abs_path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if metadata.len() > config.max_file_size {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&abs_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let new_hash = search::simple_hash(&content);
+
+            // Skip if content unchanged
+            if existing.files.get(*rel_path).map(|e| e.content_hash.as_str()) == Some(&new_hash) {
+                continue;
+            }
+
+            let language = lang::detect_language(rel_path).to_string();
+            let (exports, summary) = summary::extract_summary(rel_path, &content, &language);
+
+            updated.files.insert(rel_path.to_string(), FileEntry {
+                path: rel_path.to_string(),
+                language,
+                size: metadata.len(),
+                lines: content.lines().count(),
+                exports,
+                summary,
+                content_hash: new_hash,
+                embedding: None, // embeddings refreshed lazily on next search
+            });
+            reindexed += 1;
+        }
+
+        updated.built_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        updated.project.total_files = updated.files.len();
+
+        Ok((updated, reindexed))
+    }
+
+    /// Build a merged index spanning multiple repository paths.
+    ///
+    /// Each repo is indexed independently with its own `workspace_root`. File
+    /// paths in the returned index are prefixed with `<repo_name>/` so hits
+    /// carry per-repo citations, e.g. `auth-service/src/jwt.rs:42`.
+    pub fn build_multi_repo_index(
+        manifest: &WorkspaceManifest,
+        config: &IndexerConfig,
+    ) -> Result<CodebaseIndex, IndexError> {
+        let mut merged_files: BTreeMap<String, FileEntry> = BTreeMap::new();
+        let mut total_lines = 0usize;
+        let mut lang_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+        for repo_path in &manifest.repos {
+            let root = std::path::Path::new(repo_path);
+            if !root.exists() {
+                continue;
+            }
+            let repo_name = root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| repo_path.clone());
+
+            let mut files: BTreeMap<String, FileEntry> = BTreeMap::new();
+            let mut lines = 0usize;
+            Self::walk_directory(root, root, config, &mut files, &mut lines, &mut lang_counts)?;
+            total_lines += lines;
+
+            // Prefix every path with the repo name for cross-repo citation.
+            for (path, mut entry) in files {
+                entry.path = format!("{}/{}", repo_name, path);
+                merged_files.insert(entry.path.clone(), entry);
+            }
+        }
+
+        let primary_language = lang_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(lang, _)| lang);
+
+        let built_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let project = ProjectMeta {
+            primary_language,
+            test_command: None,
+            build_system: None,
+            total_files: merged_files.len(),
+            total_lines,
+        };
+
+        Ok(CodebaseIndex {
+            version: 1,
+            workspace_root: manifest.root.clone(),
+            built_at,
+            files: merged_files,
+            project,
+            vector_store: VectorStore::new(),
+        })
     }
 
     /// Search the index for files matching a query.

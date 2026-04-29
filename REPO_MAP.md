@@ -1,4 +1,4 @@
-# Claw-Code Repo Map
+# TachyCode Repo Map
 
 ## Canonical Runtime
 
@@ -43,6 +43,7 @@ Primary files:
 - Deep subsystem memo: `docs/DEEP_ARCHITECTURE_MEMO.md`
 - Yaya integration design: `docs/YAYA_TACHY_INTEGRATION.md`
 - Cleanup and hardening plan: `docs/REPO_CLEANUP_HARDENING_PLAN.md`
+- Roadmap wave 2: `docs/ROADMAP_WAVE2.md`
 
 ## Archived Duplicate Artifacts
 

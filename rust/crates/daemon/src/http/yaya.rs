@@ -11,7 +11,10 @@ use super::{ErrorResponse, Response};
 use super::utils::{extract_user, urlencoding_decode};
 
 fn yaya_base_url() -> String {
-    std::env::var("YAYA_BASE_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
+    // Default to SmolAgent (port 8100) — the single orchestration gateway.
+    // SmolAgent proxies /expert/chat and /experts to FinetuningLLMs internally.
+    // Set YAYA_BASE_URL=http://localhost:8000 only to bypass orchestration in dev.
+    std::env::var("YAYA_BASE_URL").unwrap_or_else(|_| "http://localhost:8100".to_string())
 }
 
 fn yaya_api_key() -> Option<String> {

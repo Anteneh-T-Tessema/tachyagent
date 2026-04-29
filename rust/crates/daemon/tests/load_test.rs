@@ -6,7 +6,7 @@
 //! Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6
 
 use proptest::prelude::*;
-use daemon::parallel::{AgentTask, Orchestrator, ParallelRun, RunStatus, TaskResult, TaskStatus};
+use daemon::parallel::{AgentTask, Orchestrator, ParallelRun, RunStatus, TaskResult, TaskRole, TaskStatus};
 use runtime::FileLockManager;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,12 +21,14 @@ fn make_task(id: &str, run_id: &str) -> AgentTask {
         model: None,
         deps: vec![],
         priority: 5,
+        role: TaskRole::General,
         status: TaskStatus::Pending,
         result: None,
         created_at: 0,
         started_at: None,
         completed_at: None,
-        work_dir: None,
+        work_dir: None, team_id: None,
+        conditions: Default::default(), approval_required: false, approved: false,
     }
 }
 
@@ -67,8 +69,11 @@ fn load_20_independent_tasks_complete_within_timeout() {
         tasks,
         status: RunStatus::Running,
         created_at: 0,
-        max_concurrency: 8,
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 8,
+        team_id: None,
+        max_cost_usd: None,
     };
 
     let orch = Arc::new(Mutex::new(Orchestrator::new(8)));
@@ -148,8 +153,11 @@ fn load_deep_dependency_chain_strict_order() {
         tasks,
         status: RunStatus::Running,
         created_at: 0,
-        max_concurrency: 8,
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 8,
+        team_id: None,
+        max_cost_usd: None,
     };
 
     let mut orch = Orchestrator::new(8);
@@ -270,8 +278,11 @@ fn load_throughput_100_tasks() {
         tasks,
         status: RunStatus::Running,
         created_at: 0,
-        max_concurrency: 100, // no concurrency limit for throughput test
         conflicts: vec![],
+        is_simulation: false,
+        max_concurrency: 100, // no concurrency limit for throughput test
+        team_id: None,
+        max_cost_usd: None,
     };
 
     let mut orch = Orchestrator::new(100);
@@ -538,8 +549,11 @@ proptest! {
             tasks,
             status: RunStatus::Running,
             created_at: 0,
-            max_concurrency: n, // allow all tasks concurrently — deps enforce order
             conflicts: vec![],
+            is_simulation: false,
+            max_concurrency: n, // allow all tasks concurrently — deps enforce order
+            team_id: None,
+            max_cost_usd: None,
         };
 
         let mut orch = Orchestrator::new(n);
@@ -578,8 +592,11 @@ proptest! {
             tasks,
             status: RunStatus::Running,
             created_at: 0,
-            max_concurrency: n,
             conflicts: vec![],
+            is_simulation: false,
+            max_concurrency: n,
+            team_id: None,
+            max_cost_usd: None,
         };
 
         let mut orch = Orchestrator::new(n);

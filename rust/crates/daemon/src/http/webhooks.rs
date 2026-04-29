@@ -7,12 +7,12 @@ use serde::Deserialize;
 use crate::state::DaemonState;
 use super::{Response, ErrorResponse};
 
-pub(super) fn handle_list_webhooks(state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_list_webhooks(state: &Arc<Mutex<DaemonState>>) -> Response {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    Response::json(200, serde_json::json!({ "webhooks": s.webhooks }))
+    Response::json(200, serde_json::json!({ "webhooks": s.connectivity.webhooks }))
 }
 
-pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     #[derive(Deserialize)]
     struct Req {
         url: String,
@@ -38,7 +38,7 @@ pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>
     let signed = req.secret.is_some();
     let webhook = crate::state::WebhookConfig { url: req.url, events, enabled: req.enabled, secret: req.secret };
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    s.webhooks.push(webhook.clone());
+    s.connectivity.webhooks.push(webhook.clone());
     s.save();
     Response::json(201, serde_json::json!({
         "ok": true,
@@ -48,7 +48,7 @@ pub(super) fn handle_register_webhook(body: &str, state: &Arc<Mutex<DaemonState>
     }))
 }
 
-pub(super) fn handle_verify_webhook_signature(body: &str, raw: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
+pub(crate) fn handle_verify_webhook_signature(body: &str, raw: &str, state: &Arc<Mutex<DaemonState>>) -> Response {
     let sig_header = raw.lines()
         .find(|l| l.to_lowercase().starts_with("x-tachy-signature:"))
         .and_then(|l| l.split_once(':').map(|x| x.1))
